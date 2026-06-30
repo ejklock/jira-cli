@@ -19,99 +19,99 @@ pub fn adf_to_plain_text(raw: &str) -> String {
         return raw.to_string();
     }
     let mut out = String::new();
-    if let Some(content) = value.get("content").and_then(|c| c.as_array()) {
-        for node in content {
-            flatten_node(node, &mut out, 0);
-        }
+    for node in node_content(&value) {
+        flatten_node(node, &mut out, 0);
     }
     out.trim_end_matches('\n').to_string()
+}
+
+fn node_content(node: &serde_json::Value) -> &[serde_json::Value] {
+    node.get("content")
+        .and_then(|c| c.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 fn flatten_node(node: &serde_json::Value, out: &mut String, list_depth: usize) {
     let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match node_type {
-        "paragraph" => {
+        "paragraph" | "heading" => {
             flatten_inline_content(node, out);
             out.push('\n');
         }
-        "heading" => {
-            flatten_inline_content(node, out);
-            out.push('\n');
+        "codeBlock" => flatten_code_block(node, out),
+        "bulletList" => flatten_list(node, out, list_depth, false),
+        "orderedList" => flatten_list(node, out, list_depth, true),
+        "blockquote" | "panel" => flatten_block_children(node, out, list_depth),
+        "rule" => out.push_str("---\n"),
+        _ => flatten_block_children(node, out, list_depth),
+    }
+}
+
+fn flatten_code_block(node: &serde_json::Value, out: &mut String) {
+    for child in node_content(node) {
+        if let Some(text) = child.get("text").and_then(|t| t.as_str()) {
+            out.push_str(text);
         }
-        "codeBlock" => {
-            if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                for child in content {
-                    if let Some(text) = child.get("text").and_then(|t| t.as_str()) {
-                        out.push_str(text);
-                    }
-                }
-            }
-            out.push('\n');
-        }
-        "bulletList" => {
-            if let Some(items) = node.get("content").and_then(|c| c.as_array()) {
-                for item in items {
-                    flatten_list_item(item, out, list_depth, false);
-                }
-            }
-        }
-        "orderedList" => {
-            if let Some(items) = node.get("content").and_then(|c| c.as_array()) {
-                for (idx, item) in items.iter().enumerate() {
-                    flatten_list_item(item, out, list_depth, true);
-                    let _ = idx;
-                }
-            }
-        }
-        "blockquote" | "panel" => {
-            if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                for child in content {
-                    flatten_node(child, out, list_depth);
-                }
-            }
-        }
-        "rule" => {
-            out.push_str("---\n");
-        }
-        _ => {
-            // Unknown block node: recurse into children for any text content.
-            if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                for child in content {
-                    flatten_node(child, out, list_depth);
-                }
-            }
-        }
+    }
+    out.push('\n');
+}
+
+fn flatten_list(node: &serde_json::Value, out: &mut String, depth: usize, ordered: bool) {
+    for item in node_content(node) {
+        flatten_list_item(item, out, depth, ordered);
+    }
+}
+
+fn flatten_block_children(node: &serde_json::Value, out: &mut String, list_depth: usize) {
+    for child in node_content(node) {
+        flatten_node(child, out, list_depth);
     }
 }
 
 fn flatten_list_item(item: &serde_json::Value, out: &mut String, depth: usize, _ordered: bool) {
     let indent = "  ".repeat(depth);
-    if let Some(children) = item.get("content").and_then(|c| c.as_array()) {
-        for (i, child) in children.iter().enumerate() {
-            let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if child_type == "paragraph" {
-                if i == 0 {
-                    out.push_str(&format!("{indent}- "));
-                    flatten_inline_content(child, out);
-                    out.push('\n');
-                } else {
-                    flatten_node(child, out, depth + 1);
-                }
-            } else if child_type == "bulletList" || child_type == "orderedList" {
-                flatten_node(child, out, depth + 1);
-            } else {
-                flatten_node(child, out, depth);
-            }
+    for (i, child) in node_content(item).iter().enumerate() {
+        flatten_list_item_child(child, out, depth, &indent, i == 0);
+    }
+}
+
+fn flatten_list_item_child(
+    child: &serde_json::Value,
+    out: &mut String,
+    depth: usize,
+    indent: &str,
+    is_first: bool,
+) {
+    let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if child_type == "paragraph" {
+        if is_first {
+            out.push_str(&format!("{indent}- "));
+            flatten_inline_content(child, out);
+            out.push('\n');
+        } else {
+            flatten_node(child, out, depth + 1);
         }
+    } else if child_type == "bulletList" || child_type == "orderedList" {
+        flatten_node(child, out, depth + 1);
+    } else {
+        flatten_node(child, out, depth);
     }
 }
 
 fn flatten_inline_content(node: &serde_json::Value, out: &mut String) {
-    let Some(content) = node.get("content").and_then(|c| c.as_array()) else {
-        return;
-    };
-    for child in content {
+    for child in node_content(node) {
         flatten_inline_node(child, out);
+    }
+}
+
+fn push_attr(node: &serde_json::Value, key: &str, out: &mut String) {
+    if let Some(text) = node
+        .get("attrs")
+        .and_then(|a| a.get(key))
+        .and_then(|t| t.as_str())
+    {
+        out.push_str(text);
     }
 }
 
@@ -123,42 +123,13 @@ fn flatten_inline_node(node: &serde_json::Value, out: &mut String) {
                 out.push_str(text);
             }
         }
-        "hardBreak" => {
-            out.push('\n');
-        }
-        "mention" => {
-            if let Some(text) = node
-                .get("attrs")
-                .and_then(|a| a.get("text"))
-                .and_then(|t| t.as_str())
-            {
-                out.push_str(text);
-            }
-        }
-        "emoji" => {
-            if let Some(text) = node
-                .get("attrs")
-                .and_then(|a| a.get("shortName"))
-                .and_then(|t| t.as_str())
-            {
-                out.push_str(text);
-            }
-        }
-        "inlineCard" => {
-            if let Some(url) = node
-                .get("attrs")
-                .and_then(|a| a.get("url"))
-                .and_then(|t| t.as_str())
-            {
-                out.push_str(url);
-            }
-        }
+        "hardBreak" => out.push('\n'),
+        "mention" => push_attr(node, "text", out),
+        "emoji" => push_attr(node, "shortName", out),
+        "inlineCard" => push_attr(node, "url", out),
         _ => {
-            // Unknown inline: recurse into children.
-            if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
-                for child in content {
-                    flatten_inline_node(child, out);
-                }
+            for child in node_content(node) {
+                flatten_inline_node(child, out);
             }
         }
     }
