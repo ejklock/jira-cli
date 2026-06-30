@@ -10,8 +10,9 @@ use crate::store::settings::SettingsRepository;
 use std::io::Write;
 
 const DEFAULT_MINE_LIMIT: u64 = 50;
-const DEFAULT_SEARCH_LIMIT: u64 = 50;
-const MINE_JQL: &str = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
+pub(crate) const DEFAULT_SEARCH_LIMIT: u64 = 50;
+pub(crate) const MINE_JQL: &str =
+    "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
 
 pub fn pick_instance(
     instances: &[Instance],
