@@ -14,10 +14,18 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0005](/issues/0005-j4-search-jql.md) | J4 | search: arbitrary JQL | open | 0004 |
 | [0006](/issues/0006-j5-i18n.md) | J5 | i18n: English + Brazilian Portuguese output | open | 0001 |
 | [0007](/issues/0007-i18n-interpolation-fix.md) | — | i18n: fix format-then-translate (interpolated chrome) | open | 0006 |
+| [0008](/issues/0008-b0-browse-skeleton.md) | B0 | browse TUI walking skeleton: command + raw-mode shell + quit | open | 0001 |
+
+## Phase 2 (in progress)
+
+- `browse` interactive TUI — read-only, rebuilt fresh on an Elm/TEA + ratatui stack
+  ([PRD 0002](/prd/0002-interactive-browse-tui.md), [ADR 0007](/adr/0007-browse-tui-elm-architecture.md),
+  [BDR 0006](/bdr/0006-browse-tui-interactions.md)). Sliced B0 (0008) → B1 list → B2
+  detail → B3 search → B4 affordances. (The fork's `tui/` was never carried over; this
+  is a fresh read-only build, not a revival.)
 
 ## Parked (Phase 2 — not yet sliced)
 
-- `browse` interactive TUI (re-activate the dormant `tui/` module).
 - Write operations: comment, transition status, log work.
 - Jira Server / Data Center (REST v2 / PAT) adapter.
 - Secret-at-rest encryption / OS keychain; native release binaries.
