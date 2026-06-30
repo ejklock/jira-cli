@@ -11,3 +11,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0003](/adr/0003-issue-identity-and-cache-key.md) | Issue identity = (instance_name, issue_key); cache keyed on it | Accepted |
 | [0004](/adr/0004-agent-json-output-contract.md) | Curated, minified agent_json output contract (inherited) | Accepted |
 | [0005](/adr/0005-jira-client-on-gouqi-behind-trait.md) | Build the Jira client on the gouqi crate, behind our own client trait | Accepted |
+| [0006](/adr/0006-i18n-interpolation-contract.md) | i18n interpolation contract: translate the template, then substitute | Accepted |

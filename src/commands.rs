@@ -1,8 +1,8 @@
 use crate::agent_json::{issue_to_minified_json, mine_list_to_minified_json};
 use crate::cli::extract_issue_key;
 use crate::client::{GouqiJiraClient, JiraClient};
-use crate::i18n::t;
 use crate::i18n::SUPPORTED;
+use crate::i18n::{t, tf};
 use crate::render::{render_issue_human, render_issue_table};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::{Instance, InstanceRepository};
@@ -33,14 +33,14 @@ pub fn pick_instance(
             Some(idx) => return Ok(idx),
             None => {
                 let known: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+                let known_str = known.join(", ");
                 writeln!(
                     err,
                     "{}",
-                    t(&format!(
+                    tf(
                         "Error: instance '{name}' not found. Known: {known}",
-                        name = n,
-                        known = known.join(", ")
-                    ))
+                        &[("name", n), ("known", &known_str)]
+                    )
                 )
                 .ok();
                 return Err(2);
@@ -53,13 +53,14 @@ pub fn pick_instance(
     }
 
     let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+    let names_str = names.join(", ");
     writeln!(
         err,
         "{}",
-        t(&format!(
+        tf(
             "Error: multiple instances configured ({names}). Use --instance NAME.",
-            names = names.join(", ")
-        ))
+            &[("names", &names_str)]
+        )
     )
     .ok();
     Err(2)
@@ -118,7 +119,7 @@ pub fn setup_remove(
         writeln!(
             err,
             "{}",
-            t(&format!("Error: instance '{name}' not found.", name = name))
+            tf("Error: instance '{name}' not found.", &[("name", name)])
         )
         .ok();
         return 2;
@@ -126,7 +127,7 @@ pub fn setup_remove(
     writeln!(
         out,
         "{}",
-        t(&format!("Instance '{name}' removed.", name = name))
+        tf("Instance '{name}' removed.", &[("name", name)])
     )
     .ok();
     0
@@ -147,7 +148,7 @@ pub fn setup_language(
             writeln!(
                 out,
                 "{}",
-                t(&format!("Current language: {code}", code = current))
+                tf("Current language: {code}", &[("code", &current)])
             )
             .ok();
             0
@@ -161,7 +162,7 @@ pub fn setup_language(
                 writeln!(
                     out,
                     "{}",
-                    t(&format!("Language set to '{code}'.", code = canon))
+                    tf("Language set to '{code}'.", &[("code", canon)])
                 )
                 .ok();
                 0
@@ -171,11 +172,10 @@ pub fn setup_language(
                 writeln!(
                     err,
                     "{}",
-                    t(&format!(
+                    tf(
                         "Error: unsupported language '{code}'. Supported: {supported}.",
-                        code = c,
-                        supported = supported
-                    ))
+                        &[("code", c), ("supported", &supported)]
+                    )
                 )
                 .ok();
                 2
@@ -203,7 +203,7 @@ pub async fn setup_test(
                 writeln!(
                     err,
                     "{}",
-                    t(&format!("Error: instance '{name}' not found.", name = n))
+                    tf("Error: instance '{name}' not found.", &[("name", n)])
                 )
                 .ok();
                 return 2;

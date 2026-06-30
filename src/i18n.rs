@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
+use regex::Regex;
+
 pub const SUPPORTED: [&str; 2] = ["en", "pt_BR"];
 
 static LANGUAGE: RwLock<String> = RwLock::new(String::new());
@@ -81,6 +83,34 @@ pub fn t(s: &str) -> String {
     } else {
         s.to_owned()
     }
+}
+
+static PLACEHOLDER_RE: OnceLock<Regex> = OnceLock::new();
+
+fn placeholder_re() -> &'static Regex {
+    PLACEHOLDER_RE.get_or_init(|| Regex::new(r"\{(\w+)\}").expect("placeholder regex is valid"))
+}
+
+/// Translate `template` then substitute `{name}` tokens in the result.
+///
+/// Lookup order: `t(template)` performs the catalog lookup first (so the key
+/// is always the English placeholder template, never a runtime value), then
+/// each `{name}` token in the translated string is replaced with the
+/// corresponding value from `args`.  Tokens with no matching arg are left
+/// intact.  A single pass over the translated string is used, so a runtime
+/// value that itself contains a `{token}` string is never re-interpreted.
+pub fn tf(template: &str, args: &[(&str, &str)]) -> String {
+    let translated = t(template);
+    let re = placeholder_re();
+    re.replace_all(&translated, |caps: &regex::Captures| {
+        let token = &caps[1];
+        args.iter()
+            .find(|(name, _)| *name == token)
+            .map(|(_, value)| *value)
+            .unwrap_or(&caps[0])
+            .to_owned()
+    })
+    .into_owned()
 }
 
 #[cfg(test)]
