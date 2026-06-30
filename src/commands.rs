@@ -455,7 +455,7 @@ pub async fn get_core(
 ///
 /// A cache read error is treated as a miss so a corrupt/locked cache never
 /// prevents the command from running; the fetch path recovers transparently.
-async fn load_issue(
+pub(crate) async fn load_issue(
     issue_key: &str,
     instance: &Instance,
     issue_cache: &IssueCache<'_>,

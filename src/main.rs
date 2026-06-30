@@ -352,13 +352,14 @@ async fn dispatch_search(args: cli::SearchArgs) -> i32 {
 }
 
 async fn dispatch_browse(args: cli::BrowseArgs) -> i32 {
-    let ResolvedInstance { instance, .. } = match resolve_single_instance(args.instance.as_deref())
-    {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
+    let ResolvedInstance { store, instance } =
+        match resolve_single_instance(args.instance.as_deref()) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
+    let cache = store::cache::TaskCache::new(store.conn());
     let is_tty = std::io::stdout().is_terminal();
-    tui::browse(&instance, is_tty, &mut std::io::stderr()).await
+    tui::browse(&instance, &cache, is_tty, &mut std::io::stderr()).await
 }
 
 fn current_git_branch() -> Option<String> {
