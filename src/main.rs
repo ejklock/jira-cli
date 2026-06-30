@@ -16,6 +16,7 @@ use commands::{
 };
 use std::io::IsTerminal;
 use std::process;
+use store::instances::Instance;
 
 #[tokio::main]
 async fn main() {
@@ -121,6 +122,26 @@ fn open_store() -> Option<store::Store> {
             None
         }
     }
+}
+
+struct ResolvedInstance {
+    store: store::Store,
+    instance: Instance,
+}
+
+fn resolve_single_instance(instance_filter: Option<&str>) -> Result<ResolvedInstance, i32> {
+    let store = open_store().ok_or(1)?;
+    let instances = {
+        let repo = store::instances::InstanceRepository::new(store.conn());
+        repo.load_all().map_err(|e| {
+            render::print_error(&format!("Error loading instances: {e}"));
+            1
+        })?
+    };
+    let mut err_buf = std::io::stderr();
+    let idx = pick_instance(&instances, instance_filter, &mut err_buf)?;
+    let instance = instances[idx].clone();
+    Ok(ResolvedInstance { store, instance })
 }
 
 fn dispatch_setup_list() -> i32 {
@@ -251,28 +272,15 @@ fn stdin_is_tty() -> bool {
 }
 
 async fn dispatch_get(args: cli::GetArgs) -> i32 {
-    let store = match open_store() {
-        Some(s) => s,
-        None => return 1,
-    };
-    let repo = store::instances::InstanceRepository::new(store.conn());
-    let instances = match repo.load_all() {
-        Ok(v) => v,
-        Err(e) => {
-            render::print_error(&format!("Error loading instances: {e}"));
-            return 1;
-        }
-    };
-    let mut err_buf = std::io::stderr();
-    let idx = match pick_instance(&instances, args.display.instance.as_deref(), &mut err_buf) {
-        Ok(i) => i,
-        Err(code) => return code,
-    };
-    let inst = instances[idx].clone();
+    let ResolvedInstance { store, instance } =
+        match resolve_single_instance(args.display.instance.as_deref()) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
     let cache = store::cache::TaskCache::new(store.conn());
     commands::get_core(
         &args.ref_,
-        &inst,
+        &instance,
         &cache,
         GetOpts {
             json: args.display.json,
@@ -287,28 +295,15 @@ async fn dispatch_get(args: cli::GetArgs) -> i32 {
 
 async fn dispatch_current(args: cli::DisplayArgs) -> i32 {
     let branch = current_git_branch();
-    let store = match open_store() {
-        Some(s) => s,
-        None => return 1,
-    };
-    let repo = store::instances::InstanceRepository::new(store.conn());
-    let instances = match repo.load_all() {
-        Ok(v) => v,
-        Err(e) => {
-            render::print_error(&format!("Error loading instances: {e}"));
-            return 1;
-        }
-    };
-    let mut err_buf = std::io::stderr();
-    let idx = match pick_instance(&instances, args.instance.as_deref(), &mut err_buf) {
-        Ok(i) => i,
-        Err(code) => return code,
-    };
-    let inst = instances[idx].clone();
+    let ResolvedInstance { store, instance } =
+        match resolve_single_instance(args.instance.as_deref()) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
     let cache = store::cache::TaskCache::new(store.conn());
     commands::current_core(
         branch.as_deref(),
-        &inst,
+        &instance,
         &cache,
         GetOpts {
             json: args.json,
@@ -339,27 +334,14 @@ async fn dispatch_mine(args: cli::MineArgs) -> i32 {
 }
 
 async fn dispatch_search(args: cli::SearchArgs) -> i32 {
-    let store = match open_store() {
-        Some(s) => s,
-        None => return 1,
-    };
-    let repo = store::instances::InstanceRepository::new(store.conn());
-    let instances = match repo.load_all() {
-        Ok(v) => v,
-        Err(e) => {
-            render::print_error(&format!("Error loading instances: {e}"));
-            return 1;
-        }
-    };
-    let mut err_buf = std::io::stderr();
-    let idx = match pick_instance(&instances, args.instance.as_deref(), &mut err_buf) {
-        Ok(i) => i,
-        Err(code) => return code,
-    };
-    let inst = instances[idx].clone();
+    let ResolvedInstance { store: _, instance } =
+        match resolve_single_instance(args.instance.as_deref()) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
     commands::search_core(
         args.jql.as_deref(),
-        &inst,
+        &instance,
         args.json,
         &mut std::io::stdout(),
         &mut std::io::stderr(),
