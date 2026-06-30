@@ -163,6 +163,15 @@ pub fn render_issue_table(out: &mut dyn Write, rows: &[IssueRow]) {
     }
 }
 
+/// Build the canonical browse URL for a Jira issue.
+///
+/// Trims a trailing slash from `base_url` so the caller does not need to
+/// normalise it — `"https://acme.atlassian.net/"` and
+/// `"https://acme.atlassian.net"` both yield the same URL.
+pub fn issue_browse_url(base_url: &str, key: &str) -> String {
+    format!("{}/browse/{}", base_url.trim_end_matches('/'), key)
+}
+
 /// Render a Jira issue in human-readable form.
 pub fn render_issue_human(
     issue: &Issue,
@@ -171,7 +180,7 @@ pub fn render_issue_human(
     no_comments: bool,
     out: &mut dyn Write,
 ) {
-    let issue_url = format!("{}/browse/{}", base_url.trim_end_matches('/'), issue.key);
+    let issue_url = issue_browse_url(base_url, &issue.key);
     let description_text = issue
         .description
         .as_deref()

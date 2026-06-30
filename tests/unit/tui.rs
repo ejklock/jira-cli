@@ -39,6 +39,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         detail_scroll: 0,
         search: None,
         error: None,
+        base_url: "https://test.atlassian.net".to_owned(),
     }
 }
 
@@ -1025,4 +1026,177 @@ fn update_load_failed_from_400_sets_error_and_preserves_rows() {
     assert_eq!(next.rows[0].key, "KEEP-1");
     assert!(next.search.is_none());
     assert!(cmds.is_empty());
+}
+
+// ---- B4: AC1 — update(OpenLink) emits Cmd::OpenUrl; empty list is no-op ----
+
+#[test]
+fn update_open_link_on_non_empty_list_emits_open_url_with_browse_url() {
+    let mut model = make_list_model(&["PROJ-7", "PROJ-8"]);
+    model.base_url = "https://acme.atlassian.net/".to_owned();
+    model.selected = 0;
+
+    let (_, cmds) = update(model, Msg::OpenLink);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::OpenUrl("https://acme.atlassian.net/browse/PROJ-7".to_owned()),
+        "OpenLink must emit Cmd::OpenUrl with the trimmed base_url and selected key"
+    );
+}
+
+#[test]
+fn update_open_link_uses_selected_index() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2", "PROJ-3"]);
+    model.base_url = "https://acme.atlassian.net".to_owned();
+    model.selected = 2;
+
+    let (_, cmds) = update(model, Msg::OpenLink);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::OpenUrl("https://acme.atlassian.net/browse/PROJ-3".to_owned()),
+        "OpenLink must use model.selected as the index into rows"
+    );
+}
+
+#[test]
+fn update_open_link_trims_trailing_slash_from_base_url() {
+    let mut model = make_list_model(&["KEY-1"]);
+    model.base_url = "https://acme.atlassian.net///".to_owned();
+
+    let (_, cmds) = update(model, Msg::OpenLink);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::OpenUrl("https://acme.atlassian.net/browse/KEY-1".to_owned()),
+        "trailing slashes in base_url must be trimmed before building the URL"
+    );
+}
+
+#[test]
+fn update_open_link_on_empty_list_is_noop() {
+    let model = make_list_model(&[]);
+
+    let (_, cmds) = update(model, Msg::OpenLink);
+
+    assert!(
+        cmds.is_empty(),
+        "OpenLink on an empty list must emit no Cmd"
+    );
+}
+
+// ---- B4: AC2 — update(CopyKey) emits Cmd::CopyToClipboard; empty list is no-op ----
+
+#[test]
+fn update_copy_key_on_non_empty_list_emits_copy_to_clipboard_with_selected_key() {
+    let model = make_list_model(&["PROJ-42", "PROJ-43"]);
+
+    let (_, cmds) = update(model, Msg::CopyKey);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::CopyToClipboard("PROJ-42".to_owned()),
+        "CopyKey must emit Cmd::CopyToClipboard with the selected issue key"
+    );
+}
+
+#[test]
+fn update_copy_key_uses_selected_index() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2", "PROJ-3"]);
+    model.selected = 1;
+
+    let (_, cmds) = update(model, Msg::CopyKey);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::CopyToClipboard("PROJ-2".to_owned()),
+        "CopyKey must use model.selected to pick the correct key"
+    );
+}
+
+#[test]
+fn update_copy_key_on_empty_list_is_noop() {
+    let model = make_list_model(&[]);
+
+    let (_, cmds) = update(model, Msg::CopyKey);
+
+    assert!(cmds.is_empty(), "CopyKey on an empty list must emit no Cmd");
+}
+
+// ---- B4: AC3 — issue_browse_url is the single source; render and agent_json agree ----
+
+#[test]
+fn issue_browse_url_builds_correct_url() {
+    let url = crate::render::issue_browse_url("https://acme.atlassian.net", "PROJ-99");
+    assert_eq!(url, "https://acme.atlassian.net/browse/PROJ-99");
+}
+
+#[test]
+fn issue_browse_url_trims_trailing_slash() {
+    let url = crate::render::issue_browse_url("https://acme.atlassian.net/", "PROJ-1");
+    assert_eq!(
+        url, "https://acme.atlassian.net/browse/PROJ-1",
+        "trailing slash must be trimmed from base_url"
+    );
+}
+
+#[test]
+fn render_issue_human_url_equals_issue_browse_url() {
+    let issue = make_issue("PROJ-55");
+    let base = "https://acme.atlassian.net";
+    let expected_url = crate::render::issue_browse_url(base, "PROJ-55");
+
+    let mut out = Vec::new();
+    crate::render::render_issue_human(&issue, "work", base, false, &mut out);
+    let text = std::str::from_utf8(&out).unwrap();
+
+    assert!(
+        text.contains(&expected_url),
+        "render_issue_human must embed the URL produced by issue_browse_url; expected {expected_url:?} in:\n{text}"
+    );
+}
+
+#[test]
+fn agent_json_url_field_equals_issue_browse_url() {
+    let issue = make_issue("PROJ-77");
+    let base = "https://acme.atlassian.net";
+    let expected_url = crate::render::issue_browse_url(base, "PROJ-77");
+
+    let obj = crate::agent_json::issue_object(&issue, "work", base, false);
+    let json_url = obj["url"].as_str().unwrap();
+
+    assert_eq!(
+        json_url, expected_url,
+        "agent_json url field must equal issue_browse_url output"
+    );
+}
+
+#[test]
+fn render_and_agent_json_produce_same_url_for_same_input() {
+    let issue = make_issue("PROJ-123");
+    let base = "https://acme.atlassian.net/";
+
+    let expected_url = crate::render::issue_browse_url(base, "PROJ-123");
+
+    let mut out = Vec::new();
+    crate::render::render_issue_human(&issue, "work", base, false, &mut out);
+    let render_text = std::str::from_utf8(&out).unwrap();
+
+    let obj = crate::agent_json::issue_object(&issue, "work", base, false);
+    let json_url = obj["url"].as_str().unwrap();
+
+    assert!(
+        render_text.contains(&expected_url),
+        "render_issue_human must contain the canonical URL"
+    );
+    assert_eq!(
+        json_url, expected_url,
+        "agent_json url must equal the canonical URL"
+    );
 }

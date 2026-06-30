@@ -14,7 +14,7 @@ pub fn issue_object(
     no_comments: bool,
 ) -> Value {
     let project_key = derive_project_key(&issue.key);
-    let issue_url = format!("{}/browse/{}", base_url.trim_end_matches('/'), issue.key);
+    let issue_url = crate::render::issue_browse_url(base_url, &issue.key);
     let description_text = issue
         .description
         .as_deref()

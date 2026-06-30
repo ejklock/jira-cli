@@ -38,6 +38,7 @@ pub struct Model {
     pub detail_scroll: u16,
     pub search: Option<String>,
     pub error: Option<String>,
+    pub base_url: String,
 }
 
 pub enum Msg {
@@ -54,6 +55,8 @@ pub enum Msg {
     CancelSearch,
     ListLoaded(Vec<IssueRow>),
     LoadFailed(String),
+    OpenLink,
+    CopyKey,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,6 +64,8 @@ pub enum Cmd {
     Quit,
     LoadDetail(String),
     LoadList(String),
+    OpenUrl(String),
+    CopyToClipboard(String),
 }
 
 /// Pure state transition — no I/O, no terminal, no clock.
@@ -79,6 +84,8 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::CancelSearch => update_cancel_search(model),
         Msg::ListLoaded(rows) => update_list_loaded(model, rows),
         Msg::LoadFailed(msg) => update_load_failed(model, msg),
+        Msg::OpenLink => update_open_link(model),
+        Msg::CopyKey => update_copy_key(model),
     }
 }
 
@@ -225,6 +232,64 @@ fn update_load_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
     (next, vec![])
 }
 
+fn update_open_link(model: Model) -> (Model, Vec<Cmd>) {
+    if model.rows.is_empty() {
+        return (model, vec![]);
+    }
+    let url = crate::render::issue_browse_url(&model.base_url, &model.rows[model.selected].key);
+    (model, vec![Cmd::OpenUrl(url)])
+}
+
+fn update_copy_key(model: Model) -> (Model, Vec<Cmd>) {
+    if model.rows.is_empty() {
+        return (model, vec![]);
+    }
+    let key = model.rows[model.selected].key.clone();
+    (model, vec![Cmd::CopyToClipboard(key)])
+}
+
+fn spawn_opener(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+fn copy_to_clipboard(key: &str) {
+    use std::io::Write as _;
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut child) = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(key.as_bytes());
+            }
+        }
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let tools = [&["xclip", "-selection", "clipboard"][..], &["wl-copy"][..]];
+        for argv in &tools {
+            if let Ok(mut child) = std::process::Command::new(argv[0])
+                .args(&argv[1..])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(key.as_bytes());
+                }
+                return;
+            }
+        }
+    }
+}
+
 /// Entry point for `jira browse`.
 ///
 /// Checks the TTY guard, then fetches the mine list and enters the raw-mode draw loop.
@@ -304,6 +369,7 @@ fn run_tui(
         detail_scroll: 0,
         search: None,
         error: None,
+        base_url: instance.base_url.clone(),
     };
     let exit_code = draw_loop(&mut terminal, model, instance, cache, &handle);
 
@@ -339,6 +405,8 @@ fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<
         KeyCode::Char('b') => Some(Msg::Back),
         KeyCode::Char('q') => Some(Msg::Quit),
         KeyCode::Char('/') => Some(Msg::OpenSearch),
+        KeyCode::Char('o') => Some(Msg::OpenLink),
+        KeyCode::Char('y') => Some(Msg::CopyKey),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
@@ -387,6 +455,14 @@ fn dispatch_cmd(
 ) -> Model {
     match cmd {
         Cmd::Quit => model,
+        Cmd::OpenUrl(url) => {
+            spawn_opener(&url);
+            model
+        }
+        Cmd::CopyToClipboard(key) => {
+            copy_to_clipboard(&key);
+            model
+        }
         Cmd::LoadDetail(key) => {
             let result =
                 tokio::task::block_in_place(|| handle.block_on(load_detail(instance, cache, &key)));
