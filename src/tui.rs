@@ -21,6 +21,8 @@ use crate::store::instances::Instance;
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
 const LOADING_NOTICE: &str = "Loading…";
+const SEARCH_PROMPT: &str = "JQL> ";
+const SEARCH_ERROR_PREFIX: &str = "Error: ";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
@@ -34,6 +36,8 @@ pub struct Model {
     pub screen: Screen,
     pub detail: Option<Issue>,
     pub detail_scroll: u16,
+    pub search: Option<String>,
+    pub error: Option<String>,
 }
 
 pub enum Msg {
@@ -43,12 +47,20 @@ pub enum Msg {
     Select,
     Back,
     DetailLoaded(Box<Issue>),
+    OpenSearch,
+    SearchInput(char),
+    SearchBackspace,
+    SubmitSearch,
+    CancelSearch,
+    ListLoaded(Vec<IssueRow>),
+    LoadFailed(String),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
     LoadDetail(String),
+    LoadList(String),
 }
 
 /// Pure state transition — no I/O, no terminal, no clock.
@@ -60,6 +72,13 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::Select => update_select(model),
         Msg::Back => update_back(model),
         Msg::DetailLoaded(issue) => update_detail_loaded(model, issue),
+        Msg::OpenSearch => update_open_search(model),
+        Msg::SearchInput(c) => update_search_input(model, c),
+        Msg::SearchBackspace => update_search_backspace(model),
+        Msg::SubmitSearch => update_submit_search(model),
+        Msg::CancelSearch => update_cancel_search(model),
+        Msg::ListLoaded(rows) => update_list_loaded(model, rows),
+        Msg::LoadFailed(msg) => update_load_failed(model, msg),
     }
 }
 
@@ -129,6 +148,78 @@ fn update_detail_loaded(model: Model, issue: Box<Issue>) -> (Model, Vec<Cmd>) {
     let next = Model {
         detail: Some(*issue),
         detail_scroll: 0,
+        ..model
+    };
+    (next, vec![])
+}
+
+fn update_open_search(model: Model) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::List {
+        return (model, vec![]);
+    }
+    let next = Model {
+        search: Some(String::new()),
+        error: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+fn update_search_input(model: Model, c: char) -> (Model, Vec<Cmd>) {
+    let search = match model.search {
+        Some(mut q) => {
+            q.push(c);
+            Some(q)
+        }
+        None => None,
+    };
+    (Model { search, ..model }, vec![])
+}
+
+fn update_search_backspace(model: Model) -> (Model, Vec<Cmd>) {
+    let search = match model.search {
+        Some(mut q) => {
+            q.pop();
+            Some(q)
+        }
+        None => None,
+    };
+    (Model { search, ..model }, vec![])
+}
+
+fn update_submit_search(model: Model) -> (Model, Vec<Cmd>) {
+    match &model.search {
+        Some(q) if !q.is_empty() => {
+            let jql = q.clone();
+            (model, vec![Cmd::LoadList(jql)])
+        }
+        _ => (model, vec![]),
+    }
+}
+
+fn update_cancel_search(model: Model) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        search: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+fn update_list_loaded(model: Model, rows: Vec<IssueRow>) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        rows,
+        selected: 0,
+        search: None,
+        error: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+fn update_load_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        error: Some(msg),
+        search: None,
         ..model
     };
     (next, vec![])
@@ -211,6 +302,8 @@ fn run_tui(
         screen: Screen::List,
         detail: None,
         detail_scroll: 0,
+        search: None,
+        error: None,
     };
     let exit_code = draw_loop(&mut terminal, model, instance, cache, &handle);
 
@@ -219,7 +312,25 @@ fn run_tui(
     exit_code
 }
 
-fn map_key_to_msg(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
+fn map_key_to_msg(key_code: KeyCode, modifiers: KeyModifiers, search_active: bool) -> Option<Msg> {
+    if search_active {
+        return map_key_in_search_mode(key_code, modifiers);
+    }
+    map_key_in_normal_mode(key_code, modifiers)
+}
+
+fn map_key_in_search_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
+    match key_code {
+        KeyCode::Enter => Some(Msg::SubmitSearch),
+        KeyCode::Esc => Some(Msg::CancelSearch),
+        KeyCode::Backspace => Some(Msg::SearchBackspace),
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
+        KeyCode::Char(c) => Some(Msg::SearchInput(c)),
+        _ => None,
+    }
+}
+
+fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
     match key_code {
         KeyCode::Up => Some(Msg::Up),
         KeyCode::Down => Some(Msg::Down),
@@ -227,6 +338,7 @@ fn map_key_to_msg(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
         KeyCode::Esc => Some(Msg::Back),
         KeyCode::Char('b') => Some(Msg::Back),
         KeyCode::Char('q') => Some(Msg::Quit),
+        KeyCode::Char('/') => Some(Msg::OpenSearch),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
@@ -244,7 +356,8 @@ fn draw_loop(
 
         match event::read() {
             Ok(Event::Key(key)) => {
-                let Some(msg) = map_key_to_msg(key.code, key.modifiers) else {
+                let search_active = model.search.is_some();
+                let Some(msg) = map_key_to_msg(key.code, key.modifiers, search_active) else {
                     continue;
                 };
 
@@ -256,21 +369,7 @@ fn draw_loop(
                 }
 
                 for cmd in cmds {
-                    if let Cmd::LoadDetail(key) = cmd {
-                        let result = tokio::task::block_in_place(|| {
-                            handle.block_on(load_detail(instance, cache, &key))
-                        });
-                        match result {
-                            Ok(issue) => {
-                                let (next, _) = update(model, Msg::DetailLoaded(Box::new(issue)));
-                                model = next;
-                            }
-                            Err(_) => {
-                                let (next, _) = update(model, Msg::Back);
-                                model = next;
-                            }
-                        }
-                    }
+                    model = dispatch_cmd(cmd, model, instance, cache, handle);
                 }
             }
             Err(_) => return 1,
@@ -279,10 +378,56 @@ fn draw_loop(
     }
 }
 
+fn dispatch_cmd(
+    cmd: Cmd,
+    model: Model,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    handle: &tokio::runtime::Handle,
+) -> Model {
+    match cmd {
+        Cmd::Quit => model,
+        Cmd::LoadDetail(key) => {
+            let result =
+                tokio::task::block_in_place(|| handle.block_on(load_detail(instance, cache, &key)));
+            match result {
+                Ok(issue) => {
+                    let (next, _) = update(model, Msg::DetailLoaded(Box::new(issue)));
+                    next
+                }
+                Err(_) => {
+                    let (next, _) = update(model, Msg::Back);
+                    next
+                }
+            }
+        }
+        Cmd::LoadList(jql) => {
+            let result =
+                tokio::task::block_in_place(|| handle.block_on(run_search(instance, &jql)));
+            match result {
+                Ok(rows) => {
+                    let (next, _) = update(model, Msg::ListLoaded(rows));
+                    next
+                }
+                Err(e) => {
+                    let (next, _) = update(model, Msg::LoadFailed(e.to_string()));
+                    next
+                }
+            }
+        }
+    }
+}
+
 async fn load_detail(instance: &Instance, cache: &TaskCache<'_>, key: &str) -> Result<Issue, i32> {
     let issue_cache = crate::store::cache::IssueCache::new(cache.conn());
     let mut sink: Vec<u8> = Vec::new();
     crate::commands::load_issue(key, instance, &issue_cache, false, &mut sink).await
+}
+
+pub(crate) async fn run_search(instance: &Instance, jql: &str) -> anyhow::Result<Vec<IssueRow>> {
+    let client = GouqiJiraClient::new(instance)?;
+    let result = client.search(jql, DEFAULT_SEARCH_LIMIT).await?;
+    Ok(result.issues)
 }
 
 /// Pure rendering function — maps Model to ratatui widgets.
@@ -297,14 +442,43 @@ pub fn view(model: &Model, frame: &mut Frame) {
 fn view_list(model: &Model, frame: &mut Frame) {
     let area = frame.area();
 
+    let has_search_bar = model.search.is_some();
+    let has_error_banner = model.error.is_some();
+
+    let mut constraints = vec![Constraint::Length(1)];
+    if has_search_bar {
+        constraints.push(Constraint::Length(1));
+    }
+    if has_error_banner {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Length(1));
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
+        .constraints(constraints)
         .split(area);
+
+    let mut chunk_idx = 1usize;
+
+    if has_search_bar {
+        let query = model.search.as_deref().unwrap_or("");
+        let input_line = Paragraph::new(format!("{SEARCH_PROMPT}{query}"));
+        frame.render_widget(input_line, chunks[chunk_idx]);
+        chunk_idx += 1;
+    }
+
+    if has_error_banner {
+        let msg = model.error.as_deref().unwrap_or("");
+        let banner = Paragraph::new(format!("{SEARCH_ERROR_PREFIX}{msg}"))
+            .style(Style::default().add_modifier(Modifier::BOLD));
+        frame.render_widget(banner, chunks[chunk_idx]);
+        chunk_idx += 1;
+    }
+
+    let table_chunk = chunks[chunk_idx];
+    let footer_chunk = chunks[chunk_idx + 1];
 
     let header_cells = [
         t("KEY"),
@@ -334,7 +508,7 @@ fn view_list(model: &Model, frame: &mut Frame) {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded),
             );
-        frame.render_widget(table, chunks[1]);
+        frame.render_widget(table, table_chunk);
     } else {
         let data_rows: Vec<Row> = model
             .rows
@@ -368,14 +542,16 @@ fn view_list(model: &Model, frame: &mut Frame) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded),
         );
-        frame.render_widget(table, chunks[1]);
+        frame.render_widget(table, table_chunk);
     }
 
-    let hint = Paragraph::new(t(
-        "↑/↓ navigate  Enter select  r refresh  Esc/b back  q quit",
-    ))
-    .alignment(Alignment::Center);
-    frame.render_widget(hint, chunks[2]);
+    let hint_text = if has_search_bar {
+        "Enter submit  Esc cancel  Backspace delete"
+    } else {
+        "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"
+    };
+    let hint = Paragraph::new(hint_text).alignment(Alignment::Center);
+    frame.render_widget(hint, footer_chunk);
 }
 
 /// Pure detail view — renders the loaded issue or a loading notice.

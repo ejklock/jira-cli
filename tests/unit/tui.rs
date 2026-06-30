@@ -37,6 +37,8 @@ fn make_list_model(keys: &[&str]) -> Model {
         screen: Screen::List,
         detail: None,
         detail_scroll: 0,
+        search: None,
+        error: None,
     }
 }
 
@@ -95,6 +97,59 @@ fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn build_search_payload_with_key(key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "issues": [
+            {
+                "id": "10001",
+                "key": key,
+                "self": "https://example.atlassian.net/rest/api/3/issue/10001",
+                "fields": {
+                    "summary": "Search result issue",
+                    "status": {
+                        "id": "1",
+                        "name": "Open",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "statusCategory": {
+                            "id": 2,
+                            "key": "new",
+                            "colorName": "blue-gray",
+                            "name": "To Do"
+                        }
+                    },
+                    "issuetype": {
+                        "id": "10002",
+                        "name": "Task",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "subtask": false
+                    },
+                    "assignee": {
+                        "accountId": "u1",
+                        "displayName": "Bob",
+                        "active": true,
+                        "self": "",
+                        "avatarUrls": {}
+                    },
+                    "priority": {
+                        "id": "3",
+                        "name": "Medium",
+                        "iconUrl": "",
+                        "self": ""
+                    },
+                    "created": "2026-01-01T00:00:00.000+0000",
+                    "updated": "2026-06-29T00:00:00.000+0000"
+                }
+            }
+        ],
+        "isLast": true,
+        "nextPageToken": null
+    })
 }
 
 // ---- B0 tests (keep) ----
@@ -616,4 +671,358 @@ async fn load_issue_fetch_error_returns_err_leaving_ui_path_usable() {
     );
     // UI path remains usable: the TUI applies Msg::Back on Err, which is a pure transition
     // tested in update_back_from_detail_sets_screen_list_preserves_selected.
+}
+
+// ---- B3: AC1 — SubmitSearch emits Cmd::LoadList; edge cases are no-ops ----
+
+#[test]
+fn update_submit_search_with_non_empty_query_emits_load_list() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("project = PROJ".to_owned());
+
+    let (_, cmds) = update(model, Msg::SubmitSearch);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0], Cmd::LoadList("project = PROJ".to_owned()));
+}
+
+#[test]
+fn update_submit_search_with_empty_query_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some(String::new());
+
+    let (_, cmds) = update(model, Msg::SubmitSearch);
+
+    assert!(cmds.is_empty(), "empty query SubmitSearch must emit no Cmd");
+}
+
+#[test]
+fn update_submit_search_when_search_inactive_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (_, cmds) = update(model, Msg::SubmitSearch);
+
+    assert!(
+        cmds.is_empty(),
+        "SubmitSearch when search==None must emit no Cmd"
+    );
+}
+
+#[test]
+fn update_submit_search_preserves_prior_rows_until_result() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    model.search = Some("project = PROJ".to_owned());
+
+    let (next, _) = update(model, Msg::SubmitSearch);
+
+    assert_eq!(
+        next.rows.len(),
+        2,
+        "prior rows must be preserved while search is in-flight"
+    );
+}
+
+// ---- B3: AC1 — typing transitions: OpenSearch, SearchInput, SearchBackspace, CancelSearch ----
+
+#[test]
+fn update_open_search_sets_search_to_empty_string() {
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, cmds) = update(model, Msg::OpenSearch);
+
+    assert_eq!(
+        next.search,
+        Some(String::new()),
+        "OpenSearch must set search=Some(\"\")"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_open_search_clears_error() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.error = Some("previous error".to_owned());
+
+    let (next, _) = update(model, Msg::OpenSearch);
+
+    assert!(
+        next.error.is_none(),
+        "OpenSearch must clear the error banner"
+    );
+}
+
+#[test]
+fn update_open_search_on_detail_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let (next, cmds) = update(model, Msg::OpenSearch);
+
+    assert!(
+        next.search.is_none(),
+        "OpenSearch on Detail screen must not activate search"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_search_input_appends_character_to_query() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("pro".to_owned());
+
+    let (next, cmds) = update(model, Msg::SearchInput('j'));
+
+    assert_eq!(next.search.as_deref(), Some("proj"));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_search_input_when_search_inactive_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::SearchInput('x'));
+
+    assert!(next.search.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_search_backspace_pops_last_char() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("proj".to_owned());
+
+    let (next, cmds) = update(model, Msg::SearchBackspace);
+
+    assert_eq!(next.search.as_deref(), Some("pro"));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_search_backspace_on_empty_query_stays_empty() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some(String::new());
+
+    let (next, cmds) = update(model, Msg::SearchBackspace);
+
+    assert_eq!(next.search.as_deref(), Some(""));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_search_backspace_when_inactive_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::SearchBackspace);
+
+    assert!(next.search.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_cancel_search_clears_search_state() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("project = X".to_owned());
+
+    let (next, cmds) = update(model, Msg::CancelSearch);
+
+    assert!(next.search.is_none(), "CancelSearch must set search=None");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_cancel_search_preserves_rows_and_selection() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    model.selected = 1;
+    model.search = Some("something".to_owned());
+
+    let (next, _) = update(model, Msg::CancelSearch);
+
+    assert_eq!(next.rows.len(), 2, "CancelSearch must preserve rows");
+    assert_eq!(next.selected, 1, "CancelSearch must preserve selection");
+}
+
+// ---- B3: AC2 — LoadFailed sets error + preserves rows; ListLoaded replaces state ----
+
+#[test]
+fn update_load_failed_sets_error_banner_and_preserves_rows() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    model.search = Some("bad JQL".to_owned());
+
+    let (next, cmds) = update(model, Msg::LoadFailed("invalid JQL syntax".to_owned()));
+
+    assert_eq!(
+        next.error.as_deref(),
+        Some("invalid JQL syntax"),
+        "LoadFailed must set the error banner"
+    );
+    assert!(next.search.is_none(), "LoadFailed must clear search state");
+    assert_eq!(
+        next.rows.len(),
+        2,
+        "LoadFailed must preserve the prior rows"
+    );
+    assert_eq!(next.rows[0].key, "PROJ-1", "row content must be unchanged");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_list_loaded_replaces_rows_resets_selected_clears_search_and_error() {
+    let mut model = make_list_model(&["OLD-1", "OLD-2"]);
+    model.selected = 1;
+    model.search = Some("project = NEW".to_owned());
+    model.error = Some("old error".to_owned());
+
+    let new_rows = vec![make_row("NEW-1"), make_row("NEW-2"), make_row("NEW-3")];
+    let (next, cmds) = update(model, Msg::ListLoaded(new_rows));
+
+    assert_eq!(next.rows.len(), 3, "ListLoaded must replace rows");
+    assert_eq!(next.rows[0].key, "NEW-1");
+    assert_eq!(next.selected, 0, "ListLoaded must reset selected to 0");
+    assert!(next.search.is_none(), "ListLoaded must clear search");
+    assert!(
+        next.error.is_none(),
+        "ListLoaded must clear the error banner"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- B3: AC3 — view renders search bar and error banner to TestBackend ----
+
+#[test]
+fn view_with_search_active_shows_typed_query_in_buffer() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("project = X".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("project = X"),
+        "buffer must show the typed query; got: {text}"
+    );
+    assert!(
+        text.contains("JQL>"),
+        "buffer must show the JQL> prompt; got: {text}"
+    );
+}
+
+#[test]
+fn view_with_error_and_rows_shows_banner_and_list() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    model.error = Some("Invalid JQL query".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Invalid JQL query"),
+        "buffer must show the error message; got: {text}"
+    );
+    assert!(
+        text.contains("PROJ-1"),
+        "buffer must still show list rows when error is set; got: {text}"
+    );
+}
+
+#[test]
+fn view_with_no_search_or_error_shows_normal_list() {
+    let model = make_list_model(&["PROJ-5"]);
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("JQL>"),
+        "normal list must not show the search prompt"
+    );
+    assert!(text.contains("PROJ-5"), "normal list must show issue keys");
+}
+
+// ---- B3: AC4 — run_search wiremock: valid JQL returns rows; 400 returns Err ----
+
+#[tokio::test]
+async fn run_search_with_valid_jql_returns_issue_rows() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_search_payload_with_key("SRCH-1")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let rows = run_search(&instance, "project = SRCH").await;
+
+    assert!(rows.is_ok(), "valid JQL must return Ok; got: {rows:?}");
+    let rows = rows.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "SRCH-1");
+
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn run_search_with_invalid_jql_returns_err() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(
+            r#"{"errorMessages":["The value 'BADJQL' does not exist for the field 'project'."]}"#,
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = run_search(&instance, "BADJQL").await;
+
+    assert!(
+        result.is_err(),
+        "400 from server must yield Err (LoadFailed path)"
+    );
+
+    server.verify().await;
+}
+
+#[test]
+fn update_load_failed_from_400_sets_error_and_preserves_rows() {
+    let mut model = make_list_model(&["KEEP-1", "KEEP-2"]);
+    model.search = Some("BADJQL".to_owned());
+
+    let (next, cmds) = update(
+        model,
+        Msg::LoadFailed("search(BADJQL): 400 Bad Request".to_owned()),
+    );
+
+    assert!(
+        next.error.is_some(),
+        "LoadFailed must set error banner from 400 error"
+    );
+    assert_eq!(next.rows.len(), 2, "rows must be preserved after 400");
+    assert_eq!(next.rows[0].key, "KEEP-1");
+    assert!(next.search.is_none());
+    assert!(cmds.is_empty());
 }
