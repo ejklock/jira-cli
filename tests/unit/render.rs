@@ -84,6 +84,32 @@ fn adf_to_plain_text_bullet_list_produces_dash_items() {
 }
 
 #[test]
+fn adf_to_plain_text_ordered_list_produces_numbered_items() {
+    let adf = r#"{"type":"doc","version":1,"content":[{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item B"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item C"}]}]}]}]}"#;
+    let result = adf_to_plain_text(adf);
+    assert!(result.contains("1. Item A"), "must be numbered 1: {result}");
+    assert!(result.contains("2. Item B"), "must be numbered 2: {result}");
+    assert!(result.contains("3. Item C"), "must be numbered 3: {result}");
+    assert!(
+        !result.contains("- Item"),
+        "ordered items must not have dash prefix: {result}"
+    );
+}
+
+#[test]
+fn adf_to_plain_text_nested_ordered_list_numbers_independently() {
+    let adf = r#"{"type":"doc","version":1,"content":[{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Outer A"}]},{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Inner A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Inner B"}]}]}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Outer B"}]}]}]}]}"#;
+    let result = adf_to_plain_text(adf);
+    assert!(result.contains("1. Outer A"), "outer item 1: {result}");
+    assert!(result.contains("2. Outer B"), "outer item 2: {result}");
+    assert!(
+        result.contains("1. Inner A"),
+        "nested list must restart at 1: {result}"
+    );
+    assert!(result.contains("2. Inner B"), "nested item 2: {result}");
+}
+
+#[test]
 fn adf_to_plain_text_non_adf_string_returned_as_is() {
     let plain = "just plain text";
     assert_eq!(adf_to_plain_text(plain), plain);

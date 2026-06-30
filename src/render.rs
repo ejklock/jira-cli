@@ -58,8 +58,13 @@ fn flatten_code_block(node: &serde_json::Value, out: &mut String) {
 }
 
 fn flatten_list(node: &serde_json::Value, out: &mut String, depth: usize, ordered: bool) {
-    for item in node_content(node) {
-        flatten_list_item(item, out, depth, ordered);
+    for (i, item) in node_content(node).iter().enumerate() {
+        let marker = if ordered {
+            format!("{}. ", i + 1)
+        } else {
+            "- ".to_string()
+        };
+        flatten_list_item(item, out, depth, &marker);
     }
 }
 
@@ -69,10 +74,10 @@ fn flatten_block_children(node: &serde_json::Value, out: &mut String, list_depth
     }
 }
 
-fn flatten_list_item(item: &serde_json::Value, out: &mut String, depth: usize, _ordered: bool) {
+fn flatten_list_item(item: &serde_json::Value, out: &mut String, depth: usize, marker: &str) {
     let indent = "  ".repeat(depth);
     for (i, child) in node_content(item).iter().enumerate() {
-        flatten_list_item_child(child, out, depth, &indent, i == 0);
+        flatten_list_item_child(child, out, depth, &indent, i == 0, marker);
     }
 }
 
@@ -82,11 +87,12 @@ fn flatten_list_item_child(
     depth: usize,
     indent: &str,
     is_first: bool,
+    marker: &str,
 ) {
     let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
     if child_type == "paragraph" {
         if is_first {
-            out.push_str(&format!("{indent}- "));
+            out.push_str(&format!("{indent}{marker}"));
             flatten_inline_content(child, out);
             out.push('\n');
         } else {
