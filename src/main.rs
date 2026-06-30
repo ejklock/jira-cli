@@ -8,6 +8,7 @@ mod models;
 mod render;
 mod store;
 mod timing;
+mod tui;
 
 use clap::{CommandFactory, Parser};
 use cli::{bare_no_command_action, BareNoCommandAction, Cli, Command};
@@ -86,6 +87,7 @@ async fn dispatch(command: Command) -> i32 {
         Command::Current(args) => dispatch_current(args).await,
         Command::Mine(args) => dispatch_mine(args).await,
         Command::Search(args) => dispatch_search(args).await,
+        Command::Browse(args) => dispatch_browse(args).await,
     }
 }
 
@@ -347,6 +349,16 @@ async fn dispatch_search(args: cli::SearchArgs) -> i32 {
         &mut std::io::stderr(),
     )
     .await
+}
+
+async fn dispatch_browse(args: cli::BrowseArgs) -> i32 {
+    let ResolvedInstance { instance, .. } = match resolve_single_instance(args.instance.as_deref())
+    {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let is_tty = std::io::stdout().is_terminal();
+    tui::browse(&instance, is_tty, &mut std::io::stderr()).await
 }
 
 fn current_git_branch() -> Option<String> {

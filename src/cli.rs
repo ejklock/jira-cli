@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub const KNOWN_COMMANDS: [&str; 4] = ["setup", "get", "current", "mine"];
+pub const KNOWN_COMMANDS: [&str; 5] = ["setup", "get", "current", "mine", "browse"];
 
 /// Fetch Jira issues from one or more configured instances.
 #[derive(Parser, Debug)]
@@ -25,6 +25,8 @@ pub enum Command {
     Mine(MineArgs),
     /// Search for issues.
     Search(SearchArgs),
+    /// Open the interactive TUI browser.
+    Browse(BrowseArgs),
 }
 
 /// Wrapper that holds the setup subcommand.
@@ -131,6 +133,13 @@ pub struct SearchArgs {
     pub json: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct BrowseArgs {
+    /// Limit to this instance.
+    #[arg(long)]
+    pub instance: Option<String>,
+}
+
 /// Mirror of Python `_normalize_argv`.
 ///
 /// A first arg that is not a known command and not a `-` flag gets `"get"` prepended.
@@ -184,6 +193,23 @@ pub fn bare_no_command_action(is_tty: bool) -> BareNoCommandAction {
         BareNoCommandAction::RunMine
     } else {
         BareNoCommandAction::HelpExit2
+    }
+}
+
+/// Routing decision for `jira browse`.
+#[derive(Debug, PartialEq)]
+pub enum BrowseAction {
+    RunTui,
+    TtyError,
+}
+
+/// Pure routing: launch the TUI when stdout is a TTY; emit an error and exit
+/// non-zero when invoked from a pipe or script (no terminal available).
+pub fn browse_tty_action(is_tty: bool) -> BrowseAction {
+    if is_tty {
+        BrowseAction::RunTui
+    } else {
+        BrowseAction::TtyError
     }
 }
 

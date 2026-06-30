@@ -11,9 +11,12 @@ timestamp: 2026-06-29T00:00:00Z
 Living diagrams of the `jira-cli` Rust app, a fork of `active-collab-cli`
 ([ADR 0001](/adr/0001-fork-active-collab-cli-swap-api.md)) with the domain layer
 swapped to Jira Cloud ([ADR 0002](/adr/0002-jira-cloud-only-basic-auth.md)). Node
-names use [context-index](/context/index.md) vocabulary. v1 is CLI-first; the
-`tui/` module is carried over dormant and re-activated in Phase 2. This view is
-updated as each structural change lands (maintenance invariant).
+names use [context-index](/context/index.md) vocabulary. v1 is CLI-first. The fork's
+`tui/` was **not** carried over; Phase 2 adds a fresh, read-only `browse` TUI built as
+an Elm/TEA shell on ratatui + crossterm over the same domain core
+([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)) — the B0 skeleton (command +
+raw-mode shell) has landed. This view is updated as each structural change lands
+(maintenance invariant).
 
 ## Design principles
 
@@ -55,8 +58,19 @@ flowchart TD
     commands --> render["render\ndomain string rendering (human)\n+ ADF → plain text"]
     commands --> agent_json["agent_json\npure --json shaping"]
     commands --> i18n["i18n (en · pt-BR)"]
-    tui["tui/ (dormant in v1)\nre-activated Phase 2"]
+    cli --> tui["tui (browse, Phase 2)\nread-only Elm/TEA shell\n(ratatui + crossterm)"]
+    tui --> client
+    tui --> store
+    tui --> render
+    tui --> i18n
 ```
+
+The `tui` (`browse`) shell is a **second imperative shell** over the same functional
+core: a pure `update(Model, Msg) -> (Model, Vec<Cmd>)` drives navigation/scroll/search
+state (unit + ratatui `TestBackend` tested), while `Cmd` effects reuse the existing
+data seams — `client` (`JiraClient::search` for lists, cache-or-fetch for detail) and
+`store` — never the rendering `*_core` functions. Read-only by construction
+([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)).
 
 **Boundaries / fitness:**
 
