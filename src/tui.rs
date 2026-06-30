@@ -643,8 +643,7 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
         ])
         .split(area);
 
-    let footer =
-        Paragraph::new(t("↑/↓ scroll  r refresh  Esc/b back  q quit")).alignment(Alignment::Center);
+    let footer = Paragraph::new(t("↑/↓ scroll  Esc/b back  q quit")).alignment(Alignment::Center);
     frame.render_widget(footer, chunks[2]);
 
     match &model.detail {
