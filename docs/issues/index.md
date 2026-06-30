@@ -19,7 +19,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0010](/issues/0010-b2-browse-detail.md) | B2 | browse TUI: issue detail on Enter (cache-or-fetch) | done | 0009 |
 | [0011](/issues/0011-b3-browse-search.md) | B3 | browse TUI: interactive JQL search | done | 0009 |
 | [0012](/issues/0012-b4-browse-affordances.md) | B4 | browse TUI: read affordances (open link, copy key) | done | 0009 |
-| [0013](/issues/0013-ordered-list-numbered-prefix.md) | — | ADF orderedList renders a numbered prefix (debt) | open | — |
+| [0013](/issues/0013-ordered-list-numbered-prefix.md) | — | ADF orderedList renders a numbered prefix (debt) | done | — |
+| [0014](/issues/0014-i18n-human-detail-field-labels.md) | — | i18n: translate human-render field labels (get + browse detail) | done | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -29,7 +30,6 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
   B1 list (0009) → B2 detail (0010) → B3 search (0011) → B4 affordances (0012). Covers PRD 0002
   R1–R4. (The fork's `tui/` was never carried over; this is a fresh read-only build, not a revival.)
 - **Deferred TUI debt:** split `src/tui.rs` into a `src/tui/` submodule (ADR 0007 module_growth);
-  route `view_detail` field labels through `t()` (currently raw English, unlike `view_list`);
   in-loop async list refresh + in-TUI pagination (PRD 0002 open questions).
 
 ## Parked (Phase 2 — not yet sliced)
