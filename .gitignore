@@ -1,0 +1,6 @@
+/target
+.DS_Store
+status-cache.json
+.codegraph/
+.cursor/
+.claude/settings.local.json
