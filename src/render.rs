@@ -195,8 +195,8 @@ pub fn render_issue_human(
     let assignee_name = issue
         .assignee
         .as_ref()
-        .map(|a| a.display_name.as_str())
-        .unwrap_or("Unassigned");
+        .map(|a| a.display_name.clone())
+        .unwrap_or_else(|| t("Unassigned"));
     let reporter_name = issue
         .reporter
         .as_ref()
@@ -205,34 +205,36 @@ pub fn render_issue_human(
 
     writeln!(out, "  [{instance_name}] {}", issue.key).ok();
     writeln!(out, "  {}", issue.summary).ok();
-    writeln!(out, "  URL: {issue_url}").ok();
+    writeln!(out, "  {}: {issue_url}", t("URL")).ok();
     writeln!(
         out,
-        "  Status: {} ({})",
+        "  {}: {} ({})",
+        t("Status"),
         issue.status,
         issue.status_category.as_deref().unwrap_or("-")
     )
     .ok();
-    writeln!(out, "  Type: {}", issue.issue_type).ok();
+    writeln!(out, "  {}: {}", t("Type"), issue.issue_type).ok();
     writeln!(
         out,
-        "  Priority: {}",
+        "  {}: {}",
+        t("Priority"),
         issue.priority.as_deref().unwrap_or("-")
     )
     .ok();
-    writeln!(out, "  Assignee: {assignee_name}").ok();
-    writeln!(out, "  Reporter: {reporter_name}").ok();
+    writeln!(out, "  {}: {assignee_name}", t("Assignee")).ok();
+    writeln!(out, "  {}: {reporter_name}", t("Reporter")).ok();
     if let Some(created) = &issue.created {
-        writeln!(out, "  Created: {created}").ok();
+        writeln!(out, "  {}: {created}", t("Created")).ok();
     }
     if let Some(updated) = &issue.updated {
-        writeln!(out, "  Updated: {updated}").ok();
+        writeln!(out, "  {}: {updated}", t("Updated")).ok();
     }
     if !description_text.is_empty() {
-        writeln!(out, "\nDescription:\n{description_text}").ok();
+        writeln!(out, "\n{}:\n{description_text}", t("Description")).ok();
     }
     if !no_comments && !issue.comments.is_empty() {
-        writeln!(out, "\nComments:").ok();
+        writeln!(out, "\n{}:", t("Comments")).ok();
         for comment in &issue.comments {
             render_comment_human(comment, out);
         }
@@ -240,7 +242,11 @@ pub fn render_issue_human(
 }
 
 fn render_comment_human(comment: &IssueComment, out: &mut dyn Write) {
-    let author = comment.author.as_deref().unwrap_or("Unknown");
+    let author = comment
+        .author
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| t("Unknown"));
     let created = comment.created.as_deref().unwrap_or("");
     let body = adf_to_plain_text(&comment.body);
     writeln!(out, "  [{author}] {created}").ok();

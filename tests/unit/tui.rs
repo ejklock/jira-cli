@@ -1,8 +1,12 @@
 use super::*;
 
 use crate::cli::{browse_tty_action, BrowseAction};
+use crate::i18n::set_language;
 use crate::models::IssueRow;
 use ratatui::{backend::TestBackend, Terminal};
+use std::sync::Mutex;
+
+static LANG_MUTEX: Mutex<()> = Mutex::new(());
 
 // ---- Helpers ----
 
@@ -599,6 +603,66 @@ fn view_detail_shows_assignee() {
         text.contains("Alice"),
         "detail must show the assignee display_name; got: {text}"
     );
+}
+
+// ---- i18n: view_detail field labels (issue 0014) ----
+
+#[test]
+fn view_detail_pt_br_translates_labels() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let mut model = make_list_model(&["PROJ-9"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(crate::models::Issue {
+        assignee: None,
+        ..make_issue("PROJ-9")
+    });
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("Tipo"), "must show Tipo label: {text}");
+    assert!(
+        text.contains("Responsável"),
+        "must show Responsável label: {text}"
+    );
+    assert!(
+        text.contains("Descrição"),
+        "must show Descrição label: {text}"
+    );
+    assert!(
+        text.contains("Não atribuído"),
+        "must show Não atribuído for unassigned issue: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_en_labels_unchanged() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(&["PROJ-42"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-42"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("Status:"), "en label must be Status: {text}");
+    assert!(text.contains("Type:"), "en label must be Type: {text}");
+    assert!(
+        text.contains("Assignee:"),
+        "en label must be Assignee: {text}"
+    );
+    assert!(
+        text.contains("Description:"),
+        "en label must be Description: {text}"
+    );
+
+    set_language("en");
 }
 
 // ---- B2: AC4 — cache hit / fetch error via load_issue (commands seam) ----

@@ -655,8 +655,8 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             let assignee = issue
                 .assignee
                 .as_ref()
-                .map(|a| a.display_name.as_str())
-                .unwrap_or("Unassigned");
+                .map(|a| a.display_name.clone())
+                .unwrap_or_else(|| t("Unassigned"));
 
             let status_line = match &issue.status_category {
                 Some(cat) => format!("{} ({})", issue.status, cat),
@@ -670,12 +670,16 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
                 .unwrap_or_default();
 
             let body = format!(
-                "{key}\n{summary}\n\nStatus: {status}\nType: {issue_type}\nAssignee: {assignee}\n\nDescription:\n{description}",
+                "{key}\n{summary}\n\n{status_label}: {status}\n{type_label}: {issue_type}\n{assignee_label}: {assignee}\n\n{description_label}:\n{description}",
                 key = issue.key,
                 summary = issue.summary,
+                status_label = t("Status"),
                 status = status_line,
+                type_label = t("Type"),
                 issue_type = issue.issue_type,
+                assignee_label = t("Assignee"),
                 assignee = assignee,
+                description_label = t("Description"),
                 description = description,
             );
 

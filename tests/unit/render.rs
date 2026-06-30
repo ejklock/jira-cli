@@ -311,6 +311,83 @@ fn render_issue_human_empty_comments_no_comments_section() {
 }
 
 #[test]
+fn render_issue_human_pt_br_translates_field_labels() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+    let issue = Issue {
+        assignee: None,
+        ..sample_issue()
+    };
+    let mut out = Vec::new();
+    render_issue_human(
+        &issue,
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(text.contains("Tipo:"), "must contain Tipo: {text}");
+    assert!(
+        text.contains("Prioridade:"),
+        "must contain Prioridade: {text}"
+    );
+    assert!(
+        text.contains("Responsável:"),
+        "must contain Responsável: {text}"
+    );
+    assert!(text.contains("Relator:"), "must contain Relator: {text}");
+    assert!(text.contains("Criado:"), "must contain Criado: {text}");
+    assert!(
+        text.contains("Atualizado:"),
+        "must contain Atualizado: {text}"
+    );
+    assert!(
+        text.contains("Descrição:"),
+        "must contain Descrição: {text}"
+    );
+    assert!(
+        text.contains("Comentários:"),
+        "must contain Comentários: {text}"
+    );
+    assert!(
+        text.contains("Não atribuído"),
+        "unassigned issue must show Não atribuído: {text}"
+    );
+    set_language("en");
+}
+
+#[test]
+fn render_issue_human_en_labels_unchanged() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let mut out = Vec::new();
+    render_issue_human(
+        &sample_issue(),
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(text.contains("Status:"), "en label must be Status: {text}");
+    assert!(text.contains("Type:"), "en label must be Type: {text}");
+    assert!(
+        text.contains("Assignee:"),
+        "en label must be Assignee: {text}"
+    );
+    assert!(
+        text.contains("Description:"),
+        "en label must be Description: {text}"
+    );
+    assert!(
+        text.contains("Comments:"),
+        "en label must be Comments: {text}"
+    );
+    set_language("en");
+}
+
+#[test]
 fn print_error_does_not_panic_on_empty_string() {
     print_error("");
 }
