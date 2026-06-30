@@ -14,9 +14,10 @@ swapped to Jira Cloud ([ADR 0002](/adr/0002-jira-cloud-only-basic-auth.md)). Nod
 names use [context-index](/context/index.md) vocabulary. v1 is CLI-first. The fork's
 `tui/` was **not** carried over; Phase 2 adds a fresh, read-only `browse` TUI built as
 an Elm/TEA shell on ratatui + crossterm over the same domain core
-([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)) — the B0 skeleton (command +
-raw-mode shell) has landed. This view is updated as each structural change lands
-(maintenance invariant).
+([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)) — all slices have landed: the
+list, issue detail (cache-or-fetch), interactive JQL search, and the read affordances
+(open link / copy key), covering [PRD 0002](/prd/0002-interactive-browse-tui.md) R1–R4.
+This view is updated as each structural change lands (maintenance invariant).
 
 ## Design principles
 
