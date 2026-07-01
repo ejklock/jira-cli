@@ -21,6 +21,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0012](/issues/0012-b4-browse-affordances.md) | B4 | browse TUI: read affordances (open link, copy key) | done | 0009 |
 | [0013](/issues/0013-ordered-list-numbered-prefix.md) | — | ADF orderedList renders a numbered prefix (debt) | done | — |
 | [0014](/issues/0014-i18n-human-detail-field-labels.md) | — | i18n: translate human-render field labels (get + browse detail) | done | — |
+| [0015](/issues/0015-split-tui-into-submodule.md) | — | split `src/tui.rs` into a `src/tui/` submodule (model/view/shell) | done | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -29,8 +30,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
   [BDR 0006](/bdr/0006-browse-tui-interactions.md)). All slices landed: B0 skeleton (0008) →
   B1 list (0009) → B2 detail (0010) → B3 search (0011) → B4 affordances (0012). Covers PRD 0002
   R1–R4. (The fork's `tui/` was never carried over; this is a fresh read-only build, not a revival.)
-- **Deferred TUI debt:** split `src/tui.rs` into a `src/tui/` submodule (ADR 0007 module_growth);
-  in-loop async list refresh + in-TUI pagination (PRD 0002 open questions).
+- **Deferred TUI debt:** in-loop async list refresh + in-TUI pagination (PRD 0002 open questions).
 
 ## Parked (Phase 2 — not yet sliced)
 
