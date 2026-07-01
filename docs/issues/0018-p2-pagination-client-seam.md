@@ -2,7 +2,7 @@
 type: Issue
 title: "P2 — pagination client seam: expose SearchResult.next_page_token + JiraClient::search_page"
 description: Expose gouqi's V3 nextPageToken through the domain SearchResult and add a JiraClient::search_page(jql, max_results, page_token) method that fetches a subsequent page via SearchOptionsBuilder::next_page_token. Additive, read-only, behind the existing single client seam; the CLI mine/search first-page path is unchanged.
-status: open
+status: done
 tracker:
 tags: [client, pagination, phase2, read]
 timestamp: 2026-06-30T00:00:00Z
