@@ -33,6 +33,9 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0024](/issues/0024-a4-tui-detail-comments.md) | A4 | read-only comments in the browse TUI detail (styled ADF + j/k scroll) | done | 0021, 0023 |
 | [0025](/issues/0025-a3a-duedate-formatter-and-cli-get.md) | A3a | due date on the model + relative formatter + CLI get Due line | done | — |
 | [0026](/issues/0026-a3b-duedate-tui-detail-and-agent-json.md) | A3b | relative Due line in the browse TUI detail + raw duedate in agent_json | done | 0025 |
+| [0027](/issues/0027-h1-test-support-module-and-adf-issue-builders.md) | H1 | shared tests/unit/support.rs (ADF + Issue builders); migrate render/tui tests | open | — |
+| [0028](/issues/0028-h2-consolidate-json-payload-builders.md) | H2 | centralize JSON payload builders (client + commands) into support.rs | open | 0027 |
+| [0029](/issues/0029-h3-migrate-remaining-issue-fixtures.md) | H3 | migrate remaining Issue fixtures (cache/agent_json/models) to shared builder | open | 0027 |
 
 ## Phase 2 — browse TUI (delivered)
 
