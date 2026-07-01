@@ -111,6 +111,7 @@
   "settings": "configurações",
   "↑/↓ navigate  Enter select  r refresh  Esc/b back  q quit  s selection": "↑/↓ navegar  Enter selecionar  r atualizar  Esc/b voltar  q sair  s seleção",
   "↑/↓ scroll  Esc/b back  q quit": "↑/↓ rolar  Esc/b voltar  q sair",
+  "↑/↓ j/k scroll  Esc/b back  q quit": "↑/↓ j/k rolar  Esc/b voltar  q sair",
   "Ctrl/Cmd+click to open": "Ctrl/Cmd+clique abrir anexo",
   "↑/↓ navigate  Enter select  r refresh  Esc/b back  q quit": "↑/↓ navegar  Enter selecionar  r atualizar  Esc/b voltar  q sair",
   "footer.hint.selection": "s seleção",

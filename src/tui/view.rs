@@ -8,7 +8,7 @@ use ratatui::{
 
 use super::model::{Model, Screen};
 use crate::i18n::t;
-use crate::models::IssueRow;
+use crate::models::{Issue, IssueRow};
 use crate::render::{adf_to_rich, RichLine, RichSpan, RichStyle};
 
 const LOADING_NOTICE: &str = "Loading…";
@@ -183,7 +183,8 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
         ])
         .split(area);
 
-    let footer = Paragraph::new(t("↑/↓ scroll  Esc/b back  q quit")).alignment(Alignment::Center);
+    let footer =
+        Paragraph::new(t("↑/↓ j/k scroll  Esc/b back  q quit")).alignment(Alignment::Center);
     frame.render_widget(footer, chunks[2]);
 
     match &model.detail {
@@ -223,6 +224,7 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
                 &description,
                 model.detail_focused_link,
             ));
+            lines.extend(detail_comment_lines(issue));
 
             let paragraph = Paragraph::new(Text::from(lines))
                 .block(
@@ -236,6 +238,43 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             frame.render_widget(paragraph, chunks[1]);
         }
     }
+}
+
+/// Builds the comment section appended after the description in `view_detail`,
+/// mirroring `render_comment_human`'s layout (header + `adf_to_rich`-styled body)
+/// but for ratatui. Returns an empty `Vec` when the issue has no comments, so
+/// `view_detail` renders no `Comments:` section at all (mirrors the CLI).
+fn detail_comment_lines(issue: &Issue) -> Vec<Line<'static>> {
+    if issue.comments.is_empty() {
+        return vec![];
+    }
+
+    let mut lines = vec![Line::from(""), Line::from(format!("{}:", t("Comments")))];
+    for comment in &issue.comments {
+        lines.extend(comment_lines(comment));
+    }
+    lines
+}
+
+/// Renders a single comment's header + styled body + trailing blank line.
+fn comment_lines(comment: &crate::models::IssueComment) -> Vec<Line<'static>> {
+    let author = comment
+        .author
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| t("Unknown"));
+    let created = comment.created.as_deref().unwrap_or("");
+
+    let mut lines = vec![Line::from(format!("[{author}] {created}"))];
+
+    let mut link_occurrence = 0usize;
+    let body = adf_to_rich(&comment.body);
+    lines.extend(
+        body.iter()
+            .map(|line| rich_line_to_ratatui(line, None, &mut link_occurrence)),
+    );
+    lines.push(Line::from(""));
+    lines
 }
 
 fn rich_style_to_ratatui(style: &RichStyle) -> Style {

@@ -1,8 +1,10 @@
 use super::*;
 
+use super::shell::map_key_in_normal_mode;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 
 // ---- Helpers ----
@@ -155,6 +157,30 @@ fn make_issue_with_styled_description(key: &str) -> crate::models::Issue {
             text(" plain then "),
             marked_text("a link", vec![link_mark("https://example.com")]),
         ])])),
+        ..make_issue(key)
+    }
+}
+
+fn make_comment(
+    author: Option<&str>,
+    created: Option<&str>,
+    body: String,
+) -> crate::models::IssueComment {
+    crate::models::IssueComment {
+        id: None,
+        author: author.map(str::to_owned),
+        body,
+        created: created.map(str::to_owned),
+        updated: None,
+    }
+}
+
+fn make_issue_with_comments(
+    key: &str,
+    comments: Vec<crate::models::IssueComment>,
+) -> crate::models::Issue {
+    crate::models::Issue {
+        comments,
         ..make_issue(key)
     }
 }
@@ -1855,4 +1881,135 @@ fn render_and_agent_json_produce_same_url_for_same_input() {
         json_url, expected_url,
         "agent_json url must equal the canonical URL"
     );
+}
+
+// ---- issue 0024 A4: comments rendered in the browse TUI detail ----
+
+#[test]
+fn view_detail_renders_comments_header_authors_and_bodies() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    let mut model = make_list_model(&["PROJ-30"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_comments(
+        "PROJ-30",
+        vec![
+            make_comment(
+                Some("Alice"),
+                Some("2026-01-01"),
+                doc(vec![paragraph(vec![text("First comment body.")])]),
+            ),
+            make_comment(
+                None,
+                None,
+                doc(vec![paragraph(vec![text("Second comment body.")])]),
+            ),
+        ],
+    ));
+
+    let buf = render_to_buffer(&model, 120, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Comments:") || text.contains("Comentários:"),
+        "detail must show the Comments header; got: {text}"
+    );
+    assert!(text.contains("[Alice] 2026-01-01"), "got: {text}");
+    assert!(
+        text.contains("First comment body."),
+        "first comment body missing; got: {text}"
+    );
+    assert!(
+        text.contains("[Unknown] ") || text.contains("[Desconhecido] "),
+        "author-less comment must fall back to Unknown; got: {text}"
+    );
+    assert!(
+        text.contains("Second comment body."),
+        "second comment body missing; got: {text}"
+    );
+}
+
+#[test]
+fn view_detail_renders_bold_comment_body_run_with_bold_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    let mut model = make_list_model(&["PROJ-31"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_comments(
+        "PROJ-31",
+        vec![make_comment(
+            Some("Bob"),
+            Some("2026-02-02"),
+            doc(vec![paragraph(vec![marked_text(
+                "Bold comment",
+                vec![mark("strong")],
+            )])]),
+        )],
+    ));
+
+    let buf = render_to_buffer(&model, 120, 40);
+    let style = style_at_text(&buf, "Bold comment").expect("bold comment run must appear");
+
+    assert!(
+        style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "bold comment run must carry Modifier::BOLD: {style:?}"
+    );
+}
+
+#[test]
+fn view_detail_renders_link_comment_body_run_with_underlined_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    let mut model = make_list_model(&["PROJ-32"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_comments(
+        "PROJ-32",
+        vec![make_comment(
+            Some("Bob"),
+            Some("2026-02-03"),
+            doc(vec![paragraph(vec![marked_text(
+                "linked comment text",
+                vec![link_mark("https://example.com/comment")],
+            )])]),
+        )],
+    ));
+
+    let buf = render_to_buffer(&model, 120, 40);
+    let style = style_at_text(&buf, "linked comment text").expect("link comment run must appear");
+
+    assert!(
+        style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "link comment run must carry Modifier::UNDERLINED: {style:?}"
+    );
+}
+
+#[test]
+fn view_detail_with_no_comments_renders_no_comments_header() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    let mut model = make_list_model(&["PROJ-33"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_comments("PROJ-33", vec![]));
+
+    let buf = render_to_buffer(&model, 120, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("Comments:") && !text.contains("Comentários:"),
+        "empty comments must render no Comments header; got: {text}"
+    );
+}
+
+#[test]
+fn map_key_in_normal_mode_j_is_down() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('j'), KeyModifiers::NONE),
+        Some(Msg::Down)
+    ));
+}
+
+#[test]
+fn map_key_in_normal_mode_k_is_up() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('k'), KeyModifiers::NONE),
+        Some(Msg::Up)
+    ));
 }

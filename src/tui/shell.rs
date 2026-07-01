@@ -130,20 +130,29 @@ fn map_key_in_search_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<
     }
 }
 
-fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
+pub(super) fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
     match key_code {
         KeyCode::Up => Some(Msg::Up),
         KeyCode::Down => Some(Msg::Down),
         KeyCode::Enter => Some(Msg::Select),
         KeyCode::Esc => Some(Msg::Back),
-        KeyCode::Char('b') => Some(Msg::Back),
-        KeyCode::Char('q') => Some(Msg::Quit),
-        KeyCode::Char('/') => Some(Msg::OpenSearch),
-        KeyCode::Char('o') => Some(Msg::OpenLink),
-        KeyCode::Char('y') => Some(Msg::CopyKey),
-        KeyCode::Char('n') => Some(Msg::LoadMore),
         KeyCode::Tab => Some(Msg::FocusNextLink),
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
+        KeyCode::Char(c) => map_normal_char_key(c, modifiers),
+        _ => None,
+    }
+}
+
+fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
+    match c {
+        'k' => Some(Msg::Up),
+        'j' => Some(Msg::Down),
+        'b' => Some(Msg::Back),
+        'q' => Some(Msg::Quit),
+        '/' => Some(Msg::OpenSearch),
+        'o' => Some(Msg::OpenLink),
+        'y' => Some(Msg::CopyKey),
+        'n' => Some(Msg::LoadMore),
+        'c' if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
 }
