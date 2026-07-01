@@ -1,16 +1,18 @@
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{Event, EventStream, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
+use tokio::sync::mpsc;
 
 use crate::client::{GouqiJiraClient, JiraClient};
 use crate::commands::{DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow};
-use crate::store::cache::TaskCache;
+use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::Instance;
 
 use super::model::{update, Cmd, Model, Msg, Screen};
@@ -20,8 +22,9 @@ const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (T
 
 /// Entry point for `jira browse`.
 ///
-/// Checks the TTY guard, then fetches the mine list and enters the raw-mode draw loop.
-/// Returns 0 on clean quit (`q` or Ctrl+C) and 1 on the non-TTY guard path or fetch error.
+/// Checks the TTY guard, then fetches the mine list and enters the raw-mode async
+/// event loop. Returns 0 on clean quit (`q` or Ctrl+C) and 1 on the non-TTY guard
+/// path or fetch error.
 pub async fn browse(
     instance: &Instance,
     cache: &TaskCache<'_>,
@@ -60,16 +63,10 @@ pub(crate) async fn fetch_and_run(
         }
     };
 
-    let handle = tokio::runtime::Handle::current();
-    run_tui(rows, instance, cache, handle)
+    run_tui(rows, instance, cache).await
 }
 
-fn run_tui(
-    rows: Vec<IssueRow>,
-    instance: &Instance,
-    cache: &TaskCache<'_>,
-    handle: tokio::runtime::Handle,
-) -> i32 {
+async fn run_tui(rows: Vec<IssueRow>, instance: &Instance, cache: &TaskCache<'_>) -> i32 {
     let mut stdout = io::stdout();
     if enable_raw_mode().is_err() {
         return 1;
@@ -99,7 +96,7 @@ fn run_tui(
         error: None,
         base_url: instance.base_url.clone(),
     };
-    let exit_code = draw_loop(&mut terminal, model, instance, cache, &handle);
+    let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = disable_raw_mode();
@@ -140,38 +137,90 @@ fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<
     }
 }
 
-fn draw_loop(
+/// Outcome of one event-loop turn: either the model to keep drawing with, or the
+/// process exit code once the loop is done.
+enum StepOutcome {
+    Continue(Box<Model>),
+    Exit(i32),
+}
+
+/// Drives the TUI: on every turn it redraws, then selects over the next terminal
+/// event and the reply channel fed by spawned `Cmd` effects (ADR 0008).
+async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mut model: Model,
     instance: &Instance,
     cache: &TaskCache<'_>,
-    handle: &tokio::runtime::Handle,
 ) -> i32 {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
+    let mut events = EventStream::new();
+
     loop {
         let _ = terminal.draw(|frame| view(&model, frame));
 
-        match event::read() {
-            Ok(Event::Key(key)) => {
-                let search_active = model.search.is_some();
-                let Some(msg) = map_key_to_msg(key.code, key.modifiers, search_active) else {
-                    continue;
-                };
+        let outcome = tokio::select! {
+            event = events.next() => handle_terminal_event(event, model, instance, cache, &tx),
+            Some(msg) = rx.recv() => handle_reply(msg, model, instance, cache, &tx),
+        };
 
-                let (next_model, cmds) = update(model, msg);
-                model = next_model;
-
-                if cmds.contains(&Cmd::Quit) {
-                    return 0;
-                }
-
-                for cmd in cmds {
-                    model = dispatch_cmd(cmd, model, instance, cache, handle);
-                }
-            }
-            Err(_) => return 1,
-            Ok(_) => {}
-        }
+        model = match outcome {
+            StepOutcome::Continue(next_model) => *next_model,
+            StepOutcome::Exit(code) => return code,
+        };
     }
+}
+
+fn handle_terminal_event(
+    event: Option<io::Result<Event>>,
+    model: Model,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) -> StepOutcome {
+    let key = match event {
+        Some(Ok(Event::Key(key))) => key,
+        Some(Ok(_)) => return StepOutcome::Continue(Box::new(model)),
+        Some(Err(_)) | None => return StepOutcome::Exit(1),
+    };
+
+    let search_active = model.search.is_some();
+    let Some(msg) = map_key_to_msg(key.code, key.modifiers, search_active) else {
+        return StepOutcome::Continue(Box::new(model));
+    };
+
+    apply_msg(model, msg, instance, cache, tx)
+}
+
+/// A reply from a spawned `Cmd` effect. A completed detail fetch is cached here
+/// (never inside the spawned task, which owns no borrow of `cache`).
+fn handle_reply(
+    msg: Msg,
+    model: Model,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) -> StepOutcome {
+    if let Msg::DetailLoaded(ref issue) = msg {
+        cache_detail(cache, &instance.name, issue);
+    }
+    apply_msg(model, msg, instance, cache, tx)
+}
+
+fn apply_msg(
+    model: Model,
+    msg: Msg,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) -> StepOutcome {
+    let (next_model, cmds) = update(model, msg);
+    if cmds.contains(&Cmd::Quit) {
+        return StepOutcome::Exit(0);
+    }
+    let model = cmds.into_iter().fold(next_model, |m, cmd| {
+        dispatch_cmd(cmd, m, instance, cache, tx)
+    });
+    StepOutcome::Continue(Box::new(model))
 }
 
 fn dispatch_cmd(
@@ -179,7 +228,7 @@ fn dispatch_cmd(
     model: Model,
     instance: &Instance,
     cache: &TaskCache<'_>,
-    handle: &tokio::runtime::Handle,
+    tx: &mpsc::UnboundedSender<Msg>,
 ) -> Model {
     match cmd {
         Cmd::Quit => model,
@@ -191,41 +240,65 @@ fn dispatch_cmd(
             copy_to_clipboard(&key);
             model
         }
-        Cmd::LoadDetail(key) => {
-            let result =
-                tokio::task::block_in_place(|| handle.block_on(load_detail(instance, cache, &key)));
-            match result {
-                Ok(issue) => {
-                    let (next, _) = update(model, Msg::DetailLoaded(Box::new(issue)));
-                    next
-                }
-                Err(_) => {
-                    let (next, _) = update(model, Msg::Back);
-                    next
-                }
-            }
-        }
+        Cmd::LoadDetail(key) => dispatch_load_detail(key, model, instance, cache, tx),
         Cmd::LoadList(jql) => {
-            let result =
-                tokio::task::block_in_place(|| handle.block_on(run_search(instance, &jql)));
-            match result {
-                Ok(rows) => {
-                    let (next, _) = update(model, Msg::ListLoaded(rows));
-                    next
-                }
-                Err(e) => {
-                    let (next, _) = update(model, Msg::LoadFailed(e.to_string()));
-                    next
-                }
-            }
+            spawn_load_list(jql, instance.clone(), tx.clone());
+            model
         }
     }
 }
 
-async fn load_detail(instance: &Instance, cache: &TaskCache<'_>, key: &str) -> Result<Issue, i32> {
-    let issue_cache = crate::store::cache::IssueCache::new(cache.conn());
-    let mut sink: Vec<u8> = Vec::new();
-    crate::commands::load_issue(key, instance, &issue_cache, false, &mut sink).await
+/// Serves a detail fetch from cache synchronously (no fetch needed), otherwise
+/// spawns the network fetch and keeps `model.detail == None` (view shows Loading…).
+fn dispatch_load_detail(
+    key: String,
+    model: Model,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) -> Model {
+    let issue_cache = IssueCache::new(cache.conn());
+    match issue_cache.read(&instance.name, &key) {
+        Ok(Some(cached)) => update(model, Msg::DetailLoaded(Box::new(cached.issue))).0,
+        _ => {
+            spawn_load_detail(key, instance.clone(), tx.clone());
+            model
+        }
+    }
+}
+
+fn cache_detail(cache: &TaskCache<'_>, instance_name: &str, issue: &Issue) {
+    let issue_cache = IssueCache::new(cache.conn());
+    let _ = issue_cache.write(instance_name, issue);
+}
+
+/// Spawns the detail fetch effect; the result is sent back over `tx` as
+/// `Msg::DetailLoaded` on success or `Msg::Back` on error (ADR 0008).
+fn spawn_load_detail(key: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match fetch_issue(&instance, &key).await {
+            Ok(issue) => Msg::DetailLoaded(Box::new(issue)),
+            Err(_) => Msg::Back,
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+/// Spawns the list/search fetch effect; the result is sent back over `tx` as
+/// `Msg::ListLoaded` on success or `Msg::LoadFailed` on error (ADR 0008).
+fn spawn_load_list(jql: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match run_search(&instance, &jql).await {
+            Ok(rows) => Msg::ListLoaded(rows),
+            Err(e) => Msg::LoadFailed(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+async fn fetch_issue(instance: &Instance, key: &str) -> anyhow::Result<Issue> {
+    let client = GouqiJiraClient::new(instance)?;
+    client.get_issue(key).await
 }
 
 pub(crate) async fn run_search(instance: &Instance, jql: &str) -> anyhow::Result<Vec<IssueRow>> {
