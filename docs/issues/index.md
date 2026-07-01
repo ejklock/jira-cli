@@ -29,6 +29,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0020](/issues/0020-browse-tui-chrome-i18n-parity.md) | — | browse TUI chrome i18n parity: translate footers/prompt via `t()` + pt_BR catalog | done | — |
 | [0021](/issues/0021-a1-styled-adf-detail-rendering.md) | A1 | styled ADF rendering in the browse TUI detail description | done | — |
 | [0022](/issues/0022-a2-keyboard-inline-link-navigation.md) | A2 | keyboard inline-link navigation in the browse TUI detail (Tab/Enter) | done | 0021 |
+| [0023](/issues/0023-tui-test-hygiene-and-view-list-complexity.md) | — | TUI test hygiene (LANG_MUTEX) + view_list complexity refactor (debt) | done | — |
 
 ## Phase 2 — browse TUI (delivered)
 
