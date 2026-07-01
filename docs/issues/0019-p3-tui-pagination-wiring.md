@@ -2,7 +2,7 @@
 type: Issue
 title: "P3 — browse TUI pagination wiring: load-more appends the next page"
 description: Wire in-TUI pagination onto the P2 client primitive and the P1 async loop. The list Model tracks the active jql + next_page_token; an explicit load-more action (key 'n', enabled while a token is pending) fetches the next page via search_page and appends the rows, preserving selection and advancing the token; view_list shows a load-more affordance.
-status: open
+status: done
 tracker:
 tags: [tui, browse, phase2, pagination]
 timestamp: 2026-06-30T00:00:00Z
