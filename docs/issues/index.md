@@ -28,6 +28,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0019](/issues/0019-p3-tui-pagination-wiring.md) | P3 | browse TUI pagination wiring: load-more appends the next page | done | 0017, 0018 |
 | [0020](/issues/0020-browse-tui-chrome-i18n-parity.md) | — | browse TUI chrome i18n parity: translate footers/prompt via `t()` + pt_BR catalog | done | — |
 | [0021](/issues/0021-a1-styled-adf-detail-rendering.md) | A1 | styled ADF rendering in the browse TUI detail description | done | — |
+| [0022](/issues/0022-a2-keyboard-inline-link-navigation.md) | A2 | keyboard inline-link navigation in the browse TUI detail (Tab/Enter) | done | 0021 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -51,8 +52,9 @@ behind their own decision records.
 
 - **A1** — [0021](/issues/0021-a1-styled-adf-detail-rendering.md): styled ADF rendering in
   the browse TUI detail ([ADR 0010](/adr/0010-styled-adf-rendering-browse-tui-detail.md)). **open**
-- **A2** — clickable inline body links in the detail (open the retained `href`). Builds on
-  A1's `adf_to_rich`. *(not yet sliced)*
+- **A2** — [0022](/issues/0022-a2-keyboard-inline-link-navigation.md): keyboard inline-link
+  navigation in the detail (Tab cycle, Enter open) over A1's retained `href`
+  ([ADR 0011](/adr/0011-keyboard-inline-link-navigation-browse-detail.md)). **open**
 - **A3** — relative due-date formatting (`due_today`/`tomorrow`/`overdue`/`in`) from the
   issue `duedate`. *(not yet sliced)*
 - **A4** — display + `j/k`-navigate comments in the TUI detail (reuses `adf_to_rich`).
