@@ -31,6 +31,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0022](/issues/0022-a2-keyboard-inline-link-navigation.md) | A2 | keyboard inline-link navigation in the browse TUI detail (Tab/Enter) | done | 0021 |
 | [0023](/issues/0023-tui-test-hygiene-and-view-list-complexity.md) | — | TUI test hygiene (LANG_MUTEX) + view_list complexity refactor (debt) | done | — |
 | [0024](/issues/0024-a4-tui-detail-comments.md) | A4 | read-only comments in the browse TUI detail (styled ADF + j/k scroll) | done | 0021, 0023 |
+| [0025](/issues/0025-a3a-duedate-formatter-and-cli-get.md) | A3a | due date on the model + relative formatter + CLI get Due line | done | — |
+| [0026](/issues/0026-a3b-duedate-tui-detail-and-agent-json.md) | A3b | relative Due line in the browse TUI detail + raw duedate in agent_json | done | 0025 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -57,8 +59,15 @@ behind their own decision records.
 - **A2** — [0022](/issues/0022-a2-keyboard-inline-link-navigation.md): keyboard inline-link
   navigation in the detail (Tab cycle, Enter open) over A1's retained `href`
   ([ADR 0011](/adr/0011-keyboard-inline-link-navigation-browse-detail.md)). **open**
-- **A3** — relative due-date formatting (`due_today`/`tomorrow`/`overdue`/`in`) from the
-  issue `duedate`. *(not yet sliced)*
+- **A3** — relative due-date formatting from the issue `duedate`
+  ([ADR 0013](/adr/0013-relative-due-date-rendering.md)), sliced into
+  [0025](/issues/0025-a3a-duedate-formatter-and-cli-get.md) (A3a: model + formatter + CLI `get`)
+  and [0026](/issues/0026-a3b-duedate-tui-detail-and-agent-json.md) (A3b: TUI detail + agent_json).
+  **done**
+
+**Group A is complete** (A1 · A2 · A3 · A4 all delivered). Known follow-up debt: a test-support
+consolidation slice (a shared `Issue` test-builder) to DRY the per-module fixtures that trip the
+duplication gate on every `Issue`-struct-touching change (observation 55).
 - **A4** — [0024](/issues/0024-a4-tui-detail-comments.md): read-only comments in the TUI detail,
   styled via `adf_to_rich`, scrollable with `j/k` + `↑/↓`
   ([ADR 0012](/adr/0012-comments-in-browse-tui-detail.md)). **done**
