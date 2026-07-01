@@ -7,6 +7,34 @@ use ratatui::{backend::TestBackend, Terminal};
 
 // ---- Helpers ----
 
+// ADF fixture builders — assemble ADF-JSON via `serde_json::json!` instead of
+// repeating the full `{"type":"doc","version":1,"content":[...]}` scaffolding
+// as string literals in each issue fixture below.
+
+fn doc(content: Vec<serde_json::Value>) -> String {
+    serde_json::json!({"type": "doc", "version": 1, "content": content}).to_string()
+}
+
+fn paragraph(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "paragraph", "content": content})
+}
+
+fn text(value: &str) -> serde_json::Value {
+    serde_json::json!({"type": "text", "text": value})
+}
+
+fn marked_text(value: &str, marks: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "text", "text": value, "marks": marks})
+}
+
+fn mark(mark_type: &str) -> serde_json::Value {
+    serde_json::json!({"type": mark_type})
+}
+
+fn link_mark(href: &str) -> serde_json::Value {
+    serde_json::json!({"type": "link", "attrs": {"href": href}})
+}
+
 fn make_test_instance() -> crate::store::instances::Instance {
     crate::store::instances::Instance {
         name: "test".to_owned(),
@@ -61,7 +89,9 @@ fn make_issue(key: &str) -> crate::models::Issue {
         priority: None,
         created: None,
         updated: None,
-        description: Some(r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Flattened description here."}]}]}"#.to_owned()),
+        description: Some(doc(vec![paragraph(vec![text(
+            "Flattened description here.",
+        )])])),
         comments: vec![],
     }
 }
@@ -101,6 +131,30 @@ fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn style_at_text(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<ratatui::style::Style> {
+    let (width, height) = (buf.area.width as usize, buf.area.height as usize);
+    for row in 0..height {
+        let row_text: String = (0..width)
+            .map(|col| buf[(col as u16, row as u16)].symbol().to_owned())
+            .collect();
+        if let Some(start) = row_text.find(needle) {
+            return Some(buf[(start as u16, row as u16)].style());
+        }
+    }
+    None
+}
+
+fn make_issue_with_styled_description(key: &str) -> crate::models::Issue {
+    crate::models::Issue {
+        description: Some(doc(vec![paragraph(vec![
+            marked_text("Bold text", vec![mark("strong")]),
+            text(" plain then "),
+            marked_text("a link", vec![link_mark("https://example.com")]),
+        ])])),
+        ..make_issue(key)
+    }
 }
 
 fn build_search_payload_with_key(key: &str) -> serde_json::Value {
@@ -601,6 +655,61 @@ fn view_detail_shows_assignee() {
     assert!(
         text.contains("Alice"),
         "detail must show the assignee display_name; got: {text}"
+    );
+}
+
+// ---- issue 0021 A1: view_detail renders styled description runs ----
+
+#[test]
+fn view_detail_renders_bold_description_run_with_bold_modifier() {
+    let mut model = make_list_model(&["PROJ-11"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_styled_description("PROJ-11"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let style = style_at_text(&buf, "Bold text").expect("bold run must appear in buffer");
+
+    assert!(
+        style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "bold description run must carry Modifier::BOLD: {style:?}"
+    );
+}
+
+#[test]
+fn view_detail_renders_link_description_run_with_underlined_modifier() {
+    let mut model = make_list_model(&["PROJ-12"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_styled_description("PROJ-12"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let style = style_at_text(&buf, "a link").expect("link run must appear in buffer");
+
+    assert!(
+        style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "link description run must carry Modifier::UNDERLINED: {style:?}"
+    );
+}
+
+#[test]
+fn view_detail_plain_description_run_carries_no_bold_or_underline() {
+    let mut model = make_list_model(&["PROJ-13"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_styled_description("PROJ-13"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let style = style_at_text(&buf, "plain then").expect("plain run must appear in buffer");
+
+    assert!(
+        !style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "plain run must not carry BOLD: {style:?}"
+    );
+    assert!(
+        !style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "plain run must not carry UNDERLINED: {style:?}"
     );
 }
 

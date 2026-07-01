@@ -2,6 +2,84 @@ use super::*;
 use crate::i18n::{set_language, t, LANG_MUTEX};
 use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow};
 
+// --- ADF fixture builders (shared by adf_to_plain_text and adf_to_rich tests) ---
+//
+// These assemble ADF-JSON via `serde_json::json!` instead of repeating the
+// full `{"type":"doc","version":1,"content":[...]}` scaffolding as string
+// literals in every test body.
+
+fn doc(content: Vec<serde_json::Value>) -> String {
+    serde_json::json!({"type": "doc", "version": 1, "content": content}).to_string()
+}
+
+fn paragraph(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "paragraph", "content": content})
+}
+
+fn heading(level: u64, content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "heading", "attrs": {"level": level}, "content": content})
+}
+
+fn code_block(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "codeBlock", "content": content})
+}
+
+fn blockquote(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "blockquote", "content": content})
+}
+
+fn panel(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "panel", "attrs": {"panelType": "info"}, "content": content})
+}
+
+fn rule_block() -> serde_json::Value {
+    serde_json::json!({"type": "rule"})
+}
+
+fn bullet_list(items: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "bulletList", "content": items})
+}
+
+fn ordered_list(items: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "orderedList", "content": items})
+}
+
+fn list_item(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "listItem", "content": content})
+}
+
+fn text(value: &str) -> serde_json::Value {
+    serde_json::json!({"type": "text", "text": value})
+}
+
+fn hard_break() -> serde_json::Value {
+    serde_json::json!({"type": "hardBreak"})
+}
+
+fn custom_node(node_type: &str, content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": node_type, "content": content})
+}
+
+fn mark(mark_type: &str) -> serde_json::Value {
+    serde_json::json!({"type": mark_type})
+}
+
+fn link_mark(href: &str) -> serde_json::Value {
+    serde_json::json!({"type": "link", "attrs": {"href": href}})
+}
+
+fn marked_text(value: &str, marks: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "text", "text": value, "marks": marks})
+}
+
+fn plain_paragraph(value: &str) -> String {
+    doc(vec![paragraph(vec![text(value)])])
+}
+
+fn marked_paragraph(value: &str, marks: Vec<serde_json::Value>) -> String {
+    doc(vec![paragraph(vec![marked_text(value, marks)])])
+}
+
 fn sample_issue() -> Issue {
     Issue {
         key: "PROJ-123".to_string(),
@@ -20,7 +98,7 @@ fn sample_issue() -> Issue {
         priority: Some("High".to_string()),
         created: Some("2026-01-10T09:00:00.000+0000".to_string()),
         updated: Some("2026-06-29T12:00:00.000+0000".to_string()),
-        description: Some(r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Login fails when MFA is enabled."}]}]}"#.to_string()),
+        description: Some(plain_paragraph("Login fails when MFA is enabled.")),
         comments: vec![IssueComment {
             id: Some("100".to_string()),
             author: Some("Bob Dev".to_string()),
@@ -42,15 +120,18 @@ fn issue_no_comments() -> Issue {
 
 #[test]
 fn adf_to_plain_text_paragraph_extracts_text() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Hello world"}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![paragraph(vec![text("Hello world")])]);
+    let result = adf_to_plain_text(&adf);
     assert_eq!(result, "Hello world");
 }
 
 #[test]
 fn adf_to_plain_text_multiple_paragraphs_separated_by_newline() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"First"}]},{"type":"paragraph","content":[{"type":"text","text":"Second"}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![
+        paragraph(vec![text("First")]),
+        paragraph(vec![text("Second")]),
+    ]);
+    let result = adf_to_plain_text(&adf);
     assert!(result.contains("First"), "must contain First: {result}");
     assert!(result.contains("Second"), "must contain Second: {result}");
     assert!(
@@ -61,8 +142,12 @@ fn adf_to_plain_text_multiple_paragraphs_separated_by_newline() {
 
 #[test]
 fn adf_to_plain_text_hard_break_produces_newline() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Line 1"},{"type":"hardBreak"},{"type":"text","text":"Line 2"}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![paragraph(vec![
+        text("Line 1"),
+        hard_break(),
+        text("Line 2"),
+    ])]);
+    let result = adf_to_plain_text(&adf);
     assert!(result.contains("Line 1"), "must have Line 1: {result}");
     assert!(result.contains("Line 2"), "must have Line 2: {result}");
     assert!(result.contains('\n'), "hardBreak must produce newline");
@@ -70,8 +155,11 @@ fn adf_to_plain_text_hard_break_produces_newline() {
 
 #[test]
 fn adf_to_plain_text_bullet_list_produces_dash_items() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"bulletList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item B"}]}]}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![bullet_list(vec![
+        list_item(vec![paragraph(vec![text("Item A")])]),
+        list_item(vec![paragraph(vec![text("Item B")])]),
+    ])]);
+    let result = adf_to_plain_text(&adf);
     assert!(result.contains("Item A"), "must contain Item A: {result}");
     assert!(result.contains("Item B"), "must contain Item B: {result}");
     assert!(
@@ -82,8 +170,12 @@ fn adf_to_plain_text_bullet_list_produces_dash_items() {
 
 #[test]
 fn adf_to_plain_text_ordered_list_produces_numbered_items() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item B"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Item C"}]}]}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![ordered_list(vec![
+        list_item(vec![paragraph(vec![text("Item A")])]),
+        list_item(vec![paragraph(vec![text("Item B")])]),
+        list_item(vec![paragraph(vec![text("Item C")])]),
+    ])]);
+    let result = adf_to_plain_text(&adf);
     assert!(result.contains("1. Item A"), "must be numbered 1: {result}");
     assert!(result.contains("2. Item B"), "must be numbered 2: {result}");
     assert!(result.contains("3. Item C"), "must be numbered 3: {result}");
@@ -95,8 +187,17 @@ fn adf_to_plain_text_ordered_list_produces_numbered_items() {
 
 #[test]
 fn adf_to_plain_text_nested_ordered_list_numbers_independently() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Outer A"}]},{"type":"orderedList","content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Inner A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Inner B"}]}]}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"Outer B"}]}]}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![ordered_list(vec![
+        list_item(vec![
+            paragraph(vec![text("Outer A")]),
+            ordered_list(vec![
+                list_item(vec![paragraph(vec![text("Inner A")])]),
+                list_item(vec![paragraph(vec![text("Inner B")])]),
+            ]),
+        ]),
+        list_item(vec![paragraph(vec![text("Outer B")])]),
+    ])]);
+    let result = adf_to_plain_text(&adf);
     assert!(result.contains("1. Outer A"), "outer item 1: {result}");
     assert!(result.contains("2. Outer B"), "outer item 2: {result}");
     assert!(
@@ -114,15 +215,18 @@ fn adf_to_plain_text_non_adf_string_returned_as_is() {
 
 #[test]
 fn adf_to_plain_text_empty_doc_returns_empty() {
-    let adf = r#"{"type":"doc","version":1,"content":[]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![]);
+    let result = adf_to_plain_text(&adf);
     assert_eq!(result, "");
 }
 
 #[test]
 fn adf_to_plain_text_unknown_node_falls_back_to_text_content() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"customNode","content":[{"type":"paragraph","content":[{"type":"text","text":"buried text"}]}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![custom_node(
+        "customNode",
+        vec![paragraph(vec![text("buried text")])],
+    )]);
+    let result = adf_to_plain_text(&adf);
     assert!(
         result.contains("buried text"),
         "unknown node must fall back to child text: {result}"
@@ -131,12 +235,231 @@ fn adf_to_plain_text_unknown_node_falls_back_to_text_content() {
 
 #[test]
 fn adf_to_plain_text_heading_extracts_text() {
-    let adf = r#"{"type":"doc","version":1,"content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Section Title"}]}]}"#;
-    let result = adf_to_plain_text(adf);
+    let adf = doc(vec![heading(2, vec![text("Section Title")])]);
+    let result = adf_to_plain_text(&adf);
     assert!(
         result.contains("Section Title"),
         "heading text must be extracted: {result}"
     );
+}
+
+// --- adf_to_rich ---
+
+fn only_span(lines: &[RichLine]) -> &RichSpan {
+    assert_eq!(lines.len(), 1, "expected a single line: {lines:?}");
+    assert_eq!(lines[0].len(), 1, "expected a single run: {lines:?}");
+    &lines[0][0]
+}
+
+#[test]
+fn adf_to_rich_strong_mark_sets_bold_style() {
+    let adf = marked_paragraph("Bold text", vec![mark("strong")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(span.text, "Bold text");
+    assert!(span.style.bold, "strong mark must set bold: {span:?}");
+    assert!(!span.style.italic);
+}
+
+#[test]
+fn adf_to_rich_em_mark_sets_italic_style() {
+    let adf = marked_paragraph("Italic text", vec![mark("em")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert!(span.style.italic, "em mark must set italic: {span:?}");
+    assert!(!span.style.bold);
+}
+
+#[test]
+fn adf_to_rich_code_mark_sets_code_style() {
+    let adf = marked_paragraph("a_var", vec![mark("code")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert!(span.style.code, "code mark must set code: {span:?}");
+}
+
+#[test]
+fn adf_to_rich_strike_mark_sets_strike_style() {
+    let adf = marked_paragraph("gone", vec![mark("strike")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert!(span.style.strike, "strike mark must set strike: {span:?}");
+}
+
+#[test]
+fn adf_to_rich_underline_mark_sets_underline_style() {
+    let adf = marked_paragraph("under", vec![mark("underline")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert!(
+        span.style.underline,
+        "underline mark must set underline: {span:?}"
+    );
+    assert!(span.style.link.is_none());
+}
+
+#[test]
+fn adf_to_rich_link_mark_sets_href_and_underline() {
+    let adf = marked_paragraph("click here", vec![link_mark("https://example.com")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.style.link.as_deref(),
+        Some("https://example.com"),
+        "link mark must retain href: {span:?}"
+    );
+    assert!(
+        span.style.underline,
+        "link mark must also set underline: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_composes_multiple_marks_on_one_run() {
+    let adf = marked_paragraph("combo", vec![mark("strong"), mark("em"), mark("strike")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert!(span.style.bold, "must be bold: {span:?}");
+    assert!(span.style.italic, "must be italic: {span:?}");
+    assert!(span.style.strike, "must be strike: {span:?}");
+    assert!(!span.style.code);
+    assert!(!span.style.underline);
+}
+
+#[test]
+fn adf_to_rich_unmarked_text_run_yields_default_style() {
+    let adf = plain_paragraph("plain");
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(span.style, RichStyle::default());
+}
+
+#[test]
+fn adf_to_rich_multiple_paragraphs_produce_separate_lines() {
+    let adf = doc(vec![
+        paragraph(vec![text("First")]),
+        paragraph(vec![text("Second")]),
+    ]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(
+        lines.len(),
+        2,
+        "each paragraph must be its own line: {lines:?}"
+    );
+    assert_eq!(lines[0][0].text, "First");
+    assert_eq!(lines[1][0].text, "Second");
+}
+
+#[test]
+fn adf_to_rich_hard_break_splits_into_two_lines() {
+    let adf = doc(vec![paragraph(vec![
+        text("Line 1"),
+        hard_break(),
+        text("Line 2"),
+    ])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(
+        lines.len(),
+        2,
+        "hardBreak must split into two lines: {lines:?}"
+    );
+    assert_eq!(lines[0][0].text, "Line 1");
+    assert_eq!(lines[1][0].text, "Line 2");
+}
+
+#[test]
+fn adf_to_rich_bullet_list_produces_dash_prefixed_lines() {
+    let adf = doc(vec![bullet_list(vec![
+        list_item(vec![paragraph(vec![text("Item A")])]),
+        list_item(vec![paragraph(vec![text("Item B")])]),
+    ])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0][0].text, "- ");
+    assert_eq!(lines[0][1].text, "Item A");
+    assert_eq!(lines[1][0].text, "- ");
+    assert_eq!(lines[1][1].text, "Item B");
+}
+
+#[test]
+fn adf_to_rich_ordered_list_produces_numbered_lines() {
+    let adf = doc(vec![ordered_list(vec![
+        list_item(vec![paragraph(vec![text("Item A")])]),
+        list_item(vec![paragraph(vec![text("Item B")])]),
+    ])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0][0].text, "1. ");
+    assert_eq!(lines[1][0].text, "2. ");
+}
+
+#[test]
+fn adf_to_rich_code_block_marks_code_style() {
+    let adf = doc(vec![code_block(vec![text("let x = 1;")])]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(span.text, "let x = 1;");
+    assert!(
+        span.style.code,
+        "codeBlock content must carry code style: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_heading_extracts_text_as_own_line() {
+    let adf = doc(vec![heading(2, vec![text("Section Title")])]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(span.text, "Section Title");
+}
+
+#[test]
+fn adf_to_rich_blockquote_flattens_child_paragraph_into_own_line() {
+    let adf = doc(vec![blockquote(vec![paragraph(vec![text("Quoted text")])])]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.text, "Quoted text",
+        "blockquote must flatten its paragraph child into its own line: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_panel_flattens_child_paragraph_into_own_line() {
+    let adf = doc(vec![panel(vec![paragraph(vec![text("Panel text")])])]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.text, "Panel text",
+        "panel must flatten its paragraph child into its own line: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_rule_produces_dash_line() {
+    let adf = doc(vec![rule_block()]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.text, "---",
+        "rule must render as its own dash line: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_non_adf_string_returns_single_unstyled_line() {
+    let plain = "just plain text";
+    let lines = adf_to_rich(plain);
+    let span = only_span(&lines);
+    assert_eq!(span.text, plain);
+    assert_eq!(span.style, RichStyle::default());
+}
+
+#[test]
+fn adf_to_rich_empty_doc_returns_empty_vec() {
+    let adf = doc(vec![]);
+    let lines = adf_to_rich(&adf);
+    assert!(lines.is_empty(), "empty doc must yield no lines: {lines:?}");
 }
 
 // --- render_issue_human ---

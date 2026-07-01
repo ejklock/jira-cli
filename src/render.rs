@@ -141,6 +141,247 @@ fn flatten_inline_node(node: &serde_json::Value, out: &mut String) {
     }
 }
 
+/// Neutral, ratatui-free style flags for one inline text run in a rich-rendered
+/// ADF document. `link` retains the href for a later clickable-links slice (A2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RichStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub code: bool,
+    pub strike: bool,
+    pub underline: bool,
+    pub link: Option<String>,
+}
+
+/// One styled text run within a rich-rendered line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RichSpan {
+    pub text: String,
+    pub style: RichStyle,
+}
+
+/// A single displayed line, made up of one or more styled runs.
+pub type RichLine = Vec<RichSpan>;
+
+/// Walk an ADF JSON string into styled lines, mirroring `adf_to_plain_text`'s
+/// block shaping (paragraphs, lists, code blocks, hardBreak) but carrying each
+/// inline mark (`strong`/`em`/`code`/`strike`/`underline`/`link`) into a
+/// [`RichStyle`] per text run. Non-ADF / non-`doc` input yields a single
+/// unstyled line with the raw string.
+pub fn adf_to_rich(raw: &str) -> Vec<RichLine> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return vec![single_unstyled_line(raw)];
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("doc") {
+        return vec![single_unstyled_line(raw)];
+    }
+    let mut lines: Vec<RichLine> = Vec::new();
+    let mut current: RichLine = Vec::new();
+    for node in node_content(&value) {
+        rich_node(node, &mut lines, &mut current, 0);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn single_unstyled_line(text: &str) -> RichLine {
+    vec![RichSpan {
+        text: text.to_string(),
+        style: RichStyle::default(),
+    }]
+}
+
+fn rich_node(
+    node: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+    list_depth: usize,
+) {
+    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match node_type {
+        "paragraph" | "heading" => {
+            rich_inline_content(node, lines, current);
+            lines.push(std::mem::take(current));
+        }
+        "codeBlock" => rich_code_block(node, lines, current),
+        "bulletList" => rich_list(node, lines, current, list_depth, false),
+        "orderedList" => rich_list(node, lines, current, list_depth, true),
+        "blockquote" | "panel" => rich_block_children(node, lines, current, list_depth),
+        "rule" => {
+            current.push(RichSpan {
+                text: "---".to_string(),
+                style: RichStyle::default(),
+            });
+            lines.push(std::mem::take(current));
+        }
+        _ => rich_block_children(node, lines, current, list_depth),
+    }
+}
+
+fn rich_code_block(node: &serde_json::Value, lines: &mut Vec<RichLine>, current: &mut RichLine) {
+    let style = RichStyle {
+        code: true,
+        ..RichStyle::default()
+    };
+    for child in node_content(node) {
+        if let Some(text) = child.get("text").and_then(|t| t.as_str()) {
+            current.push(RichSpan {
+                text: text.to_string(),
+                style: style.clone(),
+            });
+        }
+    }
+    lines.push(std::mem::take(current));
+}
+
+fn rich_list(
+    node: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+    depth: usize,
+    ordered: bool,
+) {
+    for (i, item) in node_content(node).iter().enumerate() {
+        let marker = if ordered {
+            format!("{}. ", i + 1)
+        } else {
+            "- ".to_string()
+        };
+        rich_list_item(item, lines, current, depth, &marker);
+    }
+}
+
+fn rich_block_children(
+    node: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+    list_depth: usize,
+) {
+    for child in node_content(node) {
+        rich_node(child, lines, current, list_depth);
+    }
+}
+
+fn rich_list_item(
+    item: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+    depth: usize,
+    marker: &str,
+) {
+    let indent = "  ".repeat(depth);
+    for (i, child) in node_content(item).iter().enumerate() {
+        rich_list_item_child(child, lines, current, depth, &indent, i == 0, marker);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rich_list_item_child(
+    child: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+    depth: usize,
+    indent: &str,
+    is_first: bool,
+    marker: &str,
+) {
+    let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if child_type == "paragraph" {
+        if is_first {
+            current.push(RichSpan {
+                text: format!("{indent}{marker}"),
+                style: RichStyle::default(),
+            });
+            rich_inline_content(child, lines, current);
+            lines.push(std::mem::take(current));
+        } else {
+            rich_node(child, lines, current, depth + 1);
+        }
+    } else if child_type == "bulletList" || child_type == "orderedList" {
+        rich_node(child, lines, current, depth + 1);
+    } else {
+        rich_node(child, lines, current, depth);
+    }
+}
+
+fn rich_inline_content(
+    node: &serde_json::Value,
+    lines: &mut Vec<RichLine>,
+    current: &mut RichLine,
+) {
+    for child in node_content(node) {
+        rich_inline_node(child, lines, current);
+    }
+}
+
+fn rich_inline_node(node: &serde_json::Value, lines: &mut Vec<RichLine>, current: &mut RichLine) {
+    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match node_type {
+        "text" => {
+            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
+                current.push(RichSpan {
+                    text: text.to_string(),
+                    style: marks_to_style(node),
+                });
+            }
+        }
+        "hardBreak" => lines.push(std::mem::take(current)),
+        "mention" => push_attr_span(node, "text", current),
+        "emoji" => push_attr_span(node, "shortName", current),
+        "inlineCard" => push_attr_span(node, "url", current),
+        _ => {
+            for child in node_content(node) {
+                rich_inline_node(child, lines, current);
+            }
+        }
+    }
+}
+
+fn push_attr_span(node: &serde_json::Value, key: &str, current: &mut RichLine) {
+    if let Some(text) = node
+        .get("attrs")
+        .and_then(|a| a.get(key))
+        .and_then(|t| t.as_str())
+    {
+        current.push(RichSpan {
+            text: text.to_string(),
+            style: RichStyle::default(),
+        });
+    }
+}
+
+fn marks_to_style(node: &serde_json::Value) -> RichStyle {
+    let mut style = RichStyle::default();
+    let Some(marks) = node.get("marks").and_then(|m| m.as_array()) else {
+        return style;
+    };
+    for mark in marks {
+        apply_mark(mark, &mut style);
+    }
+    style
+}
+
+fn apply_mark(mark: &serde_json::Value, style: &mut RichStyle) {
+    match mark.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+        "strong" => style.bold = true,
+        "em" => style.italic = true,
+        "code" => style.code = true,
+        "strike" => style.strike = true,
+        "underline" => style.underline = true,
+        "link" => {
+            style.underline = true;
+            style.link = mark
+                .get("attrs")
+                .and_then(|a| a.get("href"))
+                .and_then(|h| h.as_str())
+                .map(str::to_string);
+        }
+        _ => {}
+    }
+}
+
 /// Render a list of issue rows as a human-readable table with columns:
 /// KEY  TYPE  STATUS  ASSIGNEE  SUMMARY
 pub fn render_issue_table(out: &mut dyn Write, rows: &[IssueRow]) {

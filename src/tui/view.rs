@@ -1,12 +1,14 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Modifier, Style},
+    text::{Line, Text},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
 use super::model::{Model, Screen};
 use crate::i18n::t;
+use crate::render::{adf_to_rich, RichLine, RichStyle};
 
 const LOADING_NOTICE: &str = "Loading…";
 const SEARCH_PROMPT: &str = "JQL> ";
@@ -177,24 +179,22 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             let description = issue
                 .description
                 .as_deref()
-                .map(crate::render::adf_to_plain_text)
+                .map(adf_to_rich)
                 .unwrap_or_default();
 
-            let body = format!(
-                "{key}\n{summary}\n\n{status_label}: {status}\n{type_label}: {issue_type}\n{assignee_label}: {assignee}\n\n{description_label}:\n{description}",
-                key = issue.key,
-                summary = issue.summary,
-                status_label = t("Status"),
-                status = status_line,
-                type_label = t("Type"),
-                issue_type = issue.issue_type,
-                assignee_label = t("Assignee"),
-                assignee = assignee,
-                description_label = t("Description"),
-                description = description,
-            );
+            let mut lines = vec![
+                Line::from(issue.key.clone()),
+                Line::from(issue.summary.clone()),
+                Line::from(""),
+                Line::from(format!("{}: {status_line}", t("Status"))),
+                Line::from(format!("{}: {}", t("Type"), issue.issue_type)),
+                Line::from(format!("{}: {assignee}", t("Assignee"))),
+                Line::from(""),
+                Line::from(format!("{}:", t("Description"))),
+            ];
+            lines.extend(description.iter().map(rich_line_to_ratatui));
 
-            let paragraph = Paragraph::new(body)
+            let paragraph = Paragraph::new(Text::from(lines))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -206,4 +206,34 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             frame.render_widget(paragraph, chunks[1]);
         }
     }
+}
+
+fn rich_style_to_ratatui(style: &RichStyle) -> Style {
+    let mut result = Style::default();
+    if style.bold {
+        result = result.add_modifier(Modifier::BOLD);
+    }
+    if style.italic {
+        result = result.add_modifier(Modifier::ITALIC);
+    }
+    if style.strike {
+        result = result.add_modifier(Modifier::CROSSED_OUT);
+    }
+    if style.underline || style.link.is_some() {
+        result = result.add_modifier(Modifier::UNDERLINED);
+    }
+    if style.code {
+        result = result.add_modifier(Modifier::DIM);
+    }
+    result
+}
+
+fn rich_line_to_ratatui(line: &RichLine) -> Line<'static> {
+    Line::from(
+        line.iter()
+            .map(|span| {
+                ratatui::text::Span::styled(span.text.clone(), rich_style_to_ratatui(&span.style))
+            })
+            .collect::<Vec<_>>(),
+    )
 }
