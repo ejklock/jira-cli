@@ -90,6 +90,7 @@ fn search_result_with_multiple_rows() {
         ],
         total: 2,
         is_last_page: true,
+        next_page_token: None,
     };
     let serialized = serde_json::to_value(&result).unwrap();
     let deserialized: SearchResult = serde_json::from_value(serialized).unwrap();
@@ -97,6 +98,21 @@ fn search_result_with_multiple_rows() {
     assert_eq!(deserialized.issues[0].key, "A-1");
     assert_eq!(deserialized.issues[1].assignee, None);
     assert!(deserialized.is_last_page);
+    assert_eq!(deserialized.next_page_token, None);
+}
+
+#[test]
+fn search_result_with_next_page_token_roundtrips_through_serde() {
+    let result = SearchResult {
+        issues: vec![],
+        total: 100,
+        is_last_page: false,
+        next_page_token: Some("TOK2".to_string()),
+    };
+    let serialized = serde_json::to_value(&result).unwrap();
+    let deserialized: SearchResult = serde_json::from_value(serialized).unwrap();
+    assert_eq!(deserialized.next_page_token.as_deref(), Some("TOK2"));
+    assert!(!deserialized.is_last_page);
 }
 
 #[test]

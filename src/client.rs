@@ -11,6 +11,12 @@ use gouqi::{Credentials, SearchOptions};
 pub trait JiraClient: Send + Sync {
     async fn get_issue(&self, key: &str) -> Result<Issue>;
     async fn search(&self, jql: &str, max_results: u64) -> Result<SearchResult>;
+    async fn search_page(
+        &self,
+        jql: &str,
+        max_results: u64,
+        page_token: &str,
+    ) -> Result<SearchResult>;
     async fn myself(&self) -> Result<Myself>;
 }
 
@@ -56,24 +62,27 @@ impl JiraClient for GouqiJiraClient {
             .list(jql, &opts)
             .await
             .map_err(|e| anyhow!("search({jql}): {e}"))?;
+        Ok(map_gouqi_search_results(raw))
+    }
 
-        let issues = raw
-            .issues
-            .into_iter()
-            .map(|i| IssueRow {
-                key: i.key.clone(),
-                issue_type: i.issue_type().map(|t| t.name).unwrap_or_default(),
-                summary: i.summary().unwrap_or_default(),
-                status: i.status().map(|s| s.name).unwrap_or_default(),
-                assignee: i.assignee().map(|u| u.display_name),
-            })
-            .collect();
-
-        Ok(SearchResult {
-            issues,
-            total: raw.total,
-            is_last_page: raw.is_last_page.unwrap_or(true),
-        })
+    async fn search_page(
+        &self,
+        jql: &str,
+        max_results: u64,
+        page_token: &str,
+    ) -> Result<SearchResult> {
+        let capped = max_results.min(5000);
+        let opts = SearchOptions::builder()
+            .max_results(capped)
+            .next_page_token(page_token)
+            .build();
+        let raw = self
+            .jira
+            .search()
+            .list(jql, &opts)
+            .await
+            .map_err(|e| anyhow!("search_page({jql}): {e}"))?;
+        Ok(map_gouqi_search_results(raw))
     }
 
     async fn myself(&self) -> Result<Myself> {
@@ -89,6 +98,29 @@ impl JiraClient for GouqiJiraClient {
             account_id,
             display_name: raw.display_name,
         })
+    }
+}
+
+/// Map a gouqi `rep::SearchResults` page to our curated `SearchResult` domain type.
+/// Shared by `search` and `search_page` — the only construction/mapping site for either.
+fn map_gouqi_search_results(raw: gouqi::SearchResults) -> SearchResult {
+    let issues = raw
+        .issues
+        .into_iter()
+        .map(|i| IssueRow {
+            key: i.key.clone(),
+            issue_type: i.issue_type().map(|t| t.name).unwrap_or_default(),
+            summary: i.summary().unwrap_or_default(),
+            status: i.status().map(|s| s.name).unwrap_or_default(),
+            assignee: i.assignee().map(|u| u.display_name),
+        })
+        .collect();
+
+    SearchResult {
+        issues,
+        total: raw.total,
+        is_last_page: raw.is_last_page.unwrap_or(true),
+        next_page_token: raw.next_page_token,
     }
 }
 

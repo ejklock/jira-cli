@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::instances::Instance;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn make_instance(base_url: &str) -> Instance {
@@ -368,6 +368,133 @@ async fn search_returns_issue_rows_with_mapped_fields() {
     assert_eq!(result.issues[0].summary, "First issue");
     assert_eq!(result.issues[0].status, "Open");
     assert_eq!(result.issues[0].assignee.as_deref(), Some("Alice"));
+    assert!(result.is_last_page);
+    assert_eq!(
+        result.next_page_token, None,
+        "last page must map to no next_page_token"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn search_maps_next_page_token_when_server_returns_one() {
+    let server = MockServer::start().await;
+    let search_payload = serde_json::json!({
+        "issues": [],
+        "isLast": false,
+        "nextPageToken": "TOK2"
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.search("project = PROJ", 50).await.unwrap();
+
+    assert_eq!(
+        result.next_page_token.as_deref(),
+        Some("TOK2"),
+        "a non-last page must carry the server's next_page_token through"
+    );
+    assert!(!result.is_last_page);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn search_page_issues_next_page_token_param_and_maps_following_token() {
+    let server = MockServer::start().await;
+    let search_payload = serde_json::json!({
+        "issues": [
+            {
+                "id": "10002",
+                "key": "PROJ-2",
+                "self": "https://example.atlassian.net/rest/api/3/issue/10002",
+                "fields": {
+                    "summary": "Second page issue",
+                    "status": {
+                        "id": "1",
+                        "name": "Open",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "statusCategory": {
+                            "id": 2,
+                            "key": "new",
+                            "colorName": "blue-gray",
+                            "name": "To Do"
+                        }
+                    },
+                    "issuetype": {
+                        "id": "10002",
+                        "name": "Task",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "subtask": false
+                    }
+                }
+            }
+        ],
+        "isLast": false,
+        "nextPageToken": "TOK3"
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(query_param("nextPageToken", "TOK1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client
+        .search_page("project = PROJ", 50, "TOK1")
+        .await
+        .unwrap();
+
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].key, "PROJ-2");
+    assert_eq!(
+        result.next_page_token.as_deref(),
+        Some("TOK3"),
+        "search_page must map the following page's token through"
+    );
+    assert!(!result.is_last_page);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn search_page_maps_none_token_on_last_page() {
+    let server = MockServer::start().await;
+    let search_payload = serde_json::json!({
+        "issues": [],
+        "isLast": true,
+        "nextPageToken": null
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .and(query_param("nextPageToken", "TOK1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client
+        .search_page("project = PROJ", 50, "TOK1")
+        .await
+        .unwrap();
+
+    assert_eq!(result.next_page_token, None);
     assert!(result.is_last_page);
     server.verify().await;
 }

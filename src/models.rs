@@ -62,6 +62,8 @@ pub struct SearchResult {
     pub issues: Vec<IssueRow>,
     pub total: u64,
     pub is_last_page: bool,
+    /// V3 pagination token for fetching the next page, `None` on the last page.
+    pub next_page_token: Option<String>,
 }
 
 #[cfg(test)]
