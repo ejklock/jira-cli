@@ -1,12 +1,9 @@
 use super::*;
 
 use crate::cli::{browse_tty_action, BrowseAction};
-use crate::i18n::set_language;
+use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
 use ratatui::{backend::TestBackend, Terminal};
-use std::sync::Mutex;
-
-static LANG_MUTEX: Mutex<()> = Mutex::new(());
 
 // ---- Helpers ----
 

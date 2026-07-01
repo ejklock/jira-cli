@@ -7,6 +7,10 @@ pub const SUPPORTED: [&str; 2] = ["en", "pt_BR"];
 
 static LANGUAGE: RwLock<String> = RwLock::new(String::new());
 
+// Serializes every language-dependent test across modules — LANGUAGE is a process global.
+#[cfg(test)]
+pub(crate) static LANG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static CATALOG: OnceLock<HashMap<String, String>> = OnceLock::new();
 
 fn pt_br_catalog() -> &'static HashMap<String, String> {

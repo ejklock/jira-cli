@@ -1,7 +1,5 @@
 use super::*;
-use std::sync::Mutex;
-
-static LANG_MUTEX: Mutex<()> = Mutex::new(());
+use crate::i18n::LANG_MUTEX;
 
 #[test]
 fn supported_contains_en_and_pt_br() {

@@ -1,9 +1,6 @@
 use super::*;
-use crate::i18n::{set_language, t};
+use crate::i18n::{set_language, t, LANG_MUTEX};
 use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow};
-use std::sync::Mutex;
-
-static LANG_MUTEX: Mutex<()> = Mutex::new(());
 
 fn sample_issue() -> Issue {
     Issue {

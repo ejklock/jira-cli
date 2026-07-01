@@ -1,11 +1,10 @@
 use super::*;
 use crate::config::Config;
-use crate::i18n::set_language;
+use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::{Issue, IssueAssignee, IssueComment};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::{Instance, InstanceRepository};
 use crate::store::Store;
-use std::sync::Mutex;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -19,8 +18,6 @@ fn server_instance(server: &MockServer, name: &str) -> Instance {
         account_id: Some("acc-42".to_owned()),
     }
 }
-
-static LANG_MUTEX: Mutex<()> = Mutex::new(());
 
 fn make_store() -> (TempDir, Store) {
     let dir = TempDir::new().unwrap();
