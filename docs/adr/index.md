@@ -13,3 +13,5 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0005](/adr/0005-jira-client-on-gouqi-behind-trait.md) | Build the Jira client on the gouqi crate, behind our own client trait | Accepted |
 | [0006](/adr/0006-i18n-interpolation-contract.md) | i18n interpolation contract: translate the template, then substitute | Accepted |
 | [0007](/adr/0007-browse-tui-elm-architecture.md) | Browse TUI: read-only Elm/TEA shell over the domain core (ratatui + crossterm) | Accepted |
+| [0008](/adr/0008-browse-tui-async-event-loop.md) | Browse TUI: realize the async select event loop (EventStream + mpsc), retiring block_in_place | Accepted |
+| [0009](/adr/0009-tui-list-pagination.md) | Browse TUI list pagination: expose search next_page_token + load more on demand | Accepted |

@@ -83,14 +83,20 @@ real terminal:
 | NFR-B4 Read-only | Whole TUI | no request mutates Jira; only GET/search are issued | code review + absence of write Cmds |
 | NFR-B5 Token isolation | Any TUI fetch | reuses the host-pinned client; no `Authorization` off-host | inherited NFR-1 client test |
 
-## Open questions
+## Open questions (resolved)
 
-- **Async result delivery while drawing.** `Cmd` effects (list/detail/search fetch)
-  run off the draw thread and return via a channel; the first slice may load
-  synchronously before the loop and defer the async-during-loop refresh to a named
-  slice if the channel plumbing proves heavy.
-- **List paging in the TUI.** Like the CLI, the first page + `--limit` is the v1
-  contract; infinite scroll/pagination inside the TUI is deferred.
+- **Async result delivery while drawing** — **RESOLVED** by
+  [ADR 0008](/adr/0008-browse-tui-async-event-loop.md). The B0–B4 shell loaded fetches
+  synchronously via `block_in_place` (documented interim); the async `tokio::select!` loop
+  over a crossterm `EventStream` + an mpsc reply channel (ADR 0007 §2's intended shell) now
+  spawns each `Cmd` effect and feeds its result back as a `Msg`, so the UI stays responsive
+  during I/O (`Loading…` visible, `q` honored). Verified by [BDR 0006](/bdr/0006-browse-tui-interactions.md) S9.
+- **List paging in the TUI** — **RESOLVED** by
+  [ADR 0009](/adr/0009-tui-list-pagination.md). gouqi already exposes the V3 `nextPageToken`;
+  the domain `SearchResult` now carries it and `JiraClient::search_page` fetches subsequent
+  pages, which the browse list **appends** on an explicit load-more action (bounded,
+  read-only, one page per action). The CLI first-page + `--limit` contract is unchanged.
+  Verified by [BDR 0006](/bdr/0006-browse-tui-interactions.md) S8.
 
 ## References
 

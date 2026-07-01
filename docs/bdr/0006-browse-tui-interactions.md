@@ -37,7 +37,13 @@ flowchart TD
     IN -->|submit invalid JQL| ERR["inline error banner; list unchanged; UI stays usable"]
     LIST -->|o open-link| URL["launch {base_url}/browse/{KEY} in system browser"]
     LIST -->|y copy| CLIP["copy KEY to clipboard"]
+    LIST -->|n load-more, token pending| MORE["append next page (search_page via nextPageToken); token advances"]
 ```
+
+The fetch `Cmd`s (list / detail / search / load-more) run on the **async shell**
+([ADR 0008](/adr/0008-browse-tui-async-event-loop.md)): each is spawned on the tokio
+runtime and its result returns as a `Msg` over an mpsc channel, so the loop keeps drawing
+(the `Loading…` notice is shown and `q` stays responsive) instead of freezing during I/O.
 
 ## Textual Description
 
@@ -81,6 +87,15 @@ broken terminal).
 `/browse/KEY` URL is launched; when I trigger copy, then the KEY is on the clipboard.
 **S7 — nav clamps.** Given the selection at the first/last row, when I press ↑/↓ past
 the edge, then the selection stays at the edge (no wrap, no out-of-range).
+**S8 — load more (pagination).** Given a list whose result has a pending `next_page_token`,
+when I trigger load-more (`n`), then the next page is fetched via `search_page` and its rows
+are **appended** to the list (selection preserved), and the stored token advances; when the
+final page returns (`next_page_token` is `None`), the load-more affordance disappears and a
+further load-more is a no-op.
+**S9 — responsive during fetch.** Given a fetch (detail/list/search/load-more) is in
+flight, when I look at the screen, then a `Loading…`/pending state is drawn (the UI is not
+frozen) and `q` still quits — the effect runs off the draw path and returns via the channel
+([ADR 0008](/adr/0008-browse-tui-async-event-loop.md)).
 
 ## Test Design
 
@@ -103,6 +118,9 @@ seam (as the CLI list path already is).
 | list fetch | integration (wiremock) | S1 | browse list issues the mine JQL via search | data path |
 | search fetch | integration (wiremock) | S4 | submit issues the user JQL via search | search path |
 | invalid JQL fetch | integration (wiremock) | S5 | 400 → error banner, no crash | error path |
+| load-more append | unit | S8 | update(MoreLoaded) appends rows, preserves selection, advances token | pagination logic |
+| load-more no-op | unit | S8 | update(LoadMore) with no pending token emits no Cmd | paging guard |
+| search_page fetch | integration (wiremock) | S8 | search_page issues the JQL with nextPageToken; maps next page's token | paging data path |
 | token host-gate | integration | — | no Authorization off-host | NFR-1 isolation |
 
 ## Related

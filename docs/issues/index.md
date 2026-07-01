@@ -23,6 +23,9 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0014](/issues/0014-i18n-human-detail-field-labels.md) | — | i18n: translate human-render field labels (get + browse detail) | done | — |
 | [0015](/issues/0015-split-tui-into-submodule.md) | — | split `src/tui.rs` into a `src/tui/` submodule (model/view/shell) | done | — |
 | [0016](/issues/0016-consolidate-lang-mutex.md) | — | consolidate the 4 per-module `LANG_MUTEX` into one crate-wide test lock | done | — |
+| [0017](/issues/0017-p1-async-event-loop.md) | P1 | browse TUI async event loop (EventStream + mpsc), retire block_in_place | open | — |
+| [0018](/issues/0018-p2-pagination-client-seam.md) | P2 | pagination client seam: `SearchResult.next_page_token` + `search_page` | open | — |
+| [0019](/issues/0019-p3-tui-pagination-wiring.md) | P3 | browse TUI pagination wiring: load-more appends the next page | open | 0017, 0018 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -31,7 +34,9 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
   [BDR 0006](/bdr/0006-browse-tui-interactions.md)). All slices landed: B0 skeleton (0008) →
   B1 list (0009) → B2 detail (0010) → B3 search (0011) → B4 affordances (0012). Covers PRD 0002
   R1–R4. (The fork's `tui/` was never carried over; this is a fresh read-only build, not a revival.)
-- **Deferred TUI debt:** in-loop async list refresh + in-TUI pagination (PRD 0002 open questions).
+- **In-loop async delivery + in-TUI pagination** (the former PRD 0002 open questions) are
+  now sliced as P1 (0017, [ADR 0008](/adr/0008-browse-tui-async-event-loop.md)), P2 (0018)
+  and P3 (0019, [ADR 0009](/adr/0009-tui-list-pagination.md)).
 
 ## Parked (Phase 2 — not yet sliced)
 
