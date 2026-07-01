@@ -1,112 +1,22 @@
 use super::*;
 use crate::i18n::{set_language, t, LANG_MUTEX};
-use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow};
-
-// --- ADF fixture builders (shared by adf_to_plain_text and adf_to_rich tests) ---
-//
-// These assemble ADF-JSON via `serde_json::json!` instead of repeating the
-// full `{"type":"doc","version":1,"content":[...]}` scaffolding as string
-// literals in every test body.
-
-fn doc(content: Vec<serde_json::Value>) -> String {
-    serde_json::json!({"type": "doc", "version": 1, "content": content}).to_string()
-}
-
-fn paragraph(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "paragraph", "content": content})
-}
-
-fn heading(level: u64, content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "heading", "attrs": {"level": level}, "content": content})
-}
-
-fn code_block(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "codeBlock", "content": content})
-}
-
-fn blockquote(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "blockquote", "content": content})
-}
-
-fn panel(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "panel", "attrs": {"panelType": "info"}, "content": content})
-}
-
-fn rule_block() -> serde_json::Value {
-    serde_json::json!({"type": "rule"})
-}
-
-fn bullet_list(items: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "bulletList", "content": items})
-}
-
-fn ordered_list(items: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "orderedList", "content": items})
-}
-
-fn list_item(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "listItem", "content": content})
-}
-
-fn text(value: &str) -> serde_json::Value {
-    serde_json::json!({"type": "text", "text": value})
-}
-
-fn hard_break() -> serde_json::Value {
-    serde_json::json!({"type": "hardBreak"})
-}
-
-fn custom_node(node_type: &str, content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": node_type, "content": content})
-}
-
-fn mark(mark_type: &str) -> serde_json::Value {
-    serde_json::json!({"type": mark_type})
-}
-
-fn link_mark(href: &str) -> serde_json::Value {
-    serde_json::json!({"type": "link", "attrs": {"href": href}})
-}
-
-fn marked_text(value: &str, marks: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "text", "text": value, "marks": marks})
-}
-
-fn plain_paragraph(value: &str) -> String {
-    doc(vec![paragraph(vec![text(value)])])
-}
-
-fn marked_paragraph(value: &str, marks: Vec<serde_json::Value>) -> String {
-    doc(vec![paragraph(vec![marked_text(value, marks)])])
-}
+use crate::models::{Issue, IssueRow};
+use crate::test_support::*;
 
 fn sample_issue() -> Issue {
     Issue {
-        key: "PROJ-123".to_string(),
         summary: "Fix the login bug".to_string(),
         status: "In Progress".to_string(),
-        status_category: Some("indeterminate".to_string()),
-        issue_type: "Bug".to_string(),
-        assignee: Some(IssueAssignee {
-            display_name: "Alice Example".to_string(),
-            account_id: Some("5b10a".to_string()),
-        }),
-        reporter: Some(IssueAssignee {
-            display_name: "Charlie".to_string(),
-            account_id: Some("rep-42".to_string()),
-        }),
-        priority: Some("High".to_string()),
-        created: Some("2026-01-10T09:00:00.000+0000".to_string()),
-        updated: Some("2026-06-29T12:00:00.000+0000".to_string()),
-        duedate: None,
+        assignee: Some(assignee("Alice Example", Some("5b10a"))),
         description: Some(plain_paragraph("Login fails when MFA is enabled.")),
-        comments: vec![IssueComment {
-            id: Some("100".to_string()),
-            author: Some("Bob Dev".to_string()),
-            body: "Reproduced on v2.1.".to_string(),
-            created: Some("2026-06-29T10:00:00.000+0000".to_string()),
-            updated: None,
-        }],
+        comments: vec![comment(
+            Some("100"),
+            Some("Bob Dev"),
+            "Reproduced on v2.1.",
+            Some("2026-06-29T10:00:00.000+0000"),
+            None,
+        )],
+        ..issue("PROJ-123")
     }
 }
 
@@ -821,20 +731,6 @@ fn relative_due_unparseable_input_returns_none() {
 }
 
 // --- render_issue_human: Due line (issue 0025 / ADR 0013) ---
-
-/// Compute a `"YYYY-MM-DD"` due date `days` away from the actual current date,
-/// using the same civil-date extraction `render_issue_human` uses internally
-/// (`crate::store::secs_to_utc_parts`), so the expected relative bucket is
-/// deterministic regardless of when the test runs.
-fn duedate_offset_from_today(days: i64) -> String {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    let target_secs = (now_secs + days * 86_400).max(0) as u64;
-    let (year, month, day, _, _, _) = crate::store::secs_to_utc_parts(target_secs);
-    format!("{year:04}-{month:02}-{day:02}")
-}
 
 #[test]
 fn render_issue_human_emits_due_line_after_updated_when_duedate_parses() {

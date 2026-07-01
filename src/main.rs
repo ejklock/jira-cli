@@ -10,6 +10,10 @@ mod store;
 mod timing;
 mod tui;
 
+#[cfg(test)]
+#[path = "../tests/unit/support.rs"]
+mod test_support;
+
 use clap::{CommandFactory, Parser};
 use cli::{bare_no_command_action, BareNoCommandAction, Cli, Command};
 use commands::{

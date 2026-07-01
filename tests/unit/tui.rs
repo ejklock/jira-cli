@@ -4,38 +4,11 @@ use super::shell::map_key_in_normal_mode;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
+use crate::test_support::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 
 // ---- Helpers ----
-
-// ADF fixture builders — assemble ADF-JSON via `serde_json::json!` instead of
-// repeating the full `{"type":"doc","version":1,"content":[...]}` scaffolding
-// as string literals in each issue fixture below.
-
-fn doc(content: Vec<serde_json::Value>) -> String {
-    serde_json::json!({"type": "doc", "version": 1, "content": content}).to_string()
-}
-
-fn paragraph(content: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "paragraph", "content": content})
-}
-
-fn text(value: &str) -> serde_json::Value {
-    serde_json::json!({"type": "text", "text": value})
-}
-
-fn marked_text(value: &str, marks: Vec<serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"type": "text", "text": value, "marks": marks})
-}
-
-fn mark(mark_type: &str) -> serde_json::Value {
-    serde_json::json!({"type": mark_type})
-}
-
-fn link_mark(href: &str) -> serde_json::Value {
-    serde_json::json!({"type": "link", "attrs": {"href": href}})
-}
 
 fn make_test_instance() -> crate::store::instances::Instance {
     crate::store::instances::Instance {
@@ -80,24 +53,11 @@ fn make_list_model(keys: &[&str]) -> Model {
 
 fn make_issue(key: &str) -> crate::models::Issue {
     crate::models::Issue {
-        key: key.to_owned(),
         summary: "Summary of the issue".to_owned(),
         status: "In Progress".to_owned(),
-        status_category: Some("indeterminate".to_owned()),
-        issue_type: "Bug".to_owned(),
-        assignee: Some(crate::models::IssueAssignee {
-            display_name: "Alice".to_owned(),
-            account_id: None,
-        }),
-        reporter: None,
-        priority: None,
-        created: None,
-        updated: None,
-        duedate: None,
-        description: Some(doc(vec![paragraph(vec![text(
-            "Flattened description here.",
-        )])])),
-        comments: vec![],
+        assignee: Some(assignee("Alice", None)),
+        description: Some(plain_paragraph("Flattened description here.")),
+        ..issue(key)
     }
 }
 
@@ -159,20 +119,6 @@ fn make_issue_with_styled_description(key: &str) -> crate::models::Issue {
             marked_text("a link", vec![link_mark("https://example.com")]),
         ])])),
         ..make_issue(key)
-    }
-}
-
-fn make_comment(
-    author: Option<&str>,
-    created: Option<&str>,
-    body: String,
-) -> crate::models::IssueComment {
-    crate::models::IssueComment {
-        id: None,
-        author: author.map(str::to_owned),
-        body,
-        created: created.map(str::to_owned),
-        updated: None,
     }
 }
 
@@ -1894,15 +1840,19 @@ fn view_detail_renders_comments_header_authors_and_bodies() {
     model.detail = Some(make_issue_with_comments(
         "PROJ-30",
         vec![
-            make_comment(
+            comment(
+                None,
                 Some("Alice"),
+                &doc(vec![paragraph(vec![text("First comment body.")])]),
                 Some("2026-01-01"),
-                doc(vec![paragraph(vec![text("First comment body.")])]),
+                None,
             ),
-            make_comment(
+            comment(
                 None,
                 None,
-                doc(vec![paragraph(vec![text("Second comment body.")])]),
+                &doc(vec![paragraph(vec![text("Second comment body.")])]),
+                None,
+                None,
             ),
         ],
     ));
@@ -1936,13 +1886,15 @@ fn view_detail_renders_bold_comment_body_run_with_bold_modifier() {
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments(
         "PROJ-31",
-        vec![make_comment(
+        vec![comment(
+            None,
             Some("Bob"),
-            Some("2026-02-02"),
-            doc(vec![paragraph(vec![marked_text(
+            &doc(vec![paragraph(vec![marked_text(
                 "Bold comment",
                 vec![mark("strong")],
             )])]),
+            Some("2026-02-02"),
+            None,
         )],
     ));
 
@@ -1962,13 +1914,15 @@ fn view_detail_renders_link_comment_body_run_with_underlined_modifier() {
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments(
         "PROJ-32",
-        vec![make_comment(
+        vec![comment(
+            None,
             Some("Bob"),
-            Some("2026-02-03"),
-            doc(vec![paragraph(vec![marked_text(
+            &doc(vec![paragraph(vec![marked_text(
                 "linked comment text",
                 vec![link_mark("https://example.com/comment")],
             )])]),
+            Some("2026-02-03"),
+            None,
         )],
     ));
 
@@ -2000,20 +1954,6 @@ fn view_detail_with_no_comments_renders_no_comments_header() {
 }
 
 // ---- issue 0026 A3b: view_detail Due line (ADR 0013) ----
-
-/// Compute a `"YYYY-MM-DD"` due date `days` away from the actual current date,
-/// mirroring the CLI test helper in `tests/unit/render.rs` so the expected
-/// relative bucket ("in 3 days") is deterministic regardless of when the test
-/// runs, without re-implementing `relative_due`/`days_from_civil`.
-fn duedate_offset_from_today(days: i64) -> String {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    let target_secs = (now_secs + days * 86_400).max(0) as u64;
-    let (year, month, day, _, _, _) = crate::store::secs_to_utc_parts(target_secs);
-    format!("{year:04}-{month:02}-{day:02}")
-}
 
 fn make_issue_with_duedate(key: &str, duedate: Option<String>) -> crate::models::Issue {
     crate::models::Issue {
