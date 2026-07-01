@@ -30,6 +30,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0021](/issues/0021-a1-styled-adf-detail-rendering.md) | A1 | styled ADF rendering in the browse TUI detail description | done | — |
 | [0022](/issues/0022-a2-keyboard-inline-link-navigation.md) | A2 | keyboard inline-link navigation in the browse TUI detail (Tab/Enter) | done | 0021 |
 | [0023](/issues/0023-tui-test-hygiene-and-view-list-complexity.md) | — | TUI test hygiene (LANG_MUTEX) + view_list complexity refactor (debt) | done | — |
+| [0024](/issues/0024-a4-tui-detail-comments.md) | A4 | read-only comments in the browse TUI detail (styled ADF + j/k scroll) | done | 0021, 0023 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -58,8 +59,9 @@ behind their own decision records.
   ([ADR 0011](/adr/0011-keyboard-inline-link-navigation-browse-detail.md)). **open**
 - **A3** — relative due-date formatting (`due_today`/`tomorrow`/`overdue`/`in`) from the
   issue `duedate`. *(not yet sliced)*
-- **A4** — display + `j/k`-navigate comments in the TUI detail (reuses `adf_to_rich`).
-  *(not yet sliced)*
+- **A4** — [0024](/issues/0024-a4-tui-detail-comments.md): read-only comments in the TUI detail,
+  styled via `adf_to_rich`, scrollable with `j/k` + `↑/↓`
+  ([ADR 0012](/adr/0012-comments-in-browse-tui-detail.md)). **done**
 
 **Group B — parked, reopens a PRD 0002 non-goal (needs a superseding ADR before slicing):**
 

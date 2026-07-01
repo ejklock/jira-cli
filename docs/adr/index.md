@@ -17,3 +17,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0009](/adr/0009-tui-list-pagination.md) | Browse TUI list pagination: expose search next_page_token + load more on demand | Accepted |
 | [0010](/adr/0010-styled-adf-rendering-browse-tui-detail.md) | Styled ADF rendering in the browse TUI detail (neutral rich model + ratatui mapping) | Accepted |
 | [0011](/adr/0011-keyboard-inline-link-navigation-browse-detail.md) | Keyboard inline-link navigation in the browse TUI detail (Tab cycle, Enter open) | Accepted |
+| [0012](/adr/0012-comments-in-browse-tui-detail.md) | Read-only comments in the browse TUI detail (styled ADF + j/k scroll) | Accepted |
