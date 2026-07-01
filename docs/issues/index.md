@@ -27,6 +27,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0018](/issues/0018-p2-pagination-client-seam.md) | P2 | pagination client seam: `SearchResult.next_page_token` + `search_page` | done | — |
 | [0019](/issues/0019-p3-tui-pagination-wiring.md) | P3 | browse TUI pagination wiring: load-more appends the next page | done | 0017, 0018 |
 | [0020](/issues/0020-browse-tui-chrome-i18n-parity.md) | — | browse TUI chrome i18n parity: translate footers/prompt via `t()` + pt_BR catalog | done | — |
+| [0021](/issues/0021-a1-styled-adf-detail-rendering.md) | A1 | styled ADF rendering in the browse TUI detail description | done | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -39,8 +40,37 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
   now sliced as P1 (0017, [ADR 0008](/adr/0008-browse-tui-async-event-loop.md)), P2 (0018)
   and P3 (0019, [ADR 0009](/adr/0009-tui-list-pagination.md)).
 
+## active-collab-cli feature-parity program (read-only first)
+
+Goal: total feature parity with the fork base `active-collab-cli`, adapted to Jira's
+specifics ([ADR 0001](/adr/0001-fork-active-collab-cli-swap-api.md)). Direction chosen:
+**read-only now, writes later.** Group A (below) is planned; Groups B and C are parked
+behind their own decision records.
+
+**Group A — read-only, no recorded-decision conflict (planned):**
+
+- **A1** — [0021](/issues/0021-a1-styled-adf-detail-rendering.md): styled ADF rendering in
+  the browse TUI detail ([ADR 0010](/adr/0010-styled-adf-rendering-browse-tui-detail.md)). **open**
+- **A2** — clickable inline body links in the detail (open the retained `href`). Builds on
+  A1's `adf_to_rich`. *(not yet sliced)*
+- **A3** — relative due-date formatting (`due_today`/`tomorrow`/`overdue`/`in`) from the
+  issue `duedate`. *(not yet sliced)*
+- **A4** — display + `j/k`-navigate comments in the TUI detail (reuses `adf_to_rich`).
+  *(not yet sliced)*
+
+**Group B — parked, reopens a PRD 0002 non-goal (needs a superseding ADR before slicing):**
+
+- Projects browse axis (Projects → Issues stack); assets/attachments panel
+  (Ctrl/Cmd+click open); mouse support (click-select, scroll, drag-select + clipboard copy).
+
+**Group C — parked, crosses the constitution's read-only write boundary (needs a
+constitution amendment + a write-enablement ADR before slicing):**
+
+- Comment write: create / edit / delete (compose overlay, own-comment affordances, confirm
+  modal, `POST`/`PUT`/`DELETE`).
+
 ## Parked (Phase 2 — not yet sliced)
 
-- Write operations: comment, transition status, log work.
+- Write operations: comment, transition status, log work (see Group C above).
 - Jira Server / Data Center (REST v2 / PAT) adapter.
 - Secret-at-rest encryption / OS keychain; native release binaries.
