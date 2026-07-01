@@ -98,6 +98,7 @@ fn sample_issue() -> Issue {
         priority: Some("High".to_string()),
         created: Some("2026-01-10T09:00:00.000+0000".to_string()),
         updated: Some("2026-06-29T12:00:00.000+0000".to_string()),
+        duedate: None,
         description: Some(plain_paragraph("Login fails when MFA is enabled.")),
         comments: vec![IssueComment {
             id: Some("100".to_string()),
@@ -703,6 +704,232 @@ fn render_issue_human_en_labels_unchanged() {
     assert!(
         text.contains("Comments:"),
         "en label must be Comments: {text}"
+    );
+    set_language("en");
+}
+
+// --- days_from_civil / relative_due (issue 0025 / ADR 0013) ---
+
+#[test]
+fn days_from_civil_unix_epoch_is_zero() {
+    assert_eq!(days_from_civil(1970, 1, 1), 0);
+}
+
+#[test]
+fn days_from_civil_known_reference_date() {
+    assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+}
+
+#[test]
+fn days_from_civil_day_before_epoch_is_negative_one() {
+    assert_eq!(days_from_civil(1969, 12, 31), -1);
+}
+
+#[test]
+fn relative_due_buckets_by_day_delta() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let due_days = days_from_civil(2026, 7, 3);
+    let cases: [(i64, &str); 7] = [
+        (0, "today"),
+        (1, "tomorrow"),
+        (2, "in 2 days"),
+        (5, "in 5 days"),
+        (-1, "overdue by 1 day"),
+        (-2, "overdue by 2 days"),
+        (-10, "overdue by 10 days"),
+    ];
+    for (delta, expected) in cases {
+        let today = due_days - delta;
+        assert_eq!(
+            relative_due("2026-07-03", today).as_deref(),
+            Some(expected),
+            "delta {delta} must bucket to {expected:?}"
+        );
+    }
+    set_language("en");
+}
+
+#[test]
+fn relative_due_two_days_boundary_is_plural_not_singular() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let due_days = days_from_civil(2026, 7, 3);
+    let result = relative_due("2026-07-03", due_days - 2);
+    assert_eq!(result.as_deref(), Some("in 2 days"));
+    assert_ne!(
+        result.as_deref(),
+        Some("in 1 day"),
+        "delta 2 must never fall into the singular tomorrow-style bucket"
+    );
+    set_language("en");
+}
+
+#[test]
+fn relative_due_overdue_boundary_singular_only_at_exactly_one_day() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let due_days = days_from_civil(2026, 7, 3);
+    assert_eq!(
+        relative_due("2026-07-03", due_days + 1).as_deref(),
+        Some("overdue by 1 day")
+    );
+    assert_eq!(
+        relative_due("2026-07-03", due_days + 2).as_deref(),
+        Some("overdue by 2 days"),
+        "delta -2 must use the plural overdue template, not singular"
+    );
+    set_language("en");
+}
+
+#[test]
+fn relative_due_pt_br_translates_every_bucket() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+    let due_days = days_from_civil(2026, 7, 3);
+    assert_eq!(
+        relative_due("2026-07-03", due_days).as_deref(),
+        Some("hoje")
+    );
+    assert_eq!(
+        relative_due("2026-07-03", due_days - 1).as_deref(),
+        Some("amanhã")
+    );
+    assert_eq!(
+        relative_due("2026-07-03", due_days - 3).as_deref(),
+        Some("em 3 dias")
+    );
+    assert_eq!(
+        relative_due("2026-07-03", due_days + 1).as_deref(),
+        Some("atrasada há 1 dia")
+    );
+    assert_eq!(
+        relative_due("2026-07-03", due_days + 4).as_deref(),
+        Some("atrasada há 4 dias")
+    );
+    set_language("en");
+}
+
+#[test]
+fn relative_due_unparseable_input_returns_none() {
+    let today = days_from_civil(2026, 7, 3);
+    assert_eq!(relative_due("not-a-date", today), None);
+    assert_eq!(relative_due("2026/07/03", today), None);
+    assert_eq!(relative_due("2026-07", today), None);
+    assert_eq!(relative_due("2026-07-03-extra", today), None);
+    assert_eq!(relative_due("", today), None);
+}
+
+// --- render_issue_human: Due line (issue 0025 / ADR 0013) ---
+
+/// Compute a `"YYYY-MM-DD"` due date `days` away from the actual current date,
+/// using the same civil-date extraction `render_issue_human` uses internally
+/// (`crate::store::secs_to_utc_parts`), so the expected relative bucket is
+/// deterministic regardless of when the test runs.
+fn duedate_offset_from_today(days: i64) -> String {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let target_secs = (now_secs + days * 86_400).max(0) as u64;
+    let (year, month, day, _, _, _) = crate::store::secs_to_utc_parts(target_secs);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+#[test]
+fn render_issue_human_emits_due_line_after_updated_when_duedate_parses() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let issue = Issue {
+        duedate: Some(duedate_offset_from_today(3)),
+        ..sample_issue()
+    };
+    let mut out = Vec::new();
+    render_issue_human(
+        &issue,
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(
+        text.contains("Due: in 3 days"),
+        "must show Due: in 3 days after Updated: {text}"
+    );
+    let updated_pos = text.find("Updated:").expect("Updated line must be present");
+    let due_pos = text.find("Due:").expect("Due line must be present");
+    assert!(
+        due_pos > updated_pos,
+        "Due line must come after Updated: {text}"
+    );
+    set_language("en");
+}
+
+#[test]
+fn render_issue_human_pt_br_due_line_translated() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+    let issue = Issue {
+        duedate: Some(duedate_offset_from_today(3)),
+        ..sample_issue()
+    };
+    let mut out = Vec::new();
+    render_issue_human(
+        &issue,
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(
+        text.contains("Prazo: em 3 dias"),
+        "must show Prazo: em 3 dias: {text}"
+    );
+    set_language("en");
+}
+
+#[test]
+fn render_issue_human_omits_due_line_when_duedate_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let mut out = Vec::new();
+    render_issue_human(
+        &sample_issue(),
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(
+        !text.contains("Due:"),
+        "no duedate must omit the Due line: {text}"
+    );
+    set_language("en");
+}
+
+#[test]
+fn render_issue_human_omits_due_line_when_duedate_unparseable() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let issue = Issue {
+        duedate: Some("not-a-date".to_string()),
+        ..sample_issue()
+    };
+    let mut out = Vec::new();
+    render_issue_human(
+        &issue,
+        "work",
+        "https://work.atlassian.net",
+        false,
+        &mut out,
+    );
+    let text = std::str::from_utf8(&out).unwrap();
+    assert!(
+        !text.contains("Due:"),
+        "unparseable duedate must omit the Due line: {text}"
     );
     set_language("en");
 }

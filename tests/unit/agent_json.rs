@@ -19,6 +19,7 @@ fn sample_issue() -> Issue {
         priority: Some("High".to_string()),
         created: Some("2026-01-02T10:00:00.000+0000".to_string()),
         updated: Some("2026-01-09T12:00:00.000+0000".to_string()),
+        duedate: None,
         description: Some(r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"plain text description"}]}]}"#.to_string()),
         comments: vec![IssueComment {
             id: Some("100".to_string()),
@@ -183,6 +184,31 @@ fn issue_object_empty_comments_list_yields_empty_array() {
     let obj = issue_object(&issue, "work", "https://acme.atlassian.net", false);
     let comments = obj["comments"].as_array().unwrap();
     assert_eq!(comments.len(), 0, "empty comments must produce empty array");
+}
+
+// --- issue_object: raw duedate (issue 0026 A3b / ADR 0013) ---
+
+#[test]
+fn issue_object_duedate_is_raw_yyyy_mm_dd_string() {
+    let issue = Issue {
+        duedate: Some("2026-07-15".to_string()),
+        ..sample_issue()
+    };
+    let obj = issue_object(&issue, "work", "https://acme.atlassian.net", false);
+    assert_eq!(
+        obj["duedate"], "2026-07-15",
+        "duedate must be the raw YYYY-MM-DD string, not a localized relative string"
+    );
+}
+
+#[test]
+fn issue_object_duedate_is_null_when_none() {
+    let obj = issue_object(&sample_issue(), "work", "https://acme.atlassian.net", false);
+    assert_eq!(
+        obj["duedate"],
+        serde_json::Value::Null,
+        "duedate must be null when the issue has no due date"
+    );
 }
 
 // --- issue_to_minified_json: one line, minified ---

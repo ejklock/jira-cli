@@ -9,7 +9,7 @@ use ratatui::{
 use super::model::{Model, Screen};
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow};
-use crate::render::{adf_to_rich, RichLine, RichSpan, RichStyle};
+use crate::render::{adf_to_rich, relative_due, today_days_now, RichLine, RichSpan, RichStyle};
 
 const LOADING_NOTICE: &str = "Loading…";
 const SEARCH_PROMPT: &str = "JQL> ";
@@ -217,9 +217,10 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
                 Line::from(format!("{}: {status_line}", t("Status"))),
                 Line::from(format!("{}: {}", t("Type"), issue.issue_type)),
                 Line::from(format!("{}: {assignee}", t("Assignee"))),
-                Line::from(""),
-                Line::from(format!("{}:", t("Description"))),
             ];
+            lines.extend(due_line(issue));
+            lines.push(Line::from(""));
+            lines.push(Line::from(format!("{}:", t("Description"))));
             lines.extend(description_lines_to_ratatui(
                 &description,
                 model.detail_focused_link,
@@ -238,6 +239,16 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             frame.render_widget(paragraph, chunks[1]);
         }
     }
+}
+
+/// Builds the optional `Due: {relative}` line inserted after the Assignee line
+/// in `view_detail`, reusing A3a's `relative_due` formatter (no duplicated date
+/// math). Returns `None` when the issue has no `duedate` or it fails to parse,
+/// so `view_detail` renders no `Due` line at all (mirrors the CLI `get` line).
+fn due_line(issue: &Issue) -> Option<Line<'static>> {
+    let duedate = issue.duedate.as_deref()?;
+    let relative = relative_due(duedate, today_days_now())?;
+    Some(Line::from(format!("{}: {relative}", t("Due"))))
 }
 
 /// Builds the comment section appended after the description in `view_detail`,

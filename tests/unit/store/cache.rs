@@ -387,6 +387,7 @@ fn make_issue(key: &str) -> Issue {
         priority: Some("High".to_string()),
         created: Some("2026-01-01T00:00:00Z".to_string()),
         updated: Some("2026-01-02T00:00:00Z".to_string()),
+        duedate: None,
         description: Some("Description text".to_string()),
         comments: vec![],
     }

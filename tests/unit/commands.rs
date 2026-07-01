@@ -841,6 +841,7 @@ fn pre_populate_cache(store: &Store, instance_name: &str) {
         priority: None,
         created: None,
         updated: None,
+        duedate: None,
         description: None,
         comments: vec![IssueComment {
             id: Some("1".to_string()),

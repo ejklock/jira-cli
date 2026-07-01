@@ -66,6 +66,7 @@ pub fn issue_object(
         "priority": issue.priority,
         "created": issue.created,
         "updated": issue.updated,
+        "duedate": issue.duedate,
         "url": issue_url,
         "description": description_text,
         "comments": comments,

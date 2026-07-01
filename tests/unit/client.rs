@@ -156,6 +156,44 @@ async fn get_issue_returns_mapped_issue_with_all_curated_fields() {
 }
 
 #[tokio::test]
+async fn get_issue_maps_duedate_when_present() {
+    let server = MockServer::start().await;
+    let mut payload = build_issue_payload();
+    payload["fields"]["duedate"] = serde_json::json!("2026-07-15");
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert_eq!(issue.duedate.as_deref(), Some("2026-07-15"));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn get_issue_maps_duedate_to_none_when_absent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_issue_payload()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert_eq!(issue.duedate, None, "no raw duedate field must map to None");
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn get_issue_null_assignee_maps_to_none() {
     let server = MockServer::start().await;
     let mut payload = build_issue_payload();

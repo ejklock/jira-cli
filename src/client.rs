@@ -147,6 +147,7 @@ fn map_gouqi_issue(raw: gouqi::Issue) -> Result<Issue> {
 
     let created = raw.created().map(|dt| dt.to_string());
     let updated = raw.updated().map(|dt| dt.to_string());
+    let duedate = extract_duedate(&raw);
 
     let description = raw.description();
 
@@ -165,9 +166,17 @@ fn map_gouqi_issue(raw: gouqi::Issue) -> Result<Issue> {
         priority,
         created,
         updated,
+        duedate,
         description,
         comments,
     })
+}
+
+/// Extract the raw `duedate` field (`"YYYY-MM-DD"` or absent) from the fields BTreeMap.
+/// gouqi has no typed due-date accessor, so this reads the raw JSON directly, mirroring
+/// `extract_status_category`.
+fn extract_duedate(raw: &gouqi::Issue) -> Option<String> {
+    raw.fields.get("duedate")?.as_str().map(str::to_string)
 }
 
 /// Extract `statusCategory.key` from the raw fields BTreeMap.

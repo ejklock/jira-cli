@@ -20,6 +20,7 @@ fn issue_roundtrips_through_serde() {
         priority: Some("High".to_string()),
         created: Some("2026-01-01T00:00:00+00:00".to_string()),
         updated: Some("2026-01-02T00:00:00+00:00".to_string()),
+        duedate: Some("2026-01-05".to_string()),
         description: Some("Description text".to_string()),
         comments: vec![IssueComment {
             id: Some("10".to_string()),

@@ -1,6 +1,7 @@
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::models::{Issue, IssueComment, IssueRow};
 use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn print_error(msg: &str) {
     eprintln!("{msg}");
@@ -419,6 +420,66 @@ pub fn issue_browse_url(base_url: &str, key: &str) -> String {
     format!("{}/browse/{}", base_url.trim_end_matches('/'), key)
 }
 
+/// Convert a proleptic Gregorian civil date to a day count since the Unix epoch
+/// (1970-01-01 == 0). Howard Hinnant's `days_from_civil` algorithm — pure integer
+/// arithmetic, correct for the full `i64` range, no external date crate needed.
+pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe - 719468
+}
+
+/// Parse a `"YYYY-MM-DD"` due date into a day count via [`days_from_civil`].
+/// Any malformed input (wrong segment count or non-numeric part) yields `None`.
+fn parse_due_days(duedate: &str) -> Option<i64> {
+    let mut parts = duedate.split('-');
+    let year = parts.next()?.parse::<i64>().ok()?;
+    let month = parts.next()?.parse::<i64>().ok()?;
+    let day = parts.next()?.parse::<i64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(days_from_civil(year, month, day))
+}
+
+/// Bucket a day-delta (due - today) into the localized relative-due string.
+/// Future is always plural (`delta >= 2`); singular only for the fixed `-1` case.
+fn bucket_relative_due(delta: i64) -> String {
+    match delta {
+        0 => t("today"),
+        1 => t("tomorrow"),
+        n if n >= 2 => tf("in {n} days", &[("n", &n.to_string())]),
+        -1 => t("overdue by 1 day"),
+        n => tf("overdue by {n} days", &[("n", &(-n).to_string())]),
+    }
+}
+
+/// Render a Jira due date as a localized relative string ("today" / "tomorrow" /
+/// "in N days" / "overdue by N days"), or `None` when `duedate` fails to parse.
+/// `today_days` is injected (never read from the clock here) so this stays pure
+/// and table-testable; callers derive it from [`days_from_civil`] applied to the
+/// current date.
+pub(crate) fn relative_due(duedate: &str, today_days: i64) -> Option<String> {
+    let due_days = parse_due_days(duedate)?;
+    Some(bucket_relative_due(due_days - today_days))
+}
+
+/// The current UTC date as a `days_from_civil` day count, for `relative_due`'s
+/// `today_days` argument. Impure (reads the clock) so `relative_due` itself
+/// doesn't have to be.
+pub(crate) fn today_days_now() -> i64 {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before epoch")
+        .as_secs();
+    let (year, month, day, _, _, _) = crate::store::secs_to_utc_parts(secs);
+    days_from_civil(year as i64, month as i64, day as i64)
+}
+
 /// Render a Jira issue in human-readable form.
 pub fn render_issue_human(
     issue: &Issue,
@@ -470,6 +531,13 @@ pub fn render_issue_human(
     }
     if let Some(updated) = &issue.updated {
         writeln!(out, "  {}: {updated}", t("Updated")).ok();
+    }
+    let due_line = issue
+        .duedate
+        .as_deref()
+        .and_then(|d| relative_due(d, today_days_now()));
+    if let Some(due) = due_line {
+        writeln!(out, "  {}: {due}", t("Due")).ok();
     }
     if !description_text.is_empty() {
         writeln!(out, "\n{}:\n{description_text}", t("Description")).ok();

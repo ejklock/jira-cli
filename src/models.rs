@@ -33,6 +33,11 @@ pub struct Issue {
     pub priority: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
+    /// Raw Jira due date as `"YYYY-MM-DD"`, or `None` when unset.
+    /// `#[serde(default)]` keeps older cached JSON (written before this field
+    /// existed) deserializable without a migration.
+    #[serde(default)]
+    pub duedate: Option<String>,
     /// Raw ADF document serialized as a JSON string, or plain text for older APIs.
     /// Callers must pass this through `adf_to_plain_text` before displaying.
     pub description: Option<String>,

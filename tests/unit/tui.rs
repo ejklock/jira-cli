@@ -93,6 +93,7 @@ fn make_issue(key: &str) -> crate::models::Issue {
         priority: None,
         created: None,
         updated: None,
+        duedate: None,
         description: Some(doc(vec![paragraph(vec![text(
             "Flattened description here.",
         )])])),
@@ -1996,6 +1997,122 @@ fn view_detail_with_no_comments_renders_no_comments_header() {
         !text.contains("Comments:") && !text.contains("Comentários:"),
         "empty comments must render no Comments header; got: {text}"
     );
+}
+
+// ---- issue 0026 A3b: view_detail Due line (ADR 0013) ----
+
+/// Compute a `"YYYY-MM-DD"` due date `days` away from the actual current date,
+/// mirroring the CLI test helper in `tests/unit/render.rs` so the expected
+/// relative bucket ("in 3 days") is deterministic regardless of when the test
+/// runs, without re-implementing `relative_due`/`days_from_civil`.
+fn duedate_offset_from_today(days: i64) -> String {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let target_secs = (now_secs + days * 86_400).max(0) as u64;
+    let (year, month, day, _, _, _) = crate::store::secs_to_utc_parts(target_secs);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn make_issue_with_duedate(key: &str, duedate: Option<String>) -> crate::models::Issue {
+    crate::models::Issue {
+        duedate,
+        ..make_issue(key)
+    }
+}
+
+#[test]
+fn view_detail_shows_due_line_after_assignee_when_duedate_parses() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let mut model = make_list_model(&["PROJ-50"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_duedate(
+        "PROJ-50",
+        Some(duedate_offset_from_today(3)),
+    ));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Due: in 3 days"),
+        "detail must show Due: in 3 days; got: {text}"
+    );
+    let assignee_pos = text
+        .find("Assignee:")
+        .expect("Assignee line must be present");
+    let due_pos = text.find("Due:").expect("Due line must be present");
+    assert!(
+        due_pos > assignee_pos,
+        "Due line must come after the Assignee line; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_pt_br_shows_translated_due_line() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+    let mut model = make_list_model(&["PROJ-51"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_duedate(
+        "PROJ-51",
+        Some(duedate_offset_from_today(3)),
+    ));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Prazo: em 3 dias"),
+        "detail must show Prazo: em 3 dias; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_omits_due_line_when_duedate_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let mut model = make_list_model(&["PROJ-52"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_duedate("PROJ-52", None));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("Due:") && !text.contains("Prazo:"),
+        "no duedate must omit the Due line; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_omits_due_line_when_duedate_unparseable() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let mut model = make_list_model(&["PROJ-53"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_duedate(
+        "PROJ-53",
+        Some("not-a-date".to_owned()),
+    ));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("Due:"),
+        "unparseable duedate must omit the Due line; got: {text}"
+    );
+
+    set_language("en");
 }
 
 #[test]
