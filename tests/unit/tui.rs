@@ -367,6 +367,7 @@ fn update_up_never_emits_cmd_quit() {
 
 #[test]
 fn view_renders_header_columns_with_issues() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&["PROJ-1", "PROJ-2"]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -392,6 +393,7 @@ fn view_renders_header_columns_with_issues() {
 
 #[test]
 fn view_renders_each_issue_key() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&["PROJ-1", "PROJ-2", "PROJ-3"]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -403,6 +405,7 @@ fn view_renders_each_issue_key() {
 
 #[test]
 fn view_empty_model_renders_no_issues_notice() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&[]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -415,6 +418,7 @@ fn view_empty_model_renders_no_issues_notice() {
 
 #[test]
 fn view_empty_model_still_renders_header_columns() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&[]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -616,6 +620,7 @@ fn update_up_on_detail_decrements_scroll_clamps_at_zero() {
 
 #[test]
 fn view_detail_with_loaded_issue_shows_summary_status_and_description() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-42"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue("PROJ-42"));
@@ -643,6 +648,7 @@ fn view_detail_with_loaded_issue_shows_summary_status_and_description() {
 
 #[test]
 fn view_detail_with_none_shows_loading_notice() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-1"]);
     model.screen = Screen::Detail;
     model.detail = None;
@@ -658,6 +664,7 @@ fn view_detail_with_none_shows_loading_notice() {
 
 #[test]
 fn view_detail_shows_assignee() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-7"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue("PROJ-7"));
@@ -675,6 +682,7 @@ fn view_detail_shows_assignee() {
 
 #[test]
 fn view_detail_renders_bold_description_run_with_bold_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-11"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-11"));
@@ -690,6 +698,7 @@ fn view_detail_renders_bold_description_run_with_bold_modifier() {
 
 #[test]
 fn view_detail_renders_link_description_run_with_underlined_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-12"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-12"));
@@ -707,6 +716,7 @@ fn view_detail_renders_link_description_run_with_underlined_modifier() {
 
 #[test]
 fn view_detail_plain_description_run_carries_no_bold_or_underline() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-13"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-13"));
@@ -1027,6 +1037,7 @@ fn update_select_on_detail_with_no_focused_link_is_noop() {
 
 #[test]
 fn view_detail_highlights_focused_link_with_reversed_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-20"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_two_links("PROJ-20"));
@@ -1055,6 +1066,7 @@ fn view_detail_highlights_focused_link_with_reversed_modifier() {
 
 #[test]
 fn view_detail_non_focused_link_has_no_reversed_modifier() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-21"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_two_links("PROJ-21"));
@@ -1410,6 +1422,7 @@ fn update_load_more_on_detail_screen_is_noop() {
 
 #[test]
 fn view_list_shows_load_more_hint_when_token_pending() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-1"]);
     model.next_page_token = Some("page-2-token".to_owned());
 
@@ -1424,6 +1437,7 @@ fn view_list_shows_load_more_hint_when_token_pending() {
 
 #[test]
 fn view_list_hides_load_more_hint_on_last_page() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&["PROJ-1"]);
 
     let buf = render_to_buffer(&model, 120, 20);
@@ -1439,6 +1453,7 @@ fn view_list_hides_load_more_hint_on_last_page() {
 
 #[test]
 fn view_with_search_active_shows_typed_query_in_buffer() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-1"]);
     model.search = Some("project = X".to_owned());
 
@@ -1457,6 +1472,7 @@ fn view_with_search_active_shows_typed_query_in_buffer() {
 
 #[test]
 fn view_with_error_and_rows_shows_banner_and_list() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
     model.error = Some("Invalid JQL query".to_owned());
 
@@ -1475,6 +1491,7 @@ fn view_with_error_and_rows_shows_banner_and_list() {
 
 #[test]
 fn view_with_no_search_or_error_shows_normal_list() {
+    let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&["PROJ-5"]);
 
     let buf = render_to_buffer(&model, 120, 20);

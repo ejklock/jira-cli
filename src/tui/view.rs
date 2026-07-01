@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Text},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Wrap},
@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::model::{Model, Screen};
 use crate::i18n::t;
+use crate::models::IssueRow;
 use crate::render::{adf_to_rich, RichLine, RichSpan, RichStyle};
 
 const LOADING_NOTICE: &str = "Loading…";
@@ -29,6 +30,41 @@ fn view_list(model: &Model, frame: &mut Frame) {
     let has_search_bar = model.search.is_some();
     let has_error_banner = model.error.is_some();
 
+    let chunks = list_layout_chunks(area, has_search_bar, has_error_banner);
+    let mut chunk_idx = 1usize;
+
+    if has_search_bar {
+        render_search_bar(
+            frame,
+            chunks[chunk_idx],
+            model.search.as_deref().unwrap_or(""),
+        );
+        chunk_idx += 1;
+    }
+
+    if has_error_banner {
+        render_error_banner(
+            frame,
+            chunks[chunk_idx],
+            model.error.as_deref().unwrap_or(""),
+        );
+        chunk_idx += 1;
+    }
+
+    render_list_table(frame, chunks[chunk_idx], model);
+
+    let hint = Paragraph::new(list_footer_hint(model, has_search_bar)).alignment(Alignment::Center);
+    frame.render_widget(hint, chunks[chunk_idx + 1]);
+}
+
+/// Builds the `view_list` vertical layout: the optional search bar and error
+/// banner rows are only reserved when active, sandwiched between the fixed
+/// top row and the table/footer pair.
+fn list_layout_chunks(
+    area: Rect,
+    has_search_bar: bool,
+    has_error_banner: bool,
+) -> std::rc::Rc<[Rect]> {
     let mut constraints = vec![Constraint::Length(1)];
     if has_search_bar {
         constraints.push(Constraint::Length(1));
@@ -39,31 +75,24 @@ fn view_list(model: &Model, frame: &mut Frame) {
     constraints.push(Constraint::Min(0));
     constraints.push(Constraint::Length(1));
 
-    let chunks = Layout::default()
+    Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(area);
+        .split(area)
+}
 
-    let mut chunk_idx = 1usize;
+fn render_search_bar(frame: &mut Frame, chunk: Rect, query: &str) {
+    let input_line = Paragraph::new(format!("{}{query}", t(SEARCH_PROMPT)));
+    frame.render_widget(input_line, chunk);
+}
 
-    if has_search_bar {
-        let query = model.search.as_deref().unwrap_or("");
-        let input_line = Paragraph::new(format!("{}{query}", t(SEARCH_PROMPT)));
-        frame.render_widget(input_line, chunks[chunk_idx]);
-        chunk_idx += 1;
-    }
+fn render_error_banner(frame: &mut Frame, chunk: Rect, msg: &str) {
+    let banner = Paragraph::new(format!("{}{msg}", t(SEARCH_ERROR_PREFIX)))
+        .style(Style::default().add_modifier(Modifier::BOLD));
+    frame.render_widget(banner, chunk);
+}
 
-    if has_error_banner {
-        let msg = model.error.as_deref().unwrap_or("");
-        let banner = Paragraph::new(format!("{}{msg}", t(SEARCH_ERROR_PREFIX)))
-            .style(Style::default().add_modifier(Modifier::BOLD));
-        frame.render_widget(banner, chunks[chunk_idx]);
-        chunk_idx += 1;
-    }
-
-    let table_chunk = chunks[chunk_idx];
-    let footer_chunk = chunks[chunk_idx + 1];
-
+fn render_list_table(frame: &mut Frame, chunk: Rect, model: &Model) {
     let header_cells = [
         t("KEY"),
         t("TYPE"),
@@ -84,63 +113,61 @@ fn view_list(model: &Model, frame: &mut Frame) {
         Constraint::Min(20),
     ];
 
-    if model.rows.is_empty() {
-        let table = Table::new([Row::new([Cell::from(t("No issues."))])], widths)
-            .header(header_row)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
-            );
-        frame.render_widget(table, table_chunk);
+    let table = if model.rows.is_empty() {
+        Table::new([Row::new([Cell::from(t("No issues."))])], widths)
     } else {
         let data_rows: Vec<Row> = model
             .rows
             .iter()
             .enumerate()
-            .map(|(i, row)| {
-                let assignee = row
-                    .assignee
-                    .as_deref()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| t("Unassigned"));
-
-                let cells = [
-                    Cell::from(row.key.clone()),
-                    Cell::from(row.issue_type.clone()),
-                    Cell::from(row.status.clone()),
-                    Cell::from(assignee),
-                    Cell::from(row.summary.clone()),
-                ];
-
-                if i == model.selected {
-                    Row::new(cells).style(Style::default().add_modifier(Modifier::REVERSED))
-                } else {
-                    Row::new(cells)
-                }
-            })
+            .map(|(i, row)| list_row(row, i == model.selected))
             .collect();
-
-        let table = Table::new(data_rows, widths).header(header_row).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        );
-        frame.render_widget(table, table_chunk);
+        Table::new(data_rows, widths)
     }
+    .header(header_row)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded),
+    );
 
+    frame.render_widget(table, chunk);
+}
+
+fn list_row(row: &IssueRow, is_selected: bool) -> Row<'static> {
+    let assignee = row
+        .assignee
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| t("Unassigned"));
+
+    let cells = [
+        Cell::from(row.key.clone()),
+        Cell::from(row.issue_type.clone()),
+        Cell::from(row.status.clone()),
+        Cell::from(assignee),
+        Cell::from(row.summary.clone()),
+    ];
+
+    if is_selected {
+        Row::new(cells).style(Style::default().add_modifier(Modifier::REVERSED))
+    } else {
+        Row::new(cells)
+    }
+}
+
+fn list_footer_hint(model: &Model, has_search_bar: bool) -> String {
     let base_hint = if has_search_bar {
         t("Enter submit  Esc cancel  Backspace delete")
     } else {
         t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit")
     };
-    let hint_text = if !has_search_bar && model.next_page_token.is_some() {
+
+    if !has_search_bar && model.next_page_token.is_some() {
         format!("{base_hint}  {}", t("n more"))
     } else {
         base_hint
-    };
-    let hint = Paragraph::new(hint_text).alignment(Alignment::Center);
-    frame.render_widget(hint, footer_chunk);
+    }
 }
 
 /// Pure detail view — renders the loaded issue or a loading notice.
