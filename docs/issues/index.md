@@ -23,7 +23,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0014](/issues/0014-i18n-human-detail-field-labels.md) | — | i18n: translate human-render field labels (get + browse detail) | done | — |
 | [0015](/issues/0015-split-tui-into-submodule.md) | — | split `src/tui.rs` into a `src/tui/` submodule (model/view/shell) | done | — |
 | [0016](/issues/0016-consolidate-lang-mutex.md) | — | consolidate the 4 per-module `LANG_MUTEX` into one crate-wide test lock | done | — |
-| [0017](/issues/0017-p1-async-event-loop.md) | P1 | browse TUI async event loop (EventStream + mpsc), retire block_in_place | open | — |
+| [0017](/issues/0017-p1-async-event-loop.md) | P1 | browse TUI async event loop (EventStream + mpsc), retire block_in_place | done | — |
 | [0018](/issues/0018-p2-pagination-client-seam.md) | P2 | pagination client seam: `SearchResult.next_page_token` + `search_page` | open | — |
 | [0019](/issues/0019-p3-tui-pagination-wiring.md) | P3 | browse TUI pagination wiring: load-more appends the next page | open | 0017, 0018 |
 

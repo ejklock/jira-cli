@@ -2,7 +2,7 @@
 type: Issue
 title: "P1 — browse TUI async event loop (EventStream + mpsc), retire block_in_place"
 description: Replace the synchronous draw_loop (which blocks the draw thread on each fetch via tokio::task::block_in_place + Handle::block_on) with the async tokio::select! loop over a crossterm EventStream + an mpsc reply channel that spawns Cmd effects and feeds results back as Msg. Shell-only change (src/tui/shell.rs); the pure model.rs core and view.rs are untouched.
-status: open
+status: done
 tracker:
 tags: [tui, browse, phase2, async, refactor]
 timestamp: 2026-06-30T00:00:00Z
