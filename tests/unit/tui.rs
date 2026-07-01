@@ -1232,6 +1232,96 @@ fn update_load_failed_from_400_sets_error_and_preserves_rows() {
     assert!(cmds.is_empty());
 }
 
+// ---- issue 0020: browse TUI chrome i18n parity ----
+
+#[test]
+fn view_list_pt_br_translates_footer_error_banner_and_more_hint() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("↑/↓ navegar") && text.contains("buscar") && text.contains("q sair"),
+        "must show the translated normal-list footer; got: {text}"
+    );
+    assert!(
+        text.contains("n mais"),
+        "must show 'n mais' hint; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_pt_br_translates_search_footer_and_error_banner() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("project = X".to_owned());
+    model.error = Some("bad JQL".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Enter enviar")
+            && text.contains("Esc cancelar")
+            && text.contains("Backspace apagar"),
+        "must show the translated search footer; got: {text}"
+    );
+    assert!(
+        text.contains("Erro: bad JQL"),
+        "must show the translated error-banner prefix; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_en_chrome_is_identity() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"),
+        "en footer must remain byte-identical to the pre-change render; got: {text}"
+    );
+    assert!(
+        text.contains("n more"),
+        "en 'n more' hint must be unchanged; got: {text}"
+    );
+
+    let mut search_model = make_list_model(&["PROJ-1"]);
+    search_model.search = Some("project = X".to_owned());
+    search_model.error = Some("bad JQL".to_owned());
+
+    let search_buf = render_to_buffer(&search_model, 120, 20);
+    let search_text = buffer_text(&search_buf);
+
+    assert!(
+        search_text.contains("Enter submit  Esc cancel  Backspace delete"),
+        "en search footer must remain byte-identical; got: {search_text}"
+    );
+    assert!(
+        search_text.contains("Error: bad JQL"),
+        "en error banner must remain byte-identical; got: {search_text}"
+    );
+
+    set_language("en");
+}
+
 // ---- B4: AC1 — update(OpenLink) emits Cmd::OpenUrl; empty list is no-op ----
 
 #[test]

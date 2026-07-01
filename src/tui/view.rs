@@ -46,14 +46,14 @@ fn view_list(model: &Model, frame: &mut Frame) {
 
     if has_search_bar {
         let query = model.search.as_deref().unwrap_or("");
-        let input_line = Paragraph::new(format!("{SEARCH_PROMPT}{query}"));
+        let input_line = Paragraph::new(format!("{}{query}", t(SEARCH_PROMPT)));
         frame.render_widget(input_line, chunks[chunk_idx]);
         chunk_idx += 1;
     }
 
     if has_error_banner {
         let msg = model.error.as_deref().unwrap_or("");
-        let banner = Paragraph::new(format!("{SEARCH_ERROR_PREFIX}{msg}"))
+        let banner = Paragraph::new(format!("{}{msg}", t(SEARCH_ERROR_PREFIX)))
             .style(Style::default().add_modifier(Modifier::BOLD));
         frame.render_widget(banner, chunks[chunk_idx]);
         chunk_idx += 1;
@@ -128,9 +128,9 @@ fn view_list(model: &Model, frame: &mut Frame) {
     }
 
     let base_hint = if has_search_bar {
-        "Enter submit  Esc cancel  Backspace delete".to_owned()
+        t("Enter submit  Esc cancel  Backspace delete")
     } else {
-        "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit".to_owned()
+        t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit")
     };
     let hint_text = if !has_search_bar && model.next_page_token.is_some() {
         format!("{base_hint}  {}", t("n more"))

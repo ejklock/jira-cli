@@ -153,5 +153,9 @@
   "Unassigned": "Não atribuído",
   "No issues.": "Nenhuma issue encontrada.",
   "Error: search requires a JQL query.": "Erro: é necessário informar uma consulta JQL.",
-  "Error: not in a git repository / no current branch.": "Erro: fora de um repositório git / sem branch atual."
+  "Error: not in a git repository / no current branch.": "Erro: fora de um repositório git / sem branch atual.",
+  "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit": "↑/↓ navegar  /  buscar  Enter selecionar  Esc/b voltar  q sair",
+  "Enter submit  Esc cancel  Backspace delete": "Enter enviar  Esc cancelar  Backspace apagar",
+  "Error: ": "Erro: ",
+  "n more": "n mais"
 }
