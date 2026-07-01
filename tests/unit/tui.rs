@@ -71,6 +71,8 @@ fn make_list_model(keys: &[&str]) -> Model {
         base_url: "https://test.atlassian.net".to_owned(),
         jql: "assignee = currentUser()".to_owned(),
         next_page_token: None,
+        detail_links: vec![],
+        detail_focused_link: None,
     }
 }
 
@@ -152,6 +154,17 @@ fn make_issue_with_styled_description(key: &str) -> crate::models::Issue {
             marked_text("Bold text", vec![mark("strong")]),
             text(" plain then "),
             marked_text("a link", vec![link_mark("https://example.com")]),
+        ])])),
+        ..make_issue(key)
+    }
+}
+
+fn make_issue_with_two_links(key: &str) -> crate::models::Issue {
+    crate::models::Issue {
+        description: Some(doc(vec![paragraph(vec![
+            marked_text("first link", vec![link_mark("https://example.com/first")]),
+            text(" and "),
+            marked_text("second link", vec![link_mark("https://example.com/second")]),
         ])])),
         ..make_issue(key)
     }
@@ -844,6 +857,229 @@ async fn load_issue_fetch_error_returns_err_leaving_ui_path_usable() {
     );
     // UI path remains usable: the TUI applies Msg::Back on Err, which is a pure transition
     // tested in update_back_from_detail_sets_screen_list_preserves_selected.
+}
+
+// ---- issue 0022 A2: DetailLoaded populates detail_links + focus; Back clears ----
+
+#[test]
+fn update_detail_loaded_populates_detail_links_and_focuses_first() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let issue = make_issue_with_two_links("PROJ-1");
+    let (next, cmds) = update(model, Msg::DetailLoaded(Box::new(issue)));
+
+    assert_eq!(
+        next.detail_links,
+        vec![
+            "https://example.com/first".to_owned(),
+            "https://example.com/second".to_owned(),
+        ],
+        "detail_links must hold the description's inline hrefs in document order"
+    );
+    assert_eq!(
+        next.detail_focused_link,
+        Some(0),
+        "the first link must be focused by default"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_detail_loaded_with_no_links_leaves_focus_none() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let issue = make_issue("PROJ-1");
+    let (next, _) = update(model, Msg::DetailLoaded(Box::new(issue)));
+
+    assert!(
+        next.detail_links.is_empty(),
+        "a description with no links must yield empty detail_links"
+    );
+    assert_eq!(
+        next.detail_focused_link, None,
+        "a description with no links must leave detail_focused_link None"
+    );
+}
+
+#[test]
+fn update_back_clears_detail_links_and_focus() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_two_links("PROJ-1"));
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(1);
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert!(next.detail_links.is_empty(), "Back must clear detail_links");
+    assert_eq!(
+        next.detail_focused_link, None,
+        "Back must clear detail_focused_link"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- issue 0022 A2: FocusNextLink advances (wrapping); no-op with no links / on List ----
+
+#[test]
+fn update_focus_next_link_advances_index() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(0);
+
+    let (next, cmds) = update(model, Msg::FocusNextLink);
+
+    assert_eq!(next.detail_focused_link, Some(1));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_focus_next_link_wraps_to_zero() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(1);
+
+    let (next, cmds) = update(model, Msg::FocusNextLink);
+
+    assert_eq!(
+        next.detail_focused_link,
+        Some(0),
+        "focus must wrap back to the first link"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_focus_next_link_with_no_links_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let (next, cmds) = update(model, Msg::FocusNextLink);
+
+    assert_eq!(next.detail_focused_link, None);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_focus_next_link_on_list_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.detail_links = vec!["https://example.com/first".to_owned()];
+    model.detail_focused_link = Some(0);
+
+    let (next, cmds) = update(model, Msg::FocusNextLink);
+
+    assert_eq!(
+        next.detail_focused_link,
+        Some(0),
+        "FocusNextLink on the List screen must not change focus"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- issue 0022 A2: Select on Detail opens the focused link (List unchanged) ----
+
+#[test]
+fn update_select_on_detail_with_focused_link_emits_open_url() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(1);
+
+    let (_, cmds) = update(model, Msg::Select);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::OpenUrl("https://example.com/second".to_owned())],
+        "Select on Detail must open the focused link's href"
+    );
+}
+
+#[test]
+fn update_select_on_detail_with_no_focused_link_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let (_, cmds) = update(model, Msg::Select);
+
+    assert!(
+        cmds.is_empty(),
+        "Select on Detail with no focused link must emit no Cmd"
+    );
+}
+
+// ---- issue 0022 A2: view_detail highlights the focused inline link ----
+
+#[test]
+fn view_detail_highlights_focused_link_with_reversed_modifier() {
+    let mut model = make_list_model(&["PROJ-20"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_two_links("PROJ-20"));
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(0);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let style = style_at_text(&buf, "first link").expect("focused link run must appear in buffer");
+
+    assert!(
+        style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "focused link must carry Modifier::REVERSED: {style:?}"
+    );
+    assert!(
+        style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "focused link must still carry Modifier::UNDERLINED: {style:?}"
+    );
+}
+
+#[test]
+fn view_detail_non_focused_link_has_no_reversed_modifier() {
+    let mut model = make_list_model(&["PROJ-21"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_two_links("PROJ-21"));
+    model.detail_links = vec![
+        "https://example.com/first".to_owned(),
+        "https://example.com/second".to_owned(),
+    ];
+    model.detail_focused_link = Some(0);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let style =
+        style_at_text(&buf, "second link").expect("non-focused link run must appear in buffer");
+
+    assert!(
+        !style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "non-focused link must not carry Modifier::REVERSED: {style:?}"
+    );
+    assert!(
+        style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "non-focused link must still carry Modifier::UNDERLINED: {style:?}"
+    );
 }
 
 // ---- B3: AC1 — SubmitSearch emits Cmd::LoadList; edge cases are no-ops ----

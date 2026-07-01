@@ -1,4 +1,5 @@
 use crate::models::{Issue, IssueRow};
+use crate::render::adf_to_rich;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
@@ -21,6 +22,12 @@ pub struct Model {
     /// The paging cursor for the current list. `None` once the last page is
     /// loaded (or before any pagination-capable fetch has completed).
     pub next_page_token: Option<String>,
+    /// The description's inline link hrefs, in document order. Populated on
+    /// `DetailLoaded`, cleared on `Back`.
+    pub detail_links: Vec<String>,
+    /// Index into `detail_links` of the currently focused link, or `None`
+    /// when there are no links.
+    pub detail_focused_link: Option<usize>,
 }
 
 pub enum Msg {
@@ -41,6 +48,7 @@ pub enum Msg {
     LoadFailed(String),
     OpenLink,
     CopyKey,
+    FocusNextLink,
 }
 
 #[derive(Debug, PartialEq)]
@@ -73,6 +81,7 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::LoadFailed(msg) => update_load_failed(model, msg),
         Msg::OpenLink => update_open_link(model),
         Msg::CopyKey => update_copy_key(model),
+        Msg::FocusNextLink => update_focus_next_link(model),
     }
 }
 
@@ -115,8 +124,18 @@ fn update_up(model: Model) -> (Model, Vec<Cmd>) {
     }
 }
 
+/// `Select` activates the current screen's focus: on `List` it opens the
+/// selected row's detail (unchanged); on `Detail` it opens the focused inline
+/// link, if any.
 fn update_select(model: Model) -> (Model, Vec<Cmd>) {
-    if model.screen != Screen::List || model.rows.is_empty() {
+    match model.screen {
+        Screen::List => update_select_list(model),
+        Screen::Detail => update_select_focused_link(model),
+    }
+}
+
+fn update_select_list(model: Model) -> (Model, Vec<Cmd>) {
+    if model.rows.is_empty() {
         return (model, vec![]);
     }
     let key = model.rows[model.selected].key.clone();
@@ -129,22 +148,53 @@ fn update_select(model: Model) -> (Model, Vec<Cmd>) {
     (next, vec![Cmd::LoadDetail(key)])
 }
 
+fn update_select_focused_link(model: Model) -> (Model, Vec<Cmd>) {
+    match model.detail_focused_link {
+        Some(i) => {
+            let url = model.detail_links[i].clone();
+            (model, vec![Cmd::OpenUrl(url)])
+        }
+        None => (model, vec![]),
+    }
+}
+
 fn update_back(model: Model) -> (Model, Vec<Cmd>) {
     let next = Model {
         screen: Screen::List,
         detail: None,
+        detail_links: vec![],
+        detail_focused_link: None,
         ..model
     };
     (next, vec![])
 }
 
 fn update_detail_loaded(model: Model, issue: Box<Issue>) -> (Model, Vec<Cmd>) {
+    let detail_links = description_link_hrefs(&issue);
+    let detail_focused_link = (!detail_links.is_empty()).then_some(0);
     let next = Model {
         detail: Some(*issue),
         detail_scroll: 0,
+        detail_links,
+        detail_focused_link,
         ..model
     };
     (next, vec![])
+}
+
+/// Collects the description's inline `link`-mark hrefs, in document order,
+/// from the same `adf_to_rich` model the view renders (so link ordering
+/// matches between `detail_links` and the displayed spans).
+fn description_link_hrefs(issue: &Issue) -> Vec<String> {
+    issue
+        .description
+        .as_deref()
+        .map(adf_to_rich)
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|line| line.iter())
+        .filter_map(|span| span.style.link.clone())
+        .collect()
 }
 
 fn update_open_search(model: Model) -> (Model, Vec<Cmd>) {
@@ -273,4 +323,19 @@ fn update_copy_key(model: Model) -> (Model, Vec<Cmd>) {
     }
     let key = model.rows[model.selected].key.clone();
     (model, vec![Cmd::CopyToClipboard(key)])
+}
+
+/// Advances the focused inline link, wrapping, when on the Detail screen with
+/// links present; a no-op (empty cmds) on the List screen or with no links.
+fn update_focus_next_link(model: Model) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail || model.detail_links.is_empty() {
+        return (model, vec![]);
+    }
+    let len = model.detail_links.len();
+    let next_index = model.detail_focused_link.map_or(0, |i| (i + 1) % len);
+    let next = Model {
+        detail_focused_link: Some(next_index),
+        ..model
+    };
+    (next, vec![])
 }

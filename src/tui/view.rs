@@ -8,7 +8,7 @@ use ratatui::{
 
 use super::model::{Model, Screen};
 use crate::i18n::t;
-use crate::render::{adf_to_rich, RichLine, RichStyle};
+use crate::render::{adf_to_rich, RichLine, RichSpan, RichStyle};
 
 const LOADING_NOTICE: &str = "Loading…";
 const SEARCH_PROMPT: &str = "JQL> ";
@@ -192,7 +192,10 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
                 Line::from(""),
                 Line::from(format!("{}:", t("Description"))),
             ];
-            lines.extend(description.iter().map(rich_line_to_ratatui));
+            lines.extend(description_lines_to_ratatui(
+                &description,
+                model.detail_focused_link,
+            ));
 
             let paragraph = Paragraph::new(Text::from(lines))
                 .block(
@@ -228,12 +231,44 @@ fn rich_style_to_ratatui(style: &RichStyle) -> Style {
     result
 }
 
-fn rich_line_to_ratatui(line: &RichLine) -> Line<'static> {
+/// Maps the description's rich lines to ratatui lines, reversing the style of
+/// the inline link whose render-order occurrence matches `focused_link`.
+fn description_lines_to_ratatui(
+    description: &[RichLine],
+    focused_link: Option<usize>,
+) -> Vec<Line<'static>> {
+    let mut link_occurrence = 0usize;
+    description
+        .iter()
+        .map(|line| rich_line_to_ratatui(line, focused_link, &mut link_occurrence))
+        .collect()
+}
+
+fn rich_line_to_ratatui(
+    line: &RichLine,
+    focused_link: Option<usize>,
+    link_occurrence: &mut usize,
+) -> Line<'static> {
     Line::from(
         line.iter()
             .map(|span| {
-                ratatui::text::Span::styled(span.text.clone(), rich_style_to_ratatui(&span.style))
+                let style = span_style(span, focused_link, link_occurrence);
+                ratatui::text::Span::styled(span.text.clone(), style)
             })
             .collect::<Vec<_>>(),
     )
+}
+
+fn span_style(span: &RichSpan, focused_link: Option<usize>, link_occurrence: &mut usize) -> Style {
+    let style = rich_style_to_ratatui(&span.style);
+    if span.style.link.is_none() {
+        return style;
+    }
+    let is_focused = focused_link == Some(*link_occurrence);
+    *link_occurrence += 1;
+    if is_focused {
+        style.add_modifier(Modifier::REVERSED)
+    } else {
+        style
+    }
 }

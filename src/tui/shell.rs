@@ -102,6 +102,8 @@ async fn run_tui(
         base_url: instance.base_url.clone(),
         jql: MINE_JQL.to_owned(),
         next_page_token,
+        detail_links: vec![],
+        detail_focused_link: None,
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
@@ -140,6 +142,7 @@ fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<
         KeyCode::Char('o') => Some(Msg::OpenLink),
         KeyCode::Char('y') => Some(Msg::CopyKey),
         KeyCode::Char('n') => Some(Msg::LoadMore),
+        KeyCode::Tab => Some(Msg::FocusNextLink),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
