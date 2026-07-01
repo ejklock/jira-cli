@@ -41,6 +41,8 @@ fn make_list_model(keys: &[&str]) -> Model {
         search: None,
         error: None,
         base_url: "https://test.atlassian.net".to_owned(),
+        jql: "assignee = currentUser()".to_owned(),
+        next_page_token: None,
     }
 }
 
@@ -932,9 +934,13 @@ fn update_list_loaded_replaces_rows_resets_selected_clears_search_and_error() {
     model.selected = 1;
     model.search = Some("project = NEW".to_owned());
     model.error = Some("old error".to_owned());
+    model.next_page_token = Some("stale-token".to_owned());
 
     let new_rows = vec![make_row("NEW-1"), make_row("NEW-2"), make_row("NEW-3")];
-    let (next, cmds) = update(model, Msg::ListLoaded(new_rows));
+    let (next, cmds) = update(
+        model,
+        Msg::ListLoaded(new_rows, Some("fresh-token".to_owned())),
+    );
 
     assert_eq!(next.rows.len(), 3, "ListLoaded must replace rows");
     assert_eq!(next.rows[0].key, "NEW-1");
@@ -944,7 +950,144 @@ fn update_list_loaded_replaces_rows_resets_selected_clears_search_and_error() {
         next.error.is_none(),
         "ListLoaded must clear the error banner"
     );
+    assert_eq!(
+        next.next_page_token.as_deref(),
+        Some("fresh-token"),
+        "ListLoaded must set the paging cursor from the fresh result's token"
+    );
     assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_list_loaded_with_no_token_clears_the_paging_cursor() {
+    let mut model = make_list_model(&["OLD-1"]);
+    model.next_page_token = Some("stale-token".to_owned());
+
+    let (next, _) = update(model, Msg::ListLoaded(vec![make_row("NEW-1")], None));
+
+    assert!(
+        next.next_page_token.is_none(),
+        "a fresh list with no token must clear any stale paging cursor"
+    );
+}
+
+// ---- P3: AC2 — MoreLoaded appends rows, preserves selection, advances token ----
+
+#[test]
+fn update_more_loaded_appends_rows_preserves_selection_and_advances_token() {
+    let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    model.selected = 1;
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let more_rows = vec![make_row("PROJ-3"), make_row("PROJ-4")];
+    let (next, cmds) = update(
+        model,
+        Msg::MoreLoaded(more_rows, Some("page-3-token".to_owned())),
+    );
+
+    assert_eq!(
+        next.rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+        vec!["PROJ-1", "PROJ-2", "PROJ-3", "PROJ-4"],
+        "MoreLoaded must append the new rows after the existing ones"
+    );
+    assert_eq!(
+        next.selected, 1,
+        "MoreLoaded must preserve the current selection"
+    );
+    assert_eq!(
+        next.next_page_token.as_deref(),
+        Some("page-3-token"),
+        "MoreLoaded must advance the paging cursor to the new token"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_more_loaded_with_no_token_clears_the_paging_cursor() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, _) = update(model, Msg::MoreLoaded(vec![make_row("PROJ-2")], None));
+
+    assert!(
+        next.next_page_token.is_none(),
+        "MoreLoaded on the last page must clear the paging cursor"
+    );
+}
+
+// ---- P3: AC1 — LoadMore emits Cmd::LoadMore only on List with a pending token ----
+
+#[test]
+fn update_load_more_with_pending_token_on_list_emits_cmd_load_more() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.jql = "assignee = currentUser()".to_owned();
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let (_, cmds) = update(model, Msg::LoadMore);
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0],
+        Cmd::LoadMore(
+            "assignee = currentUser()".to_owned(),
+            "page-2-token".to_owned()
+        ),
+        "LoadMore must emit Cmd::LoadMore(jql, token) when a page is pending"
+    );
+}
+
+#[test]
+fn update_load_more_with_no_pending_token_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (_, cmds) = update(model, Msg::LoadMore);
+
+    assert!(
+        cmds.is_empty(),
+        "LoadMore with no pending token must emit no Cmd"
+    );
+}
+
+#[test]
+fn update_load_more_on_detail_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let (_, cmds) = update(model, Msg::LoadMore);
+
+    assert!(
+        cmds.is_empty(),
+        "LoadMore on the Detail screen must emit no Cmd, even with a pending token"
+    );
+}
+
+// ---- P3: AC3 — view_list shows the load-more affordance only when a token is pending ----
+
+#[test]
+fn view_list_shows_load_more_hint_when_token_pending() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("more"),
+        "footer must show a load-more affordance while a token is pending; got: {text}"
+    );
+}
+
+#[test]
+fn view_list_hides_load_more_hint_on_last_page() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("more"),
+        "footer must not show the load-more affordance once the last page is loaded; got: {text}"
+    );
 }
 
 // ---- B3: AC3 — view renders search bar and error banner to TestBackend ----
@@ -1025,12 +1168,12 @@ async fn run_search_with_valid_jql_returns_issue_rows() {
         account_id: None,
     };
 
-    let rows = run_search(&instance, "project = SRCH").await;
+    let result = run_search(&instance, "project = SRCH").await;
 
-    assert!(rows.is_ok(), "valid JQL must return Ok; got: {rows:?}");
-    let rows = rows.unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].key, "SRCH-1");
+    assert!(result.is_ok(), "valid JQL must return Ok; got: {result:?}");
+    let result = result.unwrap();
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].key, "SRCH-1");
 
     server.verify().await;
 }

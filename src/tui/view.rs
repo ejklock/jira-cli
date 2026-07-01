@@ -127,10 +127,15 @@ fn view_list(model: &Model, frame: &mut Frame) {
         frame.render_widget(table, table_chunk);
     }
 
-    let hint_text = if has_search_bar {
-        "Enter submit  Esc cancel  Backspace delete"
+    let base_hint = if has_search_bar {
+        "Enter submit  Esc cancel  Backspace delete".to_owned()
     } else {
-        "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"
+        "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit".to_owned()
+    };
+    let hint_text = if !has_search_bar && model.next_page_token.is_some() {
+        format!("{base_hint}  {}", t("n more"))
+    } else {
+        base_hint
     };
     let hint = Paragraph::new(hint_text).alignment(Alignment::Center);
     frame.render_widget(hint, footer_chunk);

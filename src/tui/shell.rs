@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use crate::client::{GouqiJiraClient, JiraClient};
 use crate::commands::{DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow};
+use crate::models::{Issue, IssueRow, SearchResult};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::Instance;
 
@@ -55,18 +55,23 @@ pub(crate) async fn fetch_and_run(
         }
     };
 
-    let rows = match client.search(MINE_JQL, DEFAULT_SEARCH_LIMIT).await {
-        Ok(result) => result.issues,
+    let result = match client.search(MINE_JQL, DEFAULT_SEARCH_LIMIT).await {
+        Ok(result) => result,
         Err(e) => {
             writeln!(stderr, "Error fetching issues: {e}").ok();
             return 1;
         }
     };
 
-    run_tui(rows, instance, cache).await
+    run_tui(result.issues, result.next_page_token, instance, cache).await
 }
 
-async fn run_tui(rows: Vec<IssueRow>, instance: &Instance, cache: &TaskCache<'_>) -> i32 {
+async fn run_tui(
+    rows: Vec<IssueRow>,
+    next_page_token: Option<String>,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+) -> i32 {
     let mut stdout = io::stdout();
     if enable_raw_mode().is_err() {
         return 1;
@@ -95,6 +100,8 @@ async fn run_tui(rows: Vec<IssueRow>, instance: &Instance, cache: &TaskCache<'_>
         search: None,
         error: None,
         base_url: instance.base_url.clone(),
+        jql: MINE_JQL.to_owned(),
+        next_page_token,
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
@@ -132,6 +139,7 @@ fn map_key_in_normal_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<
         KeyCode::Char('/') => Some(Msg::OpenSearch),
         KeyCode::Char('o') => Some(Msg::OpenLink),
         KeyCode::Char('y') => Some(Msg::CopyKey),
+        KeyCode::Char('n') => Some(Msg::LoadMore),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
@@ -245,6 +253,10 @@ fn dispatch_cmd(
             spawn_load_list(jql, instance.clone(), tx.clone());
             model
         }
+        Cmd::LoadMore(jql, token) => {
+            spawn_load_more(jql, token, instance.clone(), tx.clone());
+            model
+        }
     }
 }
 
@@ -289,7 +301,20 @@ fn spawn_load_detail(key: String, instance: Instance, tx: mpsc::UnboundedSender<
 fn spawn_load_list(jql: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
     tokio::spawn(async move {
         let msg = match run_search(&instance, &jql).await {
-            Ok(rows) => Msg::ListLoaded(rows),
+            Ok(result) => Msg::ListLoaded(result.issues, result.next_page_token),
+            Err(e) => Msg::LoadFailed(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+/// Spawns the load-more page fetch effect (ADR 0009); the result is sent back
+/// over `tx` as `Msg::MoreLoaded` on success or `Msg::LoadFailed` on error.
+/// Opens a fresh client inside the task, mirroring the P1 spawn pattern.
+fn spawn_load_more(jql: String, token: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match run_search_page(&instance, &jql, &token).await {
+            Ok(result) => Msg::MoreLoaded(result.issues, result.next_page_token),
             Err(e) => Msg::LoadFailed(e.to_string()),
         };
         let _ = tx.send(msg);
@@ -301,10 +326,20 @@ async fn fetch_issue(instance: &Instance, key: &str) -> anyhow::Result<Issue> {
     client.get_issue(key).await
 }
 
-pub(crate) async fn run_search(instance: &Instance, jql: &str) -> anyhow::Result<Vec<IssueRow>> {
+pub(crate) async fn run_search(instance: &Instance, jql: &str) -> anyhow::Result<SearchResult> {
     let client = GouqiJiraClient::new(instance)?;
-    let result = client.search(jql, DEFAULT_SEARCH_LIMIT).await?;
-    Ok(result.issues)
+    client.search(jql, DEFAULT_SEARCH_LIMIT).await
+}
+
+async fn run_search_page(
+    instance: &Instance,
+    jql: &str,
+    page_token: &str,
+) -> anyhow::Result<SearchResult> {
+    let client = GouqiJiraClient::new(instance)?;
+    client
+        .search_page(jql, DEFAULT_SEARCH_LIMIT, page_token)
+        .await
 }
 
 fn spawn_opener(url: &str) {
