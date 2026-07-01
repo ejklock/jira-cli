@@ -59,16 +59,28 @@ flowchart TD
     commands --> render["render\ndomain string rendering (human)\n+ ADF → plain text"]
     commands --> agent_json["agent_json\npure --json shaping"]
     commands --> i18n["i18n (en · pt-BR)"]
-    cli --> tui["tui (browse, Phase 2)\nread-only Elm/TEA shell\n(ratatui + crossterm)"]
-    tui --> client
-    tui --> store
-    tui --> render
-    tui --> i18n
+    cli --> tui_shell
+    subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
+        tui_model["model.rs\npure core: Model · Msg · Cmd · update\n(no crossterm/ratatui/tokio/io)"]
+        tui_view["view.rs\nview/view_list/view_detail\n(ratatui rendering)"]
+        tui_shell["shell.rs\nbrowse/draw_loop/dispatch_cmd\n(Humble Object, imperative shell)"]
+        tui_shell --> tui_model
+        tui_shell --> tui_view
+        tui_view --> tui_model
+    end
+    tui_shell --> client
+    tui_shell --> store
+    tui_view --> i18n
 ```
 
 The `tui` (`browse`) shell is a **second imperative shell** over the same functional
-core: a pure `update(Model, Msg) -> (Model, Vec<Cmd>)` drives navigation/scroll/search
-state (unit + ratatui `TestBackend` tested), while `Cmd` effects reuse the existing
+core, now split into its own submodule (`src/tui/`) per
+[ADR 0007 §6](/adr/0007-browse-tui-elm-architecture.md): `model.rs` is the pure
+functional core — a pure `update(Model, Msg) -> (Model, Vec<Cmd>)` drives
+navigation/scroll/search state (unit + ratatui `TestBackend` tested) and imports
+nothing from crossterm/ratatui/tokio/`std::io`; `view.rs` maps `Model` to ratatui
+widgets; `shell.rs` is the Humble Object — the imperative shell that owns the
+terminal, the draw loop, and command dispatch. `Cmd` effects reuse the existing
 data seams — `client` (`JiraClient::search` for lists, cache-or-fetch for detail) and
 `store` — never the rendering `*_core` functions. Read-only by construction
 ([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)).
