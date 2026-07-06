@@ -740,7 +740,7 @@ fn view_detail_en_labels_unchanged() {
         "en label must be Assignee: {text}"
     );
     assert!(
-        text.contains("Description:"),
+        text.contains("Description"),
         "en label must be Description: {text}"
     );
 
@@ -1839,8 +1839,8 @@ fn view_detail_renders_comments_header_authors_and_bodies() {
     let text = buffer_text(&buf);
 
     assert!(
-        text.contains("Comments:") || text.contains("Comentários:"),
-        "detail must show the Comments header; got: {text}"
+        text.contains("Comments (2)") || text.contains("Comentários (2)"),
+        "detail must show the Comments (N) panel title; got: {text}"
     );
     assert!(text.contains("[Alice] 2026-01-01"), "got: {text}");
     assert!(

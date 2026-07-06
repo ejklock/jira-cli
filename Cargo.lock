@@ -992,6 +992,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "unicode-width 0.1.14",
  "url",
  "wiremock",
 ]

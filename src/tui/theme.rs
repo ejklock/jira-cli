@@ -16,12 +16,12 @@ pub fn header_bar() -> Style {
 
 // Issue 0030 lands the full palette up front (ADR 0014 §1); `badge`,
 // `selected`, `due_overdue` and `due_near` gained production callers in the
-// D2 list-card renderer (issue 0031). `section_title`/`column_header`/`link`
-// still await later H2/H3 slices, so a plain `cargo build` (which excludes
-// `#[cfg(test)]`) would otherwise see them as unused.
+// D2 list-card renderer (issue 0031); `section_title` gained one in the D3
+// detail panels (issue 0032). `column_header`/`link` still await later
+// H2/H3 slices, so a plain `cargo build` (which excludes `#[cfg(test)]`)
+// would otherwise see them as unused.
 
 /// A section title inside a screen's content region.
-#[allow(dead_code)]
 pub fn section_title() -> Style {
     Style::default()
         .fg(Color::Rgb(102, 204, 204))

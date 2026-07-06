@@ -1,4 +1,5 @@
 mod model;
+mod panel;
 mod shell;
 pub mod theme;
 mod view;

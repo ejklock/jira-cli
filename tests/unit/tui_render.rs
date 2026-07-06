@@ -1,4 +1,5 @@
 use super::model::{header_line, Identity};
+use super::panel;
 use super::theme;
 use super::view;
 use super::*;
@@ -9,6 +10,7 @@ use crate::test_support::duedate_offset_from_today;
 use ratatui::{
     backend::TestBackend,
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     Terminal,
 };
 
@@ -692,4 +694,405 @@ fn render_issue_table_and_mine_list_object_ignore_duedate_and_project() {
     );
 
     set_language("en");
+}
+
+// ---- issue 0032 D3 / BDR 0007 S5-S6: detail as stacked rounded panels ----
+
+fn make_issue_with_description_and_two_comments(key: &str) -> crate::models::Issue {
+    crate::models::Issue {
+        summary: "Fix the login flow".to_owned(),
+        status: "In Progress".to_owned(),
+        status_category: None,
+        issue_type: "Bug".to_owned(),
+        assignee: Some(crate::test_support::assignee("Alice", None)),
+        description: Some(crate::test_support::plain_paragraph("A description body.")),
+        comments: vec![
+            crate::test_support::comment(
+                None,
+                Some("Alice"),
+                &crate::test_support::plain_paragraph("First comment."),
+                Some("2026-01-01"),
+                None,
+            ),
+            crate::test_support::comment(
+                None,
+                Some("Bob"),
+                &crate::test_support::plain_paragraph("Second comment."),
+                Some("2026-01-02"),
+                None,
+            ),
+        ],
+        ..crate::test_support::issue(key)
+    }
+}
+
+fn make_issue_with_numbered_comments(
+    key: &str,
+    count: usize,
+    last_marker: &str,
+) -> crate::models::Issue {
+    let comments = (0..count)
+        .map(|i| {
+            let body = if i + 1 == count {
+                last_marker.to_owned()
+            } else {
+                format!("comment body number {i}")
+            };
+            crate::test_support::comment(
+                None,
+                Some("Alice"),
+                &crate::test_support::plain_paragraph(&body),
+                Some("2026-01-01"),
+                None,
+            )
+        })
+        .collect();
+    crate::models::Issue {
+        comments,
+        ..crate::test_support::issue(key)
+    }
+}
+
+#[test]
+fn view_detail_renders_three_panels_with_details_meta_rows() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_description_and_two_comments("PROJ-60"));
+
+    let buf = render_to_buffer(&model, 100, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Details"),
+        "the Details panel title must appear; got: {text}"
+    );
+    assert!(
+        text.contains("Description"),
+        "the Description panel title must appear; got: {text}"
+    );
+    assert!(
+        text.contains("Comments (2)"),
+        "the Comments panel title must include the comment count; got: {text}"
+    );
+    assert!(
+        text.contains("Fix the login flow"),
+        "the frame border title must show the issue summary; got: {text}"
+    );
+    assert!(
+        text.contains("PROJ-60"),
+        "the Details panel's Key row must appear; got: {text}"
+    );
+    assert!(
+        text.contains("In Progress"),
+        "the Details panel's Status row must appear; got: {text}"
+    );
+    assert!(
+        text.contains("Bug"),
+        "the Details panel's Type row must appear; got: {text}"
+    );
+    assert!(
+        text.contains("Alice"),
+        "the Details panel's Assignee row must appear; got: {text}"
+    );
+    assert!(
+        text.contains("A description body."),
+        "the Description panel body must appear; got: {text}"
+    );
+    assert!(
+        text.contains("First comment."),
+        "the first comment's body must appear; got: {text}"
+    );
+    assert!(
+        text.contains("Second comment."),
+        "the second comment's body must appear; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_border_title_ellipsizes_a_long_summary() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let long_summary = "A".repeat(200);
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        summary: long_summary.clone(),
+        ..crate::test_support::issue("PROJ-61")
+    });
+
+    let buf = render_to_buffer(&model, 40, 20);
+
+    assert!(
+        row_text(&buf, 1).contains('…'),
+        "the border title must ellipsize a summary longer than the frame width; got: {:?}",
+        row_text(&buf, 1)
+    );
+    assert!(
+        !row_text(&buf, 1).contains(&long_summary),
+        "the full over-long summary must not render verbatim; got: {:?}",
+        row_text(&buf, 1)
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_border_title_falls_back_to_key_when_summary_is_empty() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        summary: String::new(),
+        ..crate::test_support::issue("PROJ-62")
+    });
+
+    let buf = render_to_buffer(&model, 100, 30);
+
+    assert!(
+        row_text(&buf, 1).contains("PROJ-62"),
+        "an empty summary must fall back to the issue key in the border title; got: {:?}",
+        row_text(&buf, 1)
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_renders_scrollbar_when_content_exceeds_viewport() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_numbered_comments(
+        "PROJ-70",
+        30,
+        "LASTMARKER",
+    ));
+
+    let buf = render_to_buffer(&model, 60, 15);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains('█'),
+        "a scrollbar thumb must render when content exceeds the viewport; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_renders_no_scrollbar_when_content_fits() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::test_support::issue("PROJ-71"));
+
+    let buf = render_to_buffer(&model, 100, 60);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains('█'),
+        "no scrollbar must render when all content fits the viewport; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_scroll_past_end_clamps_last_line_to_the_bottom_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_numbered_comments(
+        "PROJ-72",
+        30,
+        "LASTMARKER",
+    ));
+    model.detail_scroll = u16::MAX;
+
+    let height = 15u16;
+    let buf = render_to_buffer(&model, 60, height);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("LASTMARKER"),
+        "an extreme scroll offset must clamp to the last page instead of blank overscroll; got: {text}"
+    );
+
+    // header(1 row) + block top border(1 row) + block bottom border(1 row);
+    // the remaining rows are the scrolled content. The very last row must be
+    // the outer Comments panel's own closing border (never blank overscroll),
+    // and the last comment's marker — a couple of lines above it, inside its
+    // own nested card's closing border — must still be visible in the same
+    // clamped page.
+    let last_inner_row = height - 3;
+    assert!(
+        !row_text(&buf, last_inner_row).trim().is_empty(),
+        "the last visible row must not be blank (no overscroll past the end); got: {:?}",
+        row_text(&buf, last_inner_row)
+    );
+    let bottom_rows = (last_inner_row.saturating_sub(3)..=last_inner_row)
+        .map(|row| row_text(&buf, row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        bottom_rows.contains("LASTMARKER"),
+        "the last comment's marker must be visible near the bottom of the clamped view; got: {bottom_rows:?}"
+    );
+
+    set_language("en");
+}
+
+// ---- issue 0032 D3: panel_box / fit_to_display_width / ellipsize_display geometry ----
+
+fn line_display_width(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn line_text(line: &Line) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+#[test]
+fn panel_box_every_line_is_exactly_the_requested_width_with_wide_glyphs() {
+    let body = vec![
+        Line::from("plain row"),
+        Line::from("你好嗎世界"),
+        Line::from(""),
+    ];
+    let lines = panel::panel_box("Details", body, 24);
+
+    for line in &lines {
+        assert_eq!(
+            line_display_width(line),
+            24,
+            "every panel_box line must be exactly 24 display columns; got: {:?}",
+            line_text(line)
+        );
+    }
+}
+
+#[test]
+fn panel_box_label_is_embedded_in_the_top_border() {
+    let lines = panel::panel_box("Comments (2)", vec![Line::from("body")], 30);
+
+    assert!(
+        line_text(&lines[0]).contains("Comments (2)"),
+        "the label must appear in the top border; got: {:?}",
+        line_text(&lines[0])
+    );
+}
+
+#[test]
+fn panel_box_empty_body_still_emits_top_and_bottom_border_only() {
+    let lines = panel::panel_box("Empty", vec![], 20);
+
+    assert_eq!(
+        lines.len(),
+        2,
+        "an empty body must still yield exactly a top and bottom border"
+    );
+    for line in &lines {
+        assert_eq!(line_display_width(line), 20);
+    }
+}
+
+#[test]
+fn panel_box_label_longer_than_width_is_ellipsized_without_panic() {
+    let long_label = "A".repeat(100);
+    let lines = panel::panel_box(&long_label, vec![], 12);
+
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert_eq!(line_display_width(line), 12);
+    }
+    assert!(
+        line_text(&lines[0]).contains('…'),
+        "an over-long label must be ellipsized; got: {:?}",
+        line_text(&lines[0])
+    );
+}
+
+#[test]
+fn panel_box_preserves_styled_spans_in_body() {
+    let styled_line = Line::from(vec![Span::styled(
+        "bold run",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]);
+    let lines = panel::panel_box("Label", vec![styled_line], 30);
+
+    let styled_span = lines[1]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "bold run")
+        .expect("the styled body span must survive boxing");
+    assert!(
+        styled_span.style.add_modifier.contains(Modifier::BOLD),
+        "the body span's BOLD style must survive boxing: {:?}",
+        styled_span.style
+    );
+}
+
+#[test]
+fn fit_to_display_width_pads_a_short_line_to_exact_width() {
+    let fitted = panel::fit_to_display_width(&Line::from("hi"), 6);
+
+    assert_eq!(line_display_width(&fitted), 6);
+    assert_eq!(line_text(&fitted), "hi    ");
+}
+
+#[test]
+fn fit_to_display_width_truncates_a_long_line_preserving_style() {
+    let line = Line::from(vec![Span::styled(
+        "a very long styled run",
+        Style::default().add_modifier(Modifier::BOLD),
+    )]);
+    let fitted = panel::fit_to_display_width(&line, 6);
+
+    assert_eq!(line_display_width(&fitted), 6);
+    assert_eq!(line_text(&fitted), "a very");
+    assert!(
+        fitted.spans[0].style.add_modifier.contains(Modifier::BOLD),
+        "the truncated span must keep its BOLD style: {:?}",
+        fitted.spans[0].style
+    );
+}
+
+#[test]
+fn fit_to_display_width_pads_the_leftover_column_instead_of_splitting_a_wide_glyph() {
+    let fitted = panel::fit_to_display_width(&Line::from("你好嗎"), 5);
+
+    assert_eq!(line_display_width(&fitted), 5);
+    assert_eq!(line_text(&fitted), "你好 ");
+}
+
+#[test]
+fn ellipsize_display_returns_text_unchanged_when_it_already_fits() {
+    assert_eq!(panel::ellipsize_display("short", 10), "short");
+}
+
+#[test]
+fn ellipsize_display_truncates_with_a_single_ellipsis_column() {
+    assert_eq!(
+        panel::ellipsize_display("a long piece of text", 6),
+        "a lon…"
+    );
+}
+
+#[test]
+fn ellipsize_display_with_zero_columns_is_empty() {
+    assert_eq!(panel::ellipsize_display("anything", 0), "");
 }
