@@ -1191,6 +1191,53 @@ fn view_detail_renders_three_panels_with_details_meta_rows() {
     set_language("en");
 }
 
+// ---- ADR 0018 / BDR 0010 S1, S4: inline '[url]' link token in the Description panel ----
+
+fn make_issue_with_inline_link(key: &str) -> crate::models::Issue {
+    crate::models::Issue {
+        description: Some(crate::test_support::doc(vec![
+            crate::test_support::paragraph(vec![crate::test_support::marked_text(
+                "read the docs",
+                vec![crate::test_support::link_mark("https://example.com")],
+            )]),
+        ])),
+        ..crate::test_support::issue(key)
+    }
+}
+
+#[test]
+fn view_detail_description_shows_visible_url_token_styled_anchor_text_plain() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_inline_link("PROJ-63"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("read the docs [https://example.com]"),
+        "the anchor text followed by the visible [url] token must appear; got: {text}"
+    );
+
+    let anchor_style =
+        style_at_text(&buf, "read the docs").expect("anchor text must appear in the buffer");
+    let token_style = style_at_text(&buf, "[https://example.com]")
+        .expect("[url] token must appear in the buffer");
+
+    assert!(
+        !anchor_style.add_modifier.contains(Modifier::UNDERLINED),
+        "anchor text must render as normal body text, no link style: {anchor_style:?}"
+    );
+    assert!(
+        token_style.add_modifier.contains(Modifier::UNDERLINED),
+        "the [url] token must carry the link style: {token_style:?}"
+    );
+
+    set_language("en");
+}
+
 #[test]
 fn view_detail_border_title_ellipsizes_a_long_summary() {
     let _lock = LANG_MUTEX.lock().unwrap();

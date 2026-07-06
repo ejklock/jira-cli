@@ -1036,20 +1036,28 @@ fn view_detail_renders_bold_description_run_with_bold_modifier() {
 }
 
 #[test]
-fn view_detail_renders_link_description_run_with_underlined_modifier() {
+fn view_detail_renders_link_token_with_underlined_modifier_anchor_stays_plain() {
     let _lock = LANG_MUTEX.lock().unwrap();
     let mut model = make_list_model(&["PROJ-12"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-12"));
 
     let buf = render_to_buffer(&model, 120, 30);
-    let style = style_at_text(&buf, "a link").expect("link run must appear in buffer");
+    let anchor_style = style_at_text(&buf, "a link").expect("anchor text must appear in buffer");
+    let token_style =
+        style_at_text(&buf, "[https://example.com]").expect("[url] token must appear in buffer");
 
     assert!(
-        style
+        !anchor_style
             .add_modifier
             .contains(ratatui::style::Modifier::UNDERLINED),
-        "link description run must carry Modifier::UNDERLINED: {style:?}"
+        "anchor text must no longer carry link-derived underline: {anchor_style:?}"
+    );
+    assert!(
+        token_style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "the [url] token must carry Modifier::UNDERLINED: {token_style:?}"
     );
 }
 
@@ -1387,19 +1395,20 @@ fn view_detail_highlights_focused_link_with_reversed_modifier() {
     model.detail_focused_link = Some(0);
 
     let buf = render_to_buffer(&model, 120, 30);
-    let style = style_at_text(&buf, "first link").expect("focused link run must appear in buffer");
+    let style = style_at_text(&buf, "[https://example.com/first]")
+        .expect("focused link's [url] token must appear in buffer");
 
     assert!(
         style
             .add_modifier
             .contains(ratatui::style::Modifier::REVERSED),
-        "focused link must carry Modifier::REVERSED: {style:?}"
+        "the focused link's [url] token must carry Modifier::REVERSED: {style:?}"
     );
     assert!(
         style
             .add_modifier
             .contains(ratatui::style::Modifier::UNDERLINED),
-        "focused link must still carry Modifier::UNDERLINED: {style:?}"
+        "the focused link's [url] token must still carry Modifier::UNDERLINED: {style:?}"
     );
 }
 
@@ -1416,20 +1425,20 @@ fn view_detail_non_focused_link_has_no_reversed_modifier() {
     model.detail_focused_link = Some(0);
 
     let buf = render_to_buffer(&model, 120, 30);
-    let style =
-        style_at_text(&buf, "second link").expect("non-focused link run must appear in buffer");
+    let style = style_at_text(&buf, "[https://example.com/second]")
+        .expect("non-focused link's [url] token must appear in buffer");
 
     assert!(
         !style
             .add_modifier
             .contains(ratatui::style::Modifier::REVERSED),
-        "non-focused link must not carry Modifier::REVERSED: {style:?}"
+        "non-focused link's [url] token must not carry Modifier::REVERSED: {style:?}"
     );
     assert!(
         style
             .add_modifier
             .contains(ratatui::style::Modifier::UNDERLINED),
-        "non-focused link must still carry Modifier::UNDERLINED: {style:?}"
+        "non-focused link's [url] token must still carry Modifier::UNDERLINED: {style:?}"
     );
 }
 
@@ -2293,13 +2302,22 @@ fn view_detail_renders_link_comment_body_run_with_underlined_modifier() {
     ));
 
     let buf = render_to_buffer(&model, 120, 40);
-    let style = style_at_text(&buf, "linked comment text").expect("link comment run must appear");
+    let anchor_style =
+        style_at_text(&buf, "linked comment text").expect("comment anchor text must appear");
+    let token_style = style_at_text(&buf, "[https://example.com/comment]")
+        .expect("comment [url] token must appear");
 
     assert!(
-        style
+        !anchor_style
             .add_modifier
             .contains(ratatui::style::Modifier::UNDERLINED),
-        "link comment run must carry Modifier::UNDERLINED: {style:?}"
+        "comment anchor text must no longer carry link-derived underline: {anchor_style:?}"
+    );
+    assert!(
+        token_style
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "comment [url] token must carry Modifier::UNDERLINED: {token_style:?}"
     );
 }
 

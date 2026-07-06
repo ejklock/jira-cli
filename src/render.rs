@@ -204,7 +204,7 @@ fn rich_node(
     match node_type {
         "paragraph" | "heading" => {
             rich_inline_content(node, lines, current);
-            lines.push(std::mem::take(current));
+            finalize_rich_line(lines, current);
         }
         "codeBlock" => rich_code_block(node, lines, current),
         "table" => lines.extend(rich_table(node)),
@@ -408,7 +408,7 @@ fn rich_list_item_child(
                 style: RichStyle::default(),
             });
             rich_inline_content(child, lines, current);
-            lines.push(std::mem::take(current));
+            finalize_rich_line(lines, current);
         } else {
             rich_node(child, lines, current, depth + 1);
         }
@@ -440,7 +440,7 @@ fn rich_inline_node(node: &serde_json::Value, lines: &mut Vec<RichLine>, current
                 });
             }
         }
-        "hardBreak" => lines.push(std::mem::take(current)),
+        "hardBreak" => finalize_rich_line(lines, current),
         "mention" => push_attr_span(node, "text", current),
         "emoji" => push_attr_span(node, "shortName", current),
         "inlineCard" => push_attr_span(node, "url", current),
@@ -484,7 +484,11 @@ fn apply_mark(mark: &serde_json::Value, style: &mut RichStyle) {
         "strike" => style.strike = true,
         "underline" => style.underline = true,
         "link" => {
-            style.underline = true;
+            // The link mark no longer styles the anchor text itself (BDR 0010
+            // S1-S3): it only records the href here so `group_link_tokens` can
+            // group the run and emit the single visible `[url]` token that
+            // carries the underline. An explicit `underline` mark (above)
+            // still applies to the anchor independently.
             style.link = mark
                 .get("attrs")
                 .and_then(|a| a.get("href"))
@@ -492,6 +496,106 @@ fn apply_mark(mark: &serde_json::Value, style: &mut RichStyle) {
                 .map(str::to_string);
         }
         _ => {}
+    }
+}
+
+/// Finalizes an in-progress [`RichLine`] accumulator into `lines`, grouping
+/// any link-marked runs into their visible `[url]` token first (BDR 0010).
+/// Used everywhere a paragraph/heading/list-item run of inline spans is
+/// pushed as a completed line; table rows build lines through a separate
+/// path (`rich_table_row`) and are untouched.
+fn finalize_rich_line(lines: &mut Vec<RichLine>, current: &mut RichLine) {
+    let line = std::mem::take(current);
+    lines.push(group_link_tokens(line));
+}
+
+/// Groups consecutive link-marked spans in a finalized line into one
+/// trailing `[url]` token span (BDR 0010 S1-S3): anchor spans lose their
+/// href (other marks survive), and the concatenated run's href/display
+/// becomes the sole token span carrying `style.link` + underline. A link
+/// split into several text nodes by an inner mark boundary still yields
+/// exactly one token.
+fn group_link_tokens(line: RichLine) -> RichLine {
+    let mut out: RichLine = Vec::with_capacity(line.len());
+    let mut i = 0;
+    while i < line.len() {
+        match line[i].style.link.clone() {
+            None => {
+                out.push(line[i].clone());
+                i += 1;
+            }
+            Some(href) => {
+                let end = link_run_end(&line, i, &href);
+                push_link_token_run(&line[i..end], &href, &mut out);
+                i = end;
+            }
+        }
+    }
+    out
+}
+
+/// The index one-past the last span (from `start`) sharing `href`.
+fn link_run_end(line: &[RichSpan], start: usize, href: &str) -> usize {
+    let mut end = start;
+    while end < line.len() && line[end].style.link.as_deref() == Some(href) {
+        end += 1;
+    }
+    end
+}
+
+/// Emits a link run's anchor spans (unless the run collapses) followed by
+/// its single token span.
+fn push_link_token_run(run: &[RichSpan], href: &str, out: &mut RichLine) {
+    let anchor_text: String = run.iter().map(|s| s.text.as_str()).collect();
+    let display = link_display(href);
+    let collapses = anchor_text.is_empty() || anchor_text == href || anchor_text == display;
+    if !collapses {
+        for span in run {
+            push_anchor_span(span, out);
+        }
+    }
+    out.push(link_token_span(href, display, collapses));
+}
+
+/// Pushes one anchor span with its href stripped (other marks preserved).
+/// Zero-length anchor text (e.g. an empty text node inside the run) is
+/// dropped rather than emitted as a no-op span.
+fn push_anchor_span(span: &RichSpan, out: &mut RichLine) {
+    if span.text.is_empty() {
+        return;
+    }
+    let mut style = span.style.clone();
+    style.link = None;
+    out.push(RichSpan {
+        text: span.text.clone(),
+        style,
+    });
+}
+
+/// The bracketed display form of a href: a `mailto:` href shows the bare
+/// address, everything else shows verbatim (the stored `style.link` on the
+/// token always keeps the full href, scheme included).
+fn link_display(href: &str) -> &str {
+    href.strip_prefix("mailto:").unwrap_or(href)
+}
+
+/// The single href-carrying token span for a link run: ` [display]` when the
+/// anchor text is visible and distinct from the URL, or `[display]` (no
+/// leading space) when the run collapses (anchor text empty or equal to the
+/// URL/display form).
+fn link_token_span(href: &str, display: &str, collapses: bool) -> RichSpan {
+    let text = if collapses {
+        format!("[{display}]")
+    } else {
+        format!(" [{display}]")
+    };
+    RichSpan {
+        text,
+        style: RichStyle {
+            link: Some(href.to_string()),
+            underline: true,
+            ..RichStyle::default()
+        },
     }
 }
 

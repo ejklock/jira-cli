@@ -209,20 +209,132 @@ fn adf_to_rich_underline_mark_sets_underline_style() {
     assert!(span.style.link.is_none());
 }
 
+// --- adf_to_rich: inline link token (BDR 0010 S1-S3 / ADR 0018 B2a) ---
+
 #[test]
-fn adf_to_rich_link_mark_sets_href_and_underline() {
-    let adf = marked_paragraph("click here", vec![link_mark("https://example.com")]);
+fn adf_to_rich_link_text_differs_from_url_yields_anchor_then_token() {
+    let adf = marked_paragraph("docs", vec![link_mark("https://x/y")]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(
+        line.len(),
+        2,
+        "anchor text and the [url] token must be separate spans: {line:?}"
+    );
+    assert_eq!(line[0].text, "docs");
+    assert_eq!(
+        line[0].style.link, None,
+        "anchor span must not carry the href: {:?}",
+        line[0]
+    );
+    assert!(
+        !line[0].style.underline,
+        "anchor span must not gain link-derived underline: {:?}",
+        line[0]
+    );
+    assert_eq!(line[1].text, " [https://x/y]");
+    assert_eq!(
+        line[1].style.link.as_deref(),
+        Some("https://x/y"),
+        "the token span must be the sole href carrier: {:?}",
+        line[1]
+    );
+    assert!(
+        line[1].style.underline,
+        "the token span must be underlined: {:?}",
+        line[1]
+    );
+}
+
+#[test]
+fn adf_to_rich_link_split_by_inner_mark_preserves_marks_and_emits_one_token() {
+    let adf = doc(vec![paragraph(vec![
+        marked_text("do", vec![link_mark("https://x/y")]),
+        marked_text("cs", vec![mark("strong"), link_mark("https://x/y")]),
+    ])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(
+        line.len(),
+        3,
+        "two anchor spans plus a single trailing token: {line:?}"
+    );
+    assert_eq!(line[0].text, "do");
+    assert!(
+        !line[0].style.bold,
+        "first run must stay unbold: {:?}",
+        line[0]
+    );
+    assert_eq!(line[0].style.link, None);
+    assert_eq!(line[1].text, "cs");
+    assert!(
+        line[1].style.bold,
+        "inner strong mark must survive on the anchor: {:?}",
+        line[1]
+    );
+    assert_eq!(line[1].style.link, None);
+    let token_spans = line.iter().filter(|s| s.style.link.is_some()).count();
+    assert_eq!(
+        token_spans, 1,
+        "a link split across text nodes must still emit exactly one token: {line:?}"
+    );
+    assert_eq!(line[2].text, " [https://x/y]");
+}
+
+#[test]
+fn adf_to_rich_link_text_equal_to_url_collapses_to_token_only() {
+    let adf = marked_paragraph("https://x/y", vec![link_mark("https://x/y")]);
     let lines = adf_to_rich(&adf);
     let span = only_span(&lines);
     assert_eq!(
-        span.style.link.as_deref(),
-        Some("https://example.com"),
-        "link mark must retain href: {span:?}"
+        span.text, "[https://x/y]",
+        "text==url must collapse to a single bracketed token with no leading space: {span:?}"
     );
-    assert!(
-        span.style.underline,
-        "link mark must also set underline: {span:?}"
+    assert_eq!(span.style.link.as_deref(), Some("https://x/y"));
+    assert!(span.style.underline);
+}
+
+#[test]
+fn adf_to_rich_link_empty_text_collapses_to_token_only() {
+    let adf = marked_paragraph("", vec![link_mark("https://x/y")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.text, "[https://x/y]",
+        "empty anchor text must collapse to a single bracketed token: {span:?}"
     );
+    assert_eq!(span.style.link.as_deref(), Some("https://x/y"));
+}
+
+#[test]
+fn adf_to_rich_mailto_link_shows_bare_address_but_keeps_full_href() {
+    let adf = marked_paragraph("mail", vec![link_mark("mailto:a@b.com")]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(line.len(), 2);
+    assert_eq!(line[0].text, "mail");
+    assert_eq!(line[1].text, " [a@b.com]");
+    assert_eq!(
+        line[1].style.link.as_deref(),
+        Some("mailto:a@b.com"),
+        "the stored href must keep the mailto: scheme: {:?}",
+        line[1]
+    );
+}
+
+#[test]
+fn adf_to_rich_mailto_link_text_equal_to_bare_address_collapses() {
+    let adf = marked_paragraph("a@b.com", vec![link_mark("mailto:a@b.com")]);
+    let lines = adf_to_rich(&adf);
+    let span = only_span(&lines);
+    assert_eq!(
+        span.text, "[a@b.com]",
+        "anchor text equal to the bare address must collapse to the token: {span:?}"
+    );
+    assert_eq!(span.style.link.as_deref(), Some("mailto:a@b.com"));
 }
 
 #[test]
