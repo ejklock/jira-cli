@@ -9,6 +9,7 @@ use crate::models::IssueRow;
 use crate::test_support::duedate_offset_from_today;
 use ratatui::{
     backend::TestBackend,
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     Terminal,
@@ -954,6 +955,89 @@ fn first_visible_card_keeps_selected_in_window() {
 #[test]
 fn first_visible_card_zero_visible_never_panics() {
     assert_eq!(view::first_visible_card(4, 10, 0), 0);
+}
+
+// ---- B1 mouse foundations / BDR 0009 S3-S5 — list_click_card hit test ----
+// (single layout source: built on list_layout_chunks/first_visible_card/
+// CARD_HEIGHT, so these tests double as geometry oracles for the resolver.)
+
+#[test]
+fn list_click_card_resolves_each_row_of_a_card_to_its_index() {
+    let rows = vec![
+        make_card_row("PROJ-1", "First issue", "Open", None, None),
+        make_card_row("PROJ-2", "Second issue", "Open", None, None),
+    ];
+    let model = make_list_model_with_rows(rows, 0);
+    let area = Rect::new(0, 0, 40, 20);
+
+    // header(1) occupies row 0; card 0 spans rows 1-4.
+    for y in 1..=4u16 {
+        assert_eq!(
+            view::list_click_card(&model, area, y),
+            Some(0),
+            "row {y} of card 0 must resolve to index 0"
+        );
+    }
+    // card 1 spans rows 5-8.
+    for y in 5..=8u16 {
+        assert_eq!(
+            view::list_click_card(&model, area, y),
+            Some(1),
+            "row {y} of card 1 must resolve to index 1"
+        );
+    }
+}
+
+#[test]
+fn list_click_card_header_and_footer_rows_are_none() {
+    let rows = vec![make_card_row("PROJ-1", "First issue", "Open", None, None)];
+    let model = make_list_model_with_rows(rows, 0);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert_eq!(
+        view::list_click_card(&model, area, 0),
+        None,
+        "the header row must resolve to None"
+    );
+    assert_eq!(
+        view::list_click_card(&model, area, area.height - 1),
+        None,
+        "the footer row must resolve to None"
+    );
+}
+
+#[test]
+fn list_click_card_below_last_visible_card_is_none() {
+    let rows = vec![make_card_row("PROJ-1", "First issue", "Open", None, None)];
+    let model = make_list_model_with_rows(rows, 0);
+    let area = Rect::new(0, 0, 40, 20);
+
+    // Only one card (rows 1-4); the empty space below it in the cards chunk
+    // must not resolve to a phantom row.
+    assert_eq!(view::list_click_card(&model, area, 5), None);
+}
+
+#[test]
+fn list_click_card_empty_list_is_none() {
+    let model = make_list_model_with_rows(vec![], 0);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert_eq!(view::list_click_card(&model, area, 5), None);
+}
+
+#[test]
+fn list_click_card_windowed_click_resolves_windowed_index_not_zero() {
+    let rows: Vec<IssueRow> = (1..=10)
+        .map(|n| make_card_row(&format!("PROJ-{n}"), "An issue", "Open", None, None))
+        .collect();
+    let model = make_list_model_with_rows(rows, 9);
+    // header(1) + content(13, 3 cards worth) + footer(1) — mirrors
+    // view_list_windowing_keeps_selected_last_card_fully_visible's geometry.
+    let area = Rect::new(0, 0, 40, 15);
+
+    // first_visible_card(9, 10, 3) == 7 (pinned by the test above); clicking
+    // the first visible slot's row must resolve to 7, not 0.
+    assert_eq!(view::list_click_card(&model, area, 1), Some(7));
 }
 
 // ---- AC5: no contract drift — CLI table and agent_json list ignore the

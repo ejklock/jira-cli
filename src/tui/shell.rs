@@ -1,10 +1,13 @@
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyModifiers},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures::StreamExt;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
 use std::io::{self, Write};
 use tokio::sync::mpsc;
 
@@ -16,7 +19,7 @@ use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
 use super::model::{entry_cmds, update, Cmd, Identity, Model, Msg, Screen};
-use super::view::view;
+use super::view::{list_click_card, view};
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
 
@@ -123,7 +126,7 @@ async fn run_tui(
     if enable_raw_mode().is_err() {
         return 1;
     }
-    if execute!(stdout, EnterAlternateScreen).is_err() {
+    if execute!(stdout, EnterAlternateScreen, EnableMouseCapture).is_err() {
         let _ = disable_raw_mode();
         return 1;
     }
@@ -132,7 +135,7 @@ async fn run_tui(
     let mut terminal = match Terminal::new(backend) {
         Ok(t) => t,
         Err(_) => {
-            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
             let _ = disable_raw_mode();
             return 1;
         }
@@ -160,7 +163,11 @@ async fn run_tui(
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    );
     let _ = disable_raw_mode();
     exit_code
 }
@@ -210,6 +217,61 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
     }
 }
 
+/// The pure classification of a mouse event before area-dependent click
+/// resolution (ADR 0017 §2-3): navigation rides straight through as the
+/// existing `Msg`; a left-button-down candidate carries only its terminal
+/// (column, row) — resolving it into a `Msg` needs the terminal area
+/// `view::list_click_card` reads, which this mapper does not have.
+pub(super) enum MouseIntent {
+    Nav(Msg),
+    Click {
+        /// Reserved for R-B3's Detail-screen inline-link click resolution;
+        /// this slice resolves clicks by row (`y`) on the list screen only.
+        #[allow(dead_code)]
+        x: u16,
+        y: u16,
+    },
+}
+
+/// Maps a raw mouse event to a [`MouseIntent`] (BDR 0009 S1, S2, S7): search
+/// mode swallows every mouse event; wheel maps to the existing `Up`/`Down`
+/// navigation msgs (screen-awareness comes free from `update_up`/`update_down`);
+/// a left-button press is a click candidate; drags, the other buttons, moves,
+/// and releases are not handled (`None`).
+pub(super) fn map_mouse_to_msg(mouse: MouseEvent, search_active: bool) -> Option<MouseIntent> {
+    if search_active {
+        return None;
+    }
+    match mouse.kind {
+        MouseEventKind::ScrollUp => Some(MouseIntent::Nav(Msg::Up)),
+        MouseEventKind::ScrollDown => Some(MouseIntent::Nav(Msg::Down)),
+        MouseEventKind::Down(MouseButton::Left) => Some(MouseIntent::Click {
+            x: mouse.column,
+            y: mouse.row,
+        }),
+        _ => None,
+    }
+}
+
+/// Resolves a mouse event into a `Msg` (ADR 0017 §2-4): navigation rides
+/// straight through; a click resolves through `view::list_click_card` only on
+/// the list screen — Detail-screen clicks are a no-op this slice (inline-link
+/// activation is R-B3's).
+pub(super) fn resolve_mouse_msg(
+    mouse: MouseEvent,
+    search_active: bool,
+    model: &Model,
+    area: Rect,
+) -> Option<Msg> {
+    match map_mouse_to_msg(mouse, search_active)? {
+        MouseIntent::Nav(msg) => Some(msg),
+        MouseIntent::Click { y, .. } if model.screen == Screen::List => {
+            list_click_card(model, area, y).map(Msg::CardClicked)
+        }
+        MouseIntent::Click { .. } => None,
+    }
+}
+
 /// Outcome of one event-loop turn: either the model to keep drawing with, or the
 /// process exit code once the loop is done.
 enum StepOutcome {
@@ -232,11 +294,17 @@ async fn event_loop(
         .into_iter()
         .fold(model, |m, cmd| dispatch_cmd(cmd, m, instance, cache, &tx));
 
+    // Tracks the last-drawn frame's area (set by `terminal.draw`'s closure) so
+    // a mouse click resolves against exactly what's on screen.
+    let mut area = Rect::default();
     loop {
-        let _ = terminal.draw(|frame| view(&model, frame));
+        let _ = terminal.draw(|frame| {
+            area = frame.area();
+            view(&model, frame);
+        });
 
         let outcome = tokio::select! {
-            event = events.next() => handle_terminal_event(event, model, instance, cache, &tx),
+            event = events.next() => handle_terminal_event(event, model, instance, cache, &tx, area),
             Some(msg) = rx.recv() => handle_reply(msg, model, instance, cache, &tx),
         };
 
@@ -253,15 +321,17 @@ fn handle_terminal_event(
     instance: &Instance,
     cache: &TaskCache<'_>,
     tx: &mpsc::UnboundedSender<Msg>,
+    area: Rect,
 ) -> StepOutcome {
-    let key = match event {
-        Some(Ok(Event::Key(key))) => key,
-        Some(Ok(_)) => return StepOutcome::Continue(Box::new(model)),
+    let search_active = model.search.is_some();
+    let msg = match event {
+        Some(Ok(Event::Key(key))) => map_key_to_msg(key.code, key.modifiers, search_active),
+        Some(Ok(Event::Mouse(mouse))) => resolve_mouse_msg(mouse, search_active, &model, area),
+        Some(Ok(_)) => None,
         Some(Err(_)) | None => return StepOutcome::Exit(1),
     };
 
-    let search_active = model.search.is_some();
-    let Some(msg) = map_key_to_msg(key.code, key.modifiers, search_active) else {
+    let Some(msg) = msg else {
         return StepOutcome::Continue(Box::new(model));
     };
 

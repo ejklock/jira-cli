@@ -129,6 +129,11 @@ pub enum Msg {
     /// (already mapped to the E2 re-auth guidance for a 401), surfaced only
     /// while `revalidating` is still true.
     RevalidationFailed(String),
+    /// A left click resolved to a visible list card's row index (ADR 0017 §4,
+    /// BDR 0009 S3): carries a plain `usize` — the mouse-event types stay in
+    /// shell/view, keeping the domain core free of crossterm/ratatui (ADR
+    /// 0007).
+    CardClicked(usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -179,6 +184,7 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::FocusNextLink => update_focus_next_link(model),
         Msg::RevalidationLoaded(rows, token) => update_revalidation_loaded(model, rows, token),
         Msg::RevalidationFailed(msg) => update_revalidation_failed(model, msg),
+        Msg::CardClicked(index) => update_card_clicked(model, index),
     }
 }
 
@@ -270,6 +276,21 @@ fn update_select_list(model: Model) -> (Model, Vec<Cmd>) {
         ..model
     };
     (next, vec![Cmd::LoadDetail(key)])
+}
+
+/// A left click on a visible list card (ADR 0017 §4, BDR 0009 S3): in range on
+/// the list screen it sets `selected` then delegates to `update_select_list`
+/// — the exact same open-detail contract as `Select`/`Enter`. Out-of-range,
+/// an empty list, or a Detail-screen click are pure no-ops (BDR 0009 S4); the
+/// resolver already filters most of these, so this guard is defense in depth.
+fn update_card_clicked(model: Model, index: usize) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::List || index >= model.rows.len() {
+        return (model, vec![]);
+    }
+    update_select_list(Model {
+        selected: index,
+        ..model
+    })
 }
 
 fn update_select_focused_link(model: Model) -> (Model, Vec<Cmd>) {

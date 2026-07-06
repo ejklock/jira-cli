@@ -1,15 +1,18 @@
 use super::*;
 
 use super::model::{entry_cmds, footer_mode, FooterMode, StatusKind, StatusMsg};
-use super::shell::{map_key_in_normal_mode, map_key_in_search_mode, read_snapshot};
+use super::shell::{
+    map_key_in_normal_mode, map_key_in_search_mode, map_mouse_to_msg, read_snapshot,
+    resolve_mouse_msg, MouseIntent,
+};
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
 use crate::store::cache::{instances_key, TaskListCache};
 use crate::test_support::*;
-use crossterm::event::{KeyCode, KeyModifiers};
-use ratatui::{backend::TestBackend, Terminal};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
 // ---- Helpers ----
 
@@ -37,6 +40,48 @@ fn make_row(key: &str) -> IssueRow {
 
 fn make_rows(keys: &[&str]) -> Vec<IssueRow> {
     keys.iter().map(|k| make_row(k)).collect()
+}
+
+fn mouse_event(kind: MouseEventKind) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn mouse_click_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+/// Every `MouseEventKind` variant (BDR 0009 S6's property scope): every
+/// button's press/release/drag, movement, and every wheel direction.
+fn all_mouse_event_kinds() -> Vec<MouseEventKind> {
+    let buttons = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+    let mut kinds: Vec<MouseEventKind> = buttons
+        .iter()
+        .flat_map(|&button| {
+            [
+                MouseEventKind::Down(button),
+                MouseEventKind::Up(button),
+                MouseEventKind::Drag(button),
+            ]
+        })
+        .collect();
+    kinds.extend([
+        MouseEventKind::Moved,
+        MouseEventKind::ScrollDown,
+        MouseEventKind::ScrollUp,
+        MouseEventKind::ScrollLeft,
+        MouseEventKind::ScrollRight,
+    ]);
+    kinds
 }
 
 fn make_list_model(keys: &[&str]) -> Model {
@@ -787,6 +832,53 @@ fn update_select_on_detail_screen_is_noop() {
     let mut model = make_list_model(&["PROJ-1"]);
     model.screen = Screen::Detail;
     let (next, cmds) = update(model, Msg::Select);
+
+    assert_eq!(next.screen, Screen::Detail, "screen stays Detail");
+    assert!(cmds.is_empty());
+}
+
+// ---- B1 mouse foundations / BDR 0009 S3, S4 — CardClicked mirrors Select ----
+
+#[test]
+fn update_card_clicked_in_range_sets_selected_and_emits_load_detail() {
+    let model = make_list_model(&["PROJ-1", "PROJ-2", "PROJ-3"]);
+    let (next, cmds) = update(model, Msg::CardClicked(2));
+
+    assert_eq!(next.selected, 2);
+    assert_eq!(next.screen, Screen::Detail);
+    assert!(next.detail.is_none(), "detail must be None (loading state)");
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0], Cmd::LoadDetail("PROJ-3".to_owned()));
+}
+
+#[test]
+fn update_card_clicked_out_of_range_is_noop_no_panic() {
+    let model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    let (next, cmds) = update(model, Msg::CardClicked(5));
+
+    assert_eq!(
+        next.screen,
+        Screen::List,
+        "out-of-range click must not open detail"
+    );
+    assert_eq!(next.selected, 0, "selection must be unchanged");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_card_clicked_on_empty_list_is_noop_no_panic() {
+    let model = make_list_model(&[]);
+    let (next, cmds) = update(model, Msg::CardClicked(0));
+
+    assert_eq!(next.screen, Screen::List);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_card_clicked_on_detail_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    let (next, cmds) = update(model, Msg::CardClicked(0));
 
     assert_eq!(next.screen, Screen::Detail, "screen stays Detail");
     assert!(cmds.is_empty());
@@ -2343,6 +2435,111 @@ fn map_key_in_normal_mode_k_is_up() {
         map_key_in_normal_mode(KeyCode::Char('k'), KeyModifiers::NONE),
         Some(Msg::Up)
     ));
+}
+
+// ---- B1 mouse foundations / BDR 0009 S1, S2, S7 — wheel mapper ----
+
+#[test]
+fn map_mouse_to_msg_scroll_up_is_nav_up_in_normal_mode() {
+    let mouse = mouse_event(MouseEventKind::ScrollUp);
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Nav(Msg::Up))
+    ));
+}
+
+#[test]
+fn map_mouse_to_msg_scroll_down_is_nav_down_in_normal_mode() {
+    let mouse = mouse_event(MouseEventKind::ScrollDown);
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Nav(Msg::Down))
+    ));
+}
+
+#[test]
+fn map_mouse_to_msg_left_down_is_click_intent_with_coordinates() {
+    let mouse = mouse_click_at(12, 7);
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Click { x: 12, y: 7 })
+    ));
+}
+
+#[test]
+fn map_mouse_to_msg_search_active_swallows_scroll() {
+    let mouse = mouse_event(MouseEventKind::ScrollUp);
+    assert!(map_mouse_to_msg(mouse, true).is_none());
+}
+
+#[test]
+fn map_mouse_to_msg_search_active_swallows_click() {
+    let mouse = mouse_click_at(5, 5);
+    assert!(map_mouse_to_msg(mouse, true).is_none());
+}
+
+#[test]
+fn map_mouse_to_msg_ignores_drag_and_non_left_buttons() {
+    for kind in [
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Down(MouseButton::Right),
+        MouseEventKind::Down(MouseButton::Middle),
+        MouseEventKind::Up(MouseButton::Left),
+        MouseEventKind::Moved,
+    ] {
+        assert!(
+            map_mouse_to_msg(mouse_event(kind), false).is_none(),
+            "{kind:?} must not map to any intent"
+        );
+    }
+}
+
+// ---- BDR 0009 S6 — no mouse event ever exits the app (property/invariant) ----
+
+#[test]
+fn mouse_mapper_never_yields_quit_and_update_never_sets_quit_cmd() {
+    for search_active in [false, true] {
+        for kind in all_mouse_event_kinds() {
+            let mouse = mouse_event(kind);
+            let Some(MouseIntent::Nav(msg)) = map_mouse_to_msg(mouse, search_active) else {
+                continue;
+            };
+            assert!(
+                !matches!(msg, Msg::Quit),
+                "mapper must never yield Quit for {kind:?} (search_active={search_active})"
+            );
+            let model = make_list_model(&["PROJ-1"]);
+            let (_, cmds) = update(model, msg);
+            assert!(
+                !cmds.contains(&Cmd::Quit),
+                "update must never emit Cmd::Quit for a mouse-mapped msg ({kind:?})"
+            );
+        }
+    }
+}
+
+// ---- BDR 0009 S3 — resolve_mouse_msg wires click resolution to the list screen only ----
+
+#[test]
+fn resolve_mouse_msg_click_on_list_screen_resolves_card_clicked() {
+    let model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    let area = Rect::new(0, 0, 40, 20);
+    let mouse = mouse_click_at(5, 1);
+
+    assert!(matches!(
+        resolve_mouse_msg(mouse, false, &model, area),
+        Some(Msg::CardClicked(0))
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_click_on_detail_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    let area = Rect::new(0, 0, 40, 20);
+    let mouse = mouse_click_at(5, 1);
+
+    assert!(resolve_mouse_msg(mouse, false, &model, area).is_none());
 }
 
 // ---- issue 0033 D4 / BDR 0007 S7: footer_mode pure derivation ----

@@ -205,6 +205,41 @@ pub(crate) fn first_visible_card(selected: usize, count: usize, visible: usize) 
     first.min(max_first)
 }
 
+/// Resolves a left click at absolute terminal row `y` within the list
+/// screen's full frame `area` to the clicked card's row index (ADR 0017 §3,
+/// BDR 0009 S3-S5): built on the exact `list_layout_chunks`/
+/// `first_visible_card`/`CARD_HEIGHT` the renderer uses, so hit-testing can
+/// never drift from what's drawn. `None` when the click lands outside the
+/// cards chunk (header/footer/status rows), past the last visible card, or
+/// the list is empty.
+pub(super) fn list_click_card(model: &Model, area: Rect, y: u16) -> Option<usize> {
+    if model.rows.is_empty() {
+        return None;
+    }
+
+    let has_search_bar = model.search.is_some();
+    let has_error_banner = model.error.is_some();
+    let has_status_row = model.status.is_some();
+    let chunks = list_layout_chunks(area, has_search_bar, has_error_banner, has_status_row);
+    // Mirrors `view_list`'s own chunk order: header, [search], [error], cards, ...
+    let cards_idx = 1 + usize::from(has_search_bar) + usize::from(has_error_banner);
+    let chunk = chunks[cards_idx];
+
+    if y < chunk.y || y >= chunk.y + chunk.height {
+        return None;
+    }
+
+    let visible = (chunk.height / CARD_HEIGHT).max(1) as usize;
+    let slot = ((y - chunk.y) / CARD_HEIGHT) as usize;
+    if slot >= visible {
+        return None;
+    }
+
+    let first = first_visible_card(model.selected, model.rows.len(), visible);
+    let candidate = first + slot;
+    (candidate < model.rows.len()).then_some(candidate)
+}
+
 /// Renders one issue card: a rounded-border block, `KEY summary` on the first
 /// content line, `{due} · {status} · {project}` on the second. A selected
 /// card is styled uniformly (border + both lines) with `theme::selected()`.
