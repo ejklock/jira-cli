@@ -1,6 +1,8 @@
 use super::*;
 
-use super::shell::map_key_in_normal_mode;
+use super::model::{footer_mode, FooterMode, StatusKind, StatusMsg};
+use super::shell::{map_key_in_normal_mode, map_key_in_search_mode};
+use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
@@ -51,6 +53,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         detail_links: vec![],
         detail_focused_link: None,
         identities: vec![],
+        status: None,
     }
 }
 
@@ -2047,4 +2050,241 @@ fn map_key_in_normal_mode_k_is_up() {
         map_key_in_normal_mode(KeyCode::Char('k'), KeyModifiers::NONE),
         Some(Msg::Up)
     ));
+}
+
+// ---- issue 0033 D4 / BDR 0007 S7: footer_mode pure derivation ----
+
+#[test]
+fn footer_mode_list_screen_no_search_is_list() {
+    let model = make_list_model(&["PROJ-1"]);
+    assert_eq!(footer_mode(&model), FooterMode::List);
+}
+
+#[test]
+fn footer_mode_list_screen_with_search_is_list_search() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("project = X".to_owned());
+    assert_eq!(footer_mode(&model), FooterMode::ListSearch);
+}
+
+#[test]
+fn footer_mode_detail_screen_no_focused_link_is_detail() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    assert_eq!(footer_mode(&model), FooterMode::Detail);
+}
+
+#[test]
+fn footer_mode_detail_screen_with_focused_link_is_detail_link() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_links = vec!["https://example.com".to_owned()];
+    model.detail_focused_link = Some(0);
+    assert_eq!(footer_mode(&model), FooterMode::DetailLink);
+}
+
+// ---- issue 0033 D4 / BDR 0007 S7: view renders the mode-switched footer ----
+
+#[test]
+fn view_list_footer_switches_when_entering_search() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_list_model(&["PROJ-1"]);
+    let (searching, _) = update(model, Msg::OpenSearch);
+
+    let buf = render_to_buffer(&searching, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Enter submit  Esc cancel  Backspace delete"),
+        "entering search must switch the footer to the search hints; got: {text}"
+    );
+    assert!(
+        !text.contains("↑/↓ navigate"),
+        "the list footer must not remain visible once search is active; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_footer_switches_when_opening_detail() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-1"));
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("↑/↓ j/k scroll  Esc/b back  q quit"),
+        "opening detail must switch the footer to the detail hints; got: {text}"
+    );
+    assert!(
+        !text.contains("↑/↓ navigate"),
+        "the list footer must not remain visible on the detail screen; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_footer_switches_when_a_link_is_focused() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-1"));
+
+    let plain_text = buffer_text(&render_to_buffer(&model, 120, 30));
+    assert!(plain_text.contains("↑/↓ j/k scroll  Esc/b back  q quit"));
+
+    model.detail_links = vec!["https://example.com".to_owned()];
+    model.detail_focused_link = Some(0);
+
+    let linked_text = buffer_text(&render_to_buffer(&model, 120, 30));
+    assert!(
+        linked_text.contains("Tab next link") && linked_text.contains("Enter open"),
+        "a focused link must switch the footer to the link-focus hints; got: {linked_text}"
+    );
+
+    set_language("en");
+}
+
+// ---- issue 0033 D4 / BDR 0007 S7: lesson-3345 guard — every advertised key is bound ----
+
+fn assert_footer_hint_advertises_bound_key(
+    hint: &str,
+    substring: &str,
+    key_code: KeyCode,
+    search_active: bool,
+) {
+    assert!(
+        hint.contains(substring),
+        "hint {hint:?} must advertise {substring:?}"
+    );
+    let bound = if search_active {
+        map_key_in_search_mode(key_code, KeyModifiers::NONE).is_some()
+    } else {
+        map_key_in_normal_mode(key_code, KeyModifiers::NONE).is_some()
+    };
+    assert!(
+        bound,
+        "{substring:?} in hint {hint:?} advertises {key_code:?} with no bound handler"
+    );
+}
+
+#[test]
+fn every_footer_mode_advertises_only_bound_keys() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let list_hint = view::footer_hint(FooterMode::List);
+    assert_footer_hint_advertises_bound_key(&list_hint, "↑/↓", KeyCode::Down, false);
+    assert_footer_hint_advertises_bound_key(&list_hint, "/", KeyCode::Char('/'), false);
+    assert_footer_hint_advertises_bound_key(&list_hint, "Enter select", KeyCode::Enter, false);
+    assert_footer_hint_advertises_bound_key(&list_hint, "Esc/b", KeyCode::Esc, false);
+    assert_footer_hint_advertises_bound_key(&list_hint, "q quit", KeyCode::Char('q'), false);
+
+    let search_hint = view::footer_hint(FooterMode::ListSearch);
+    assert_footer_hint_advertises_bound_key(&search_hint, "Enter submit", KeyCode::Enter, true);
+    assert_footer_hint_advertises_bound_key(&search_hint, "Esc cancel", KeyCode::Esc, true);
+    assert_footer_hint_advertises_bound_key(&search_hint, "Backspace", KeyCode::Backspace, true);
+
+    let detail_hint = view::footer_hint(FooterMode::Detail);
+    assert_footer_hint_advertises_bound_key(&detail_hint, "j/k", KeyCode::Char('j'), false);
+    assert_footer_hint_advertises_bound_key(&detail_hint, "Esc/b", KeyCode::Esc, false);
+    assert_footer_hint_advertises_bound_key(&detail_hint, "q quit", KeyCode::Char('q'), false);
+
+    let detail_link_hint = view::footer_hint(FooterMode::DetailLink);
+    assert_footer_hint_advertises_bound_key(&detail_link_hint, "Tab", KeyCode::Tab, false);
+    assert_footer_hint_advertises_bound_key(&detail_link_hint, "Enter open", KeyCode::Enter, false);
+
+    set_language("en");
+}
+
+// ---- issue 0033 D4 / BDR 0007 S8: transient status — clear-before-process + set ----
+
+#[test]
+fn update_clears_a_standing_status_on_the_next_key_event() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.status = Some(StatusMsg {
+        text: "stale".to_owned(),
+        kind: StatusKind::Info,
+    });
+
+    let (next, _) = update(model, Msg::Down);
+
+    assert!(
+        next.status.is_none(),
+        "any key-driven Msg must clear a standing status before it is processed"
+    );
+}
+
+#[test]
+fn update_copy_key_sets_an_info_status_confirmation() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, cmds) = update(model, Msg::CopyKey);
+
+    assert_eq!(cmds, vec![Cmd::CopyToClipboard("PROJ-1".to_owned())]);
+    let status = next.status.expect("CopyKey must set a status message");
+    assert_eq!(status.kind, StatusKind::Info);
+    assert_eq!(status.text, "Copied ✓");
+
+    set_language("en");
+}
+
+#[test]
+fn update_copy_key_pt_br_translates_the_status_confirmation() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, _) = update(model, Msg::CopyKey);
+
+    let status = next.status.expect("CopyKey must set a status message");
+    assert_eq!(status.text, "Copiado ✓");
+
+    set_language("en");
+}
+
+#[test]
+fn update_load_failed_sets_an_error_status_alongside_the_existing_banner() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, _) = update(model, Msg::LoadFailed("network down".to_owned()));
+
+    let status = next.status.expect("LoadFailed must set a status message");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "network down");
+    assert_eq!(
+        next.error.as_deref(),
+        Some("network down"),
+        "the existing search-JQL inline banner (BDR 0006 S5) must be unaffected"
+    );
+}
+
+#[test]
+fn update_reply_msgs_do_not_clear_a_standing_status() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.status = Some(StatusMsg {
+        text: "still here".to_owned(),
+        kind: StatusKind::Info,
+    });
+
+    let (next, _) = update(model, Msg::ListLoaded(vec![], None));
+
+    assert_eq!(
+        next.status.map(|s| s.text),
+        Some("still here".to_owned()),
+        "a background reply Msg must not clear a status set by a prior key event"
+    );
 }

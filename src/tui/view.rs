@@ -9,7 +9,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::model::{header_line, Model, Screen};
+use super::model::{footer_mode, header_line, FooterMode, Model, Screen, StatusKind, StatusMsg};
 use super::panel;
 use super::theme;
 use crate::i18n::t;
@@ -48,8 +48,9 @@ fn view_list(model: &Model, frame: &mut Frame) {
 
     let has_search_bar = model.search.is_some();
     let has_error_banner = model.error.is_some();
+    let has_status_row = model.status.is_some();
 
-    let chunks = list_layout_chunks(area, has_search_bar, has_error_banner);
+    let chunks = list_layout_chunks(area, has_search_bar, has_error_banner, has_status_row);
     render_header(frame, chunks[0], model);
     let mut chunk_idx = 1usize;
 
@@ -72,20 +73,28 @@ fn view_list(model: &Model, frame: &mut Frame) {
     }
 
     render_list_cards(frame, chunks[chunk_idx], model);
+    chunk_idx += 1;
 
-    let hint = Paragraph::new(list_footer_hint(model, has_search_bar))
+    if let Some(status) = &model.status {
+        render_status_row(frame, chunks[chunk_idx], status);
+        chunk_idx += 1;
+    }
+
+    let hint = Paragraph::new(view_footer_text(model))
         .alignment(Alignment::Center)
         .style(theme::footer());
-    frame.render_widget(hint, chunks[chunk_idx + 1]);
+    frame.render_widget(hint, chunks[chunk_idx]);
 }
 
 /// Builds the `view_list` vertical layout: the header occupies the fixed top
-/// row; the optional search bar and error banner rows are only reserved when
-/// active, sandwiched between the header and the table/footer pair.
+/// row; the optional search bar, error banner, and status rows are only
+/// reserved when active, sandwiched between the header and the
+/// cards/footer pair.
 fn list_layout_chunks(
     area: Rect,
     has_search_bar: bool,
     has_error_banner: bool,
+    has_status_row: bool,
 ) -> std::rc::Rc<[Rect]> {
     let mut constraints = vec![Constraint::Length(1)];
     if has_search_bar {
@@ -95,12 +104,28 @@ fn list_layout_chunks(
         constraints.push(Constraint::Length(1));
     }
     constraints.push(Constraint::Min(0));
+    if has_status_row {
+        constraints.push(Constraint::Length(1));
+    }
     constraints.push(Constraint::Length(1));
 
     Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area)
+}
+
+/// Renders the thin transient status row above the footer (BDR 0007 S8):
+/// Info in the footer's default steel style, Error in `theme::status_error()`.
+fn render_status_row(frame: &mut Frame, chunk: Rect, status: &StatusMsg) {
+    let style = match status.kind {
+        StatusKind::Info => theme::footer(),
+        StatusKind::Error => theme::status_error(),
+    };
+    let row = Paragraph::new(status.text.clone())
+        .alignment(Alignment::Center)
+        .style(style);
+    frame.render_widget(row, chunk);
 }
 
 fn render_search_bar(frame: &mut Frame, chunk: Rect, query: &str) {
@@ -284,17 +309,30 @@ fn due_delta_style(delta: i64) -> Style {
     }
 }
 
-fn list_footer_hint(model: &Model, has_search_bar: bool) -> String {
-    let base_hint = if has_search_bar {
-        t("Enter submit  Esc cancel  Backspace delete")
-    } else {
-        t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit")
-    };
+/// The single mode-aware footer hint source (ADR 0014 §5, BDR 0007 S7): every
+/// hint text routes through `t()`, one string per [`FooterMode`], no
+/// per-screen branching outside this function.
+pub(crate) fn footer_hint(mode: FooterMode) -> String {
+    match mode {
+        FooterMode::List => t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"),
+        FooterMode::ListSearch => t("Enter submit  Esc cancel  Backspace delete"),
+        FooterMode::Detail => t("↑/↓ j/k scroll  Esc/b back  q quit"),
+        FooterMode::DetailLink => {
+            t("↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit")
+        }
+    }
+}
 
-    if !has_search_bar && model.next_page_token.is_some() {
-        format!("{base_hint}  {}", t("n more"))
+/// The rendered footer text for the current model: `footer_hint` for the
+/// active mode, with the load-more affordance appended only in plain List
+/// mode while a paging cursor is pending (P3, unchanged behavior).
+fn view_footer_text(model: &Model) -> String {
+    let mode = footer_mode(model);
+    let hint = footer_hint(mode);
+    if mode == FooterMode::List && model.next_page_token.is_some() {
+        format!("{hint}  {}", t("n more"))
     } else {
-        base_hint
+        hint
     }
 }
 
@@ -306,22 +344,30 @@ const DETAIL_FRAME_BORDER_COLS: u16 = 2;
 /// Pure detail view — renders the loaded issue or a loading notice.
 pub fn view_detail(model: &Model, frame: &mut Frame) {
     let area = frame.area();
+    let has_status_row = model.status.is_some();
+
+    let mut constraints = vec![Constraint::Length(1), Constraint::Min(0)];
+    if has_status_row {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
+        .constraints(constraints)
         .split(area);
 
     render_header(frame, chunks[0], model);
 
-    let footer = Paragraph::new(t("↑/↓ j/k scroll  Esc/b back  q quit"))
+    let footer_idx = chunks.len() - 1;
+    let footer = Paragraph::new(footer_hint(footer_mode(model)))
         .alignment(Alignment::Center)
         .style(theme::footer());
-    frame.render_widget(footer, chunks[2]);
+    frame.render_widget(footer, chunks[footer_idx]);
+
+    if let Some(status) = &model.status {
+        render_status_row(frame, chunks[footer_idx - 1], status);
+    }
 
     match &model.detail {
         None => {

@@ -1,4 +1,4 @@
-use super::model::{header_line, Identity};
+use super::model::{header_line, FooterMode, Identity, StatusKind, StatusMsg};
 use super::panel;
 use super::theme;
 use super::view;
@@ -63,6 +63,7 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         detail_links: vec![],
         detail_focused_link: None,
         identities: vec![],
+        status: None,
     }
 }
 
@@ -101,6 +102,7 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         detail_links: vec![],
         detail_focused_link: None,
         identities,
+        status: None,
     }
 }
 
@@ -310,6 +312,184 @@ fn view_detail_footer_hint_text_is_unchanged() {
     assert!(
         row_text(&buf, 29).contains("↑/↓ j/k scroll  Esc/b back  q quit"),
         "footer hint text must be unchanged; got: {:?}",
+        row_text(&buf, 29)
+    );
+
+    set_language("en");
+}
+
+// ---- issue 0033 D4 / BDR 0007 S7: footer_hint — one string per FooterMode ----
+
+#[test]
+fn footer_hint_en_exact_strings_per_mode() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    assert_eq!(
+        view::footer_hint(FooterMode::List),
+        "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::ListSearch),
+        "Enter submit  Esc cancel  Backspace delete"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::Detail),
+        "↑/↓ j/k scroll  Esc/b back  q quit"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::DetailLink),
+        "↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn footer_hint_pt_br_exact_strings_per_mode() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    assert_eq!(
+        view::footer_hint(FooterMode::List),
+        "↑/↓ navegar  /  buscar  Enter selecionar  Esc/b voltar  q sair"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::ListSearch),
+        "Enter enviar  Esc cancelar  Backspace apagar"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::Detail),
+        "↑/↓ j/k rolar  Esc/b voltar  q sair"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::DetailLink),
+        "↑/↓ j/k rolar  Tab próximo link  Enter abrir  Esc/b voltar  q sair"
+    );
+
+    set_language("en");
+}
+
+// ---- issue 0033 D4 / BDR 0007 S8: thin transient status row above the footer ----
+
+#[test]
+fn view_list_status_row_renders_info_confirmation_above_footer() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(vec![]);
+    model.status = Some(StatusMsg {
+        text: "Copied ✓".to_owned(),
+        kind: StatusKind::Info,
+    });
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Copied ✓"),
+        "the status row must show the Info confirmation; got: {text}"
+    );
+    let style = style_at_text(&buf, "Copied ✓").expect("status text must appear in buffer");
+    assert_bar_style(style, Color::Rgb(208, 216, 224), Color::Rgb(38, 52, 74));
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_status_row_renders_error_style_for_a_fetch_error() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(vec![]);
+    model.status = Some(StatusMsg {
+        text: "network unreachable".to_owned(),
+        kind: StatusKind::Error,
+    });
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("network unreachable"),
+        "the status row must show the fetch error; got: {text}"
+    );
+    let style =
+        style_at_text(&buf, "network unreachable").expect("status text must appear in buffer");
+    assert_bar_style(style, Color::Rgb(224, 108, 108), Color::Rgb(38, 52, 74));
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_with_no_status_reserves_no_status_row_and_layout_stays_collapsed() {
+    let model = make_list_model(vec![]);
+
+    let buf = render_to_buffer(&model, 120, 20);
+
+    assert_bar_style(
+        cell_style(&buf, 0, 19),
+        Color::Rgb(208, 216, 224),
+        Color::Rgb(38, 52, 74),
+    );
+}
+
+#[test]
+fn view_list_status_row_clears_on_the_next_key_event_and_layout_collapses_back() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let with_status = {
+        let mut model = make_list_model(vec![]);
+        model.status = Some(StatusMsg {
+            text: "Copied ✓".to_owned(),
+            kind: StatusKind::Info,
+        });
+        model
+    };
+    let (cleared, _) = update(with_status, Msg::Down);
+
+    assert!(
+        cleared.status.is_none(),
+        "the next key event must clear the status row"
+    );
+
+    let buf = render_to_buffer(&cleared, 120, 20);
+    let text = buffer_text(&buf);
+    assert!(
+        !text.contains("Copied ✓"),
+        "the status row must not render once cleared; got: {text}"
+    );
+    assert_bar_style(
+        cell_style(&buf, 0, 19),
+        Color::Rgb(208, 216, 224),
+        Color::Rgb(38, 52, 74),
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_status_row_renders_above_the_footer() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.status = Some(StatusMsg {
+        text: "Copied ✓".to_owned(),
+        kind: StatusKind::Info,
+    });
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Copied ✓"),
+        "the detail screen's status row must show the confirmation; got: {text}"
+    );
+    assert!(
+        row_text(&buf, 29).contains("↑/↓ j/k scroll  Esc/b back  q quit"),
+        "the footer must still render below the status row; got: {:?}",
         row_text(&buf, 29)
     );
 
@@ -555,6 +735,56 @@ fn view_list_no_duedate_renders_no_due_date_in_default_style() {
         style.fg,
         Some(Color::Reset),
         "no duedate must render in the default style: {style:?}"
+    );
+
+    set_language("en");
+}
+
+// D2 review follow-up (issue 0033): a delta-of-exactly-2 due date is still
+// inside the near window ((0..=2), not (0..=1)) — kills the boundary mutant.
+#[test]
+fn view_list_due_in_exactly_two_days_renders_near_amber() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row(
+        "PROJ-8",
+        "Boundary due issue",
+        "Open",
+        None,
+        Some(duedate_offset_from_today(2)),
+    );
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(buffer_text(&buf).contains("in 2 days"));
+    let style = style_at_text(&buf, "in 2 days").expect("in-2-days segment must appear");
+    assert_eq!(
+        style.fg,
+        Some(Color::Rgb(210, 160, 90)),
+        "a due date exactly 2 days out is still inside the near window: {style:?}"
+    );
+
+    set_language("en");
+}
+
+// D2 review follow-up (issue 0033): the "no due date" catalog key was missing
+// from pt_BR (t() fell back to the untranslated English text).
+#[test]
+fn view_list_no_duedate_pt_br_translates_to_sem_data() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let row = make_card_row("PROJ-9", "No due date issue", "Open", None, None);
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(
+        buffer_text(&buf).contains("sem data"),
+        "pt_BR must translate 'no due date' to 'sem data'"
     );
 
     set_language("en");

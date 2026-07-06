@@ -76,3 +76,12 @@ pub fn due_overdue() -> Style {
 pub fn due_near() -> Style {
     Style::default().fg(Color::Rgb(210, 160, 90))
 }
+
+/// The thin status row's error variant (BDR 0007 S8): the overdue red on the
+/// footer bar's steel-blue background.
+pub fn status_error() -> Style {
+    Style::default()
+        .fg(Color::Rgb(224, 108, 108))
+        .bg(Color::Rgb(38, 52, 74))
+        .add_modifier(Modifier::BOLD)
+}

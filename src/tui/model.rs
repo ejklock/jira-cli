@@ -1,3 +1,4 @@
+use crate::i18n::t;
 use crate::models::{Issue, IssueRow};
 use crate::render::adf_to_rich;
 
@@ -5,6 +6,43 @@ use crate::render::adf_to_rich;
 pub enum Screen {
     List,
     Detail,
+}
+
+/// The footer's mode-aware hint bucket (ADR 0014 §5, BDR 0007 S7): derived
+/// purely from the current screen + search-input-active + focused-link state,
+/// so `footer_hint` never branches on `Model` fields directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FooterMode {
+    List,
+    ListSearch,
+    Detail,
+    DetailLink,
+}
+
+/// Derives the active [`FooterMode`] from the model's screen, search-input,
+/// and focused-link state (BDR 0007 S7). Pure — no rendering, no I/O.
+pub fn footer_mode(model: &Model) -> FooterMode {
+    match model.screen {
+        Screen::List if model.search.is_some() => FooterMode::ListSearch,
+        Screen::List => FooterMode::List,
+        Screen::Detail if model.detail_focused_link.is_some() => FooterMode::DetailLink,
+        Screen::Detail => FooterMode::Detail,
+    }
+}
+
+/// A transient one-line status message (BDR 0007 S8): copy-key confirmation
+/// or a fetch error, rendered on the thin row above the footer and cleared by
+/// the next key event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusMsg {
+    pub text: String,
+    pub kind: StatusKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Info,
+    Error,
 }
 
 /// A logged-in identity (email + instance name) shown in the header bar
@@ -40,6 +78,9 @@ pub struct Model {
     /// Logged-in identities shown in the header bar. Set once by the shell
     /// before entering the event loop; empty when none are configured.
     pub identities: Vec<Identity>,
+    /// A transient status message shown above the footer (BDR 0007 S8).
+    /// Cleared by `update` at the start of every key-driven `Msg`.
+    pub status: Option<StatusMsg>,
 }
 
 /// Builds the identity header text: "{email} · {instance}" from the first
@@ -89,6 +130,7 @@ pub enum Cmd {
 
 /// Pure state transition — no I/O, no terminal, no clock.
 pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
+    let model = clear_status_on_key_event(model, &msg);
     match msg {
         Msg::Up => update_up(model),
         Msg::Down => update_down(model),
@@ -109,6 +151,28 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::CopyKey => update_copy_key(model),
         Msg::FocusNextLink => update_focus_next_link(model),
     }
+}
+
+/// Any key-driven `Msg` dismisses the prior transient status (BDR 0007 S8)
+/// before it is processed; replies from spawned `Cmd`s (`DetailLoaded`,
+/// `ListLoaded`, `MoreLoaded`, `LoadFailed`) leave a standing status alone —
+/// only `LoadFailed` itself sets a new one.
+fn clear_status_on_key_event(model: Model, msg: &Msg) -> Model {
+    if is_reply_msg(msg) {
+        model
+    } else {
+        Model {
+            status: None,
+            ..model
+        }
+    }
+}
+
+fn is_reply_msg(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::DetailLoaded(_) | Msg::ListLoaded(_, _) | Msg::MoreLoaded(_, _) | Msg::LoadFailed(_)
+    )
 }
 
 fn update_down(model: Model) -> (Model, Vec<Cmd>) {
@@ -326,8 +390,14 @@ fn update_load_more(model: Model) -> (Model, Vec<Cmd>) {
     (model, vec![])
 }
 
+/// A fetch error sets both the persistent search-JQL banner (BDR 0006 S5,
+/// unchanged) and the transient status row (BDR 0007 S8) in the error style.
 fn update_load_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
     let next = Model {
+        status: Some(StatusMsg {
+            text: msg.clone(),
+            kind: StatusKind::Error,
+        }),
         error: Some(msg),
         search: None,
         ..model
@@ -343,12 +413,21 @@ fn update_open_link(model: Model) -> (Model, Vec<Cmd>) {
     (model, vec![Cmd::OpenUrl(url)])
 }
 
+/// Copies the selected issue key and shows an Info confirmation on the
+/// status row (BDR 0007 S8); a no-op with no rows and no status change.
 fn update_copy_key(model: Model) -> (Model, Vec<Cmd>) {
     if model.rows.is_empty() {
         return (model, vec![]);
     }
     let key = model.rows[model.selected].key.clone();
-    (model, vec![Cmd::CopyToClipboard(key)])
+    let next = Model {
+        status: Some(StatusMsg {
+            text: t("Copied ✓"),
+            kind: StatusKind::Info,
+        }),
+        ..model
+    };
+    (next, vec![Cmd::CopyToClipboard(key)])
 }
 
 /// Advances the focused inline link, wrapping, when on the Detail screen with

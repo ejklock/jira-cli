@@ -108,6 +108,7 @@ async fn run_tui(
             email: instance.email.clone(),
             instance: instance.name.clone(),
         }],
+        status: None,
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
@@ -123,7 +124,7 @@ fn map_key_to_msg(key_code: KeyCode, modifiers: KeyModifiers, search_active: boo
     map_key_in_normal_mode(key_code, modifiers)
 }
 
-fn map_key_in_search_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
+pub(super) fn map_key_in_search_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
     match key_code {
         KeyCode::Enter => Some(Msg::SubmitSearch),
         KeyCode::Esc => Some(Msg::CancelSearch),

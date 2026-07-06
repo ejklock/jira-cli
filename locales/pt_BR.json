@@ -163,5 +163,8 @@
   "↑/↓ navigate  /  search  Enter select  Esc/b back  q quit": "↑/↓ navegar  /  buscar  Enter selecionar  Esc/b voltar  q sair",
   "Enter submit  Esc cancel  Backspace delete": "Enter enviar  Esc cancelar  Backspace apagar",
   "Error: ": "Erro: ",
-  "n more": "n mais"
+  "n more": "n mais",
+  "no due date": "sem data",
+  "Copied ✓": "Copiado ✓",
+  "↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit": "↑/↓ j/k rolar  Tab próximo link  Enter abrir  Esc/b voltar  q sair"
 }
