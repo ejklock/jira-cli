@@ -64,6 +64,7 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         detail_focused_link: None,
         identities: vec![],
         status: None,
+        revalidating: false,
     }
 }
 
@@ -103,6 +104,7 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         detail_focused_link: None,
         identities,
         status: None,
+        revalidating: false,
     }
 }
 
@@ -254,6 +256,69 @@ fn view_detail_header_with_no_identities_renders_empty_row_without_panic() {
     let buf = render_to_buffer(&model, 120, 30);
 
     assert_eq!(row_text(&buf, 0).trim_end(), "");
+}
+
+// ---- ADR 0016 / BDR 0008 S8: the dim "refreshing…" revalidating indicator ----
+
+#[test]
+fn view_list_header_shows_refreshing_indicator_while_revalidating() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_list_model(single_identity());
+    model.revalidating = true;
+
+    let buf = render_to_buffer(&model, 120, 20);
+    let header = row_text(&buf, 0);
+
+    assert!(
+        header.starts_with("me@x.com · acme"),
+        "the identity text must still render on the left; got: {header:?}"
+    );
+    assert!(
+        header.trim_end().ends_with("refreshing…"),
+        "the dim indicator must render on the header row's right side; got: {header:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_header_omits_refreshing_indicator_when_not_revalidating() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_list_model(single_identity());
+    assert!(!model.revalidating);
+
+    let buf = render_to_buffer(&model, 120, 20);
+
+    assert!(
+        !row_text(&buf, 0).contains("refreshing…"),
+        "a non-revalidating header must show no indicator; got: {:?}",
+        row_text(&buf, 0)
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_header_refreshing_indicator_pt_br_translates() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let mut model = make_list_model(single_identity());
+    model.revalidating = true;
+
+    let buf = render_to_buffer(&model, 120, 20);
+
+    assert!(
+        row_text(&buf, 0).contains("atualizando…"),
+        "pt_BR must render the translated indicator; got: {:?}",
+        row_text(&buf, 0)
+    );
+
+    set_language("en");
 }
 
 // ---- Footer restyled through theme::footer(); text unchanged ----

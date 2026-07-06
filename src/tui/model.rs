@@ -81,6 +81,12 @@ pub struct Model {
     /// A transient status message shown above the footer (BDR 0007 S8).
     /// Cleared by `update` at the start of every key-driven `Msg`.
     pub status: Option<StatusMsg>,
+    /// True while a background revalidation fetch is in flight (BDR 0008): a
+    /// warm entry paints the cached snapshot immediately with this set, and
+    /// `entry_cmds` dispatches the single `Cmd::RevalidateList` seam for it.
+    /// Submitting a search clears it, so a late revalidation result never
+    /// clobbers fresher search results (S4).
+    pub revalidating: bool,
 }
 
 /// Builds the identity header text: "{email} · {instance}" from the first
@@ -116,6 +122,13 @@ pub enum Msg {
     OpenLink,
     CopyKey,
     FocusNextLink,
+    /// The background entry revalidation (BDR 0008 S2) completed: fresh rows
+    /// + paging cursor, applied only while `revalidating` is still true.
+    RevalidationLoaded(Vec<IssueRow>, Option<String>),
+    /// The background entry revalidation (BDR 0008 S5) failed: the message
+    /// (already mapped to the E2 re-auth guidance for a 401), surfaced only
+    /// while `revalidating` is still true.
+    RevalidationFailed(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -126,6 +139,20 @@ pub enum Cmd {
     LoadMore(String, String),
     OpenUrl(String),
     CopyToClipboard(String),
+    /// The one-shot entry revalidation fetch (BDR 0008 S1), dispatched by
+    /// `entry_cmds` immediately after a warm `Model` is constructed.
+    RevalidateList,
+}
+
+/// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
+/// S1 seam): a warm entry (`revalidating: true`) kicks off exactly one
+/// background revalidation; a cold entry emits nothing.
+pub fn entry_cmds(model: &Model) -> Vec<Cmd> {
+    if model.revalidating {
+        vec![Cmd::RevalidateList]
+    } else {
+        vec![]
+    }
 }
 
 /// Pure state transition — no I/O, no terminal, no clock.
@@ -150,6 +177,8 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::OpenLink => update_open_link(model),
         Msg::CopyKey => update_copy_key(model),
         Msg::FocusNextLink => update_focus_next_link(model),
+        Msg::RevalidationLoaded(rows, token) => update_revalidation_loaded(model, rows, token),
+        Msg::RevalidationFailed(msg) => update_revalidation_failed(model, msg),
     }
 }
 
@@ -171,7 +200,12 @@ fn clear_status_on_key_event(model: Model, msg: &Msg) -> Model {
 fn is_reply_msg(msg: &Msg) -> bool {
     matches!(
         msg,
-        Msg::DetailLoaded(_) | Msg::ListLoaded(_, _) | Msg::MoreLoaded(_, _) | Msg::LoadFailed(_)
+        Msg::DetailLoaded(_)
+            | Msg::ListLoaded(_, _)
+            | Msg::MoreLoaded(_, _)
+            | Msg::LoadFailed(_)
+            | Msg::RevalidationLoaded(_, _)
+            | Msg::RevalidationFailed(_)
     )
 }
 
@@ -321,12 +355,16 @@ fn update_search_backspace(model: Model) -> (Model, Vec<Cmd>) {
     (Model { search, ..model }, vec![])
 }
 
+/// Submitting a search also clears `revalidating` (BDR 0008 S4), so an
+/// eventual late `RevalidationLoaded`/`RevalidationFailed` from the entry
+/// revalidation is ignored — the fresher search result wins.
 fn update_submit_search(model: Model) -> (Model, Vec<Cmd>) {
     match &model.search {
         Some(q) if !q.is_empty() => {
             let jql = q.clone();
             let next = Model {
                 jql: jql.clone(),
+                revalidating: false,
                 ..model
             };
             (next, vec![Cmd::LoadList(jql)])
@@ -379,8 +417,12 @@ fn update_more_loaded(
 }
 
 /// Emits `Cmd::LoadMore` only on the list screen with a pending paging
-/// cursor; a no-op otherwise (last page already loaded, or on Detail).
+/// cursor; a no-op otherwise (last page already loaded, or on Detail), and
+/// while a revalidation is in flight — dropped, not queued (BDR 0008 S6).
 fn update_load_more(model: Model) -> (Model, Vec<Cmd>) {
+    if model.revalidating {
+        return (model, vec![]);
+    }
     if model.screen == Screen::List {
         if let Some(token) = model.next_page_token.clone() {
             let jql = model.jql.clone();
@@ -440,6 +482,47 @@ fn update_focus_next_link(model: Model) -> (Model, Vec<Cmd>) {
     let next_index = model.detail_focused_link.map_or(0, |i| (i + 1) % len);
     let next = Model {
         detail_focused_link: Some(next_index),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// A background revalidation swaps in the fresh rows, clamps selection (not
+/// reset), and restores the paging cursor (BDR 0008 S2) — but only while
+/// `revalidating` is still true; a stale result arriving after a newer
+/// action (which clears the flag) is a pure no-op (S4).
+fn update_revalidation_loaded(
+    model: Model,
+    rows: Vec<IssueRow>,
+    next_page_token: Option<String>,
+) -> (Model, Vec<Cmd>) {
+    if !model.revalidating {
+        return (model, vec![]);
+    }
+    let selected = model.selected.min(rows.len().saturating_sub(1));
+    let next = Model {
+        rows,
+        selected,
+        next_page_token,
+        revalidating: false,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// A failed revalidation keeps the painted rows and surfaces the message on
+/// the status row in the Error style (BDR 0008 S5) — but only while
+/// `revalidating` is still true; a no-op otherwise (S4).
+fn update_revalidation_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
+    if !model.revalidating {
+        return (model, vec![]);
+    }
+    let next = Model {
+        revalidating: false,
+        status: Some(StatusMsg {
+            text: msg,
+            kind: StatusKind::Error,
+        }),
         ..model
     };
     (next, vec![])

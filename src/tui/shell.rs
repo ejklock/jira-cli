@@ -12,13 +12,21 @@ use crate::client::{ClientError, GouqiJiraClient, JiraClient};
 use crate::commands::{reauth_message, DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow, SearchResult};
-use crate::store::cache::{IssueCache, TaskCache};
+use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
-use super::model::{update, Cmd, Identity, Model, Msg, Screen};
+use super::model::{entry_cmds, update, Cmd, Identity, Model, Msg, Screen};
 use super::view::view;
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
+
+/// The task-list snapshot's max age (ADR 0016 §1): generous, since a
+/// revalidation always follows a warm entry.
+const TASK_LIST_MAX_AGE_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// The only list scope entry snapshots (ADR 0016 §4): search results and
+/// load-more pages are never snapshotted.
+const LIST_SCOPE: &str = "mine";
 
 /// Entry point for `jira browse`.
 ///
@@ -42,11 +50,18 @@ pub async fn browse(
     }
 }
 
+/// A warm snapshot (ADR 0016 §1) opens the TUI immediately with no network
+/// call; a cold entry keeps the pre-TUI blocking fetch byte-identically
+/// (stderr contract incl. E2 401) and seeds the snapshot on success.
 pub(crate) async fn fetch_and_run(
     instance: &Instance,
     cache: &TaskCache<'_>,
     stderr: &mut impl Write,
 ) -> i32 {
+    if let Some(rows) = read_snapshot(cache, instance) {
+        return run_tui(rows, None, instance, cache, true).await;
+    }
+
     let client = match GouqiJiraClient::new(instance) {
         Ok(c) => c,
         Err(e) => {
@@ -63,7 +78,38 @@ pub(crate) async fn fetch_and_run(
         }
     };
 
-    run_tui(result.issues, result.next_page_token, instance, cache).await
+    write_snapshot(cache, instance, &result.issues);
+    run_tui(
+        result.issues,
+        result.next_page_token,
+        instance,
+        cache,
+        false,
+    )
+    .await
+}
+
+/// Reads the warm task-list snapshot for `instance` (ADR 0016 §1, mine scope
+/// only). No row, a stale row (past `TASK_LIST_MAX_AGE_SECS`), or undeserializable
+/// JSON are all treated the same: a cold entry, never an error.
+pub(super) fn read_snapshot(cache: &TaskCache<'_>, instance: &Instance) -> Option<Vec<IssueRow>> {
+    let list_cache = TaskListCache::new(cache.conn());
+    let key = instances_key(std::slice::from_ref(instance));
+    let list_json = list_cache
+        .read(LIST_SCOPE, &key, TASK_LIST_MAX_AGE_SECS)
+        .ok()??;
+    serde_json::from_str(&list_json).ok()
+}
+
+/// Writes the mine-scope task-list snapshot for `instance` (ADR 0016 §4).
+/// Serialization/write failures are ignored — the cache is best-effort.
+pub(super) fn write_snapshot(cache: &TaskCache<'_>, instance: &Instance, rows: &[IssueRow]) {
+    let Ok(list_json) = serde_json::to_string(rows) else {
+        return;
+    };
+    let list_cache = TaskListCache::new(cache.conn());
+    let key = instances_key(std::slice::from_ref(instance));
+    let _ = list_cache.write(LIST_SCOPE, &key, &list_json);
 }
 
 async fn run_tui(
@@ -71,6 +117,7 @@ async fn run_tui(
     next_page_token: Option<String>,
     instance: &Instance,
     cache: &TaskCache<'_>,
+    revalidating: bool,
 ) -> i32 {
     let mut stdout = io::stdout();
     if enable_raw_mode().is_err() {
@@ -109,6 +156,7 @@ async fn run_tui(
             instance: instance.name.clone(),
         }],
         status: None,
+        revalidating,
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
@@ -180,6 +228,10 @@ async fn event_loop(
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
     let mut events = EventStream::new();
 
+    model = entry_cmds(&model)
+        .into_iter()
+        .fold(model, |m, cmd| dispatch_cmd(cmd, m, instance, cache, &tx));
+
     loop {
         let _ = terminal.draw(|frame| view(&model, frame));
 
@@ -217,7 +269,9 @@ fn handle_terminal_event(
 }
 
 /// A reply from a spawned `Cmd` effect. A completed detail fetch is cached here
-/// (never inside the spawned task, which owns no borrow of `cache`).
+/// (never inside the spawned task, which owns no borrow of `cache`); a
+/// completed revalidation rewrites the mine-scope snapshot (BDR 0008 S2)
+/// before the guarded swap in `update` runs.
 fn handle_reply(
     msg: Msg,
     model: Model,
@@ -227,6 +281,9 @@ fn handle_reply(
 ) -> StepOutcome {
     if let Msg::DetailLoaded(ref issue) = msg {
         cache_detail(cache, &instance.name, issue);
+    }
+    if let Msg::RevalidationLoaded(ref rows, _) = msg {
+        write_snapshot(cache, instance, rows);
     }
     apply_msg(model, msg, instance, cache, tx)
 }
@@ -272,6 +329,10 @@ fn dispatch_cmd(
         }
         Cmd::LoadMore(jql, token) => {
             spawn_load_more(jql, token, instance.clone(), tx.clone());
+            model
+        }
+        Cmd::RevalidateList => {
+            spawn_revalidate_list(instance.clone(), tx.clone());
             model
         }
     }
@@ -328,6 +389,24 @@ fn spawn_load_list(jql: String, instance: Instance, tx: mpsc::UnboundedSender<Ms
                 Msg::LoadFailed(reauth_message(&instance))
             }
             Err(e) => Msg::LoadFailed(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+/// Spawns the entry revalidation fetch (BDR 0008 S1/S2/S5); mirrors
+/// `spawn_load_list`'s reply-channel and error-string shape (same
+/// `Unauthorized -> reauth_message` mapping for E2 parity) but reports
+/// through `Msg::RevalidationLoaded`/`Msg::RevalidationFailed` so the
+/// single-flight guard in `update` can tell it apart from a user search.
+fn spawn_revalidate_list(instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match run_search(&instance, MINE_JQL).await {
+            Ok(result) => Msg::RevalidationLoaded(result.issues, result.next_page_token),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::RevalidationFailed(reauth_message(&instance))
+            }
+            Err(e) => Msg::RevalidationFailed(e.to_string()),
         };
         let _ = tx.send(msg);
     });

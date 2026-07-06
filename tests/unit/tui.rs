@@ -1,11 +1,12 @@
 use super::*;
 
-use super::model::{footer_mode, FooterMode, StatusKind, StatusMsg};
-use super::shell::{map_key_in_normal_mode, map_key_in_search_mode};
+use super::model::{entry_cmds, footer_mode, FooterMode, StatusKind, StatusMsg};
+use super::shell::{map_key_in_normal_mode, map_key_in_search_mode, read_snapshot};
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
+use crate::store::cache::{instances_key, TaskListCache};
 use crate::test_support::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
@@ -54,6 +55,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         detail_focused_link: None,
         identities: vec![],
         status: None,
+        revalidating: false,
     }
 }
 
@@ -83,6 +85,20 @@ fn open_in_memory_store() -> rusqlite::Connection {
     )
     .unwrap();
     conn
+}
+
+/// A fully-migrated on-disk store (unlike `open_in_memory_store`'s minimal
+/// hand-rolled schema): needed by the `task_list_cache` snapshot tests (BDR
+/// 0008 S2/S3/S7), which imitates `tests/unit/store/cache.rs`'s `make_store`.
+fn open_temp_store() -> (tempfile::TempDir, crate::store::Store) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let config = crate::config::Config {
+        db_path,
+        task_cache_ttl_hours: 24,
+    };
+    let store = crate::store::Store::open(&config).unwrap();
+    (dir, store)
 }
 
 fn render_to_buffer(model: &Model, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -454,6 +470,283 @@ async fn fetch_error_writes_error_message_to_stderr() {
         err_output.contains("Error"),
         "stderr must contain 'Error'; got: {err_output:?}"
     );
+}
+
+// ---- e3-swr-first-paint-browse-entry (ADR 0016 / BDR 0008) ----
+
+// ---- S3: cold fetch_and_run success writes the mine-scope snapshot;
+// existing failure-path tests above stay untouched (no-drift guard) ----
+
+#[tokio::test]
+async fn fetch_and_run_cold_success_writes_the_mine_scope_snapshot() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_search_payload_with_key("SNAP-1")),
+        )
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let mut stderr = Vec::<u8>::new();
+
+    // fetch_and_run opens the TUI on success; bounding it keeps the test from
+    // hanging in an environment where a real terminal happens to be attached
+    // (the snapshot write under test always runs before that point).
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        fetch_and_run(&instance, &cache, &mut stderr),
+    )
+    .await;
+
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    let stored = list_cache
+        .read("mine", &key, 3600)
+        .expect("read must not error");
+    let stored = stored.expect("cold success must write the (\"mine\", instances_key) row");
+    assert!(
+        stored.contains("SNAP-1"),
+        "the stored snapshot must contain the fetched issue; got: {stored}"
+    );
+}
+
+// ---- read_snapshot: warm row, corrupt json, and over-max-age rows ----
+
+#[test]
+fn read_snapshot_returns_rows_for_a_warm_row() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+    let rows = make_rows(&["PROJ-1", "PROJ-2"]);
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    list_cache
+        .write("mine", &key, &serde_json::to_string(&rows).unwrap())
+        .unwrap();
+
+    let result = read_snapshot(&cache, &instance);
+
+    assert_eq!(
+        result.map(|r| r.into_iter().map(|row| row.key).collect::<Vec<_>>()),
+        Some(vec!["PROJ-1".to_owned(), "PROJ-2".to_owned()])
+    );
+}
+
+#[test]
+fn read_snapshot_returns_none_for_corrupt_json() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    list_cache.write("mine", &key, "not valid json").unwrap();
+
+    assert!(
+        read_snapshot(&cache, &instance).is_none(),
+        "undeserializable JSON must be a cold entry, never an error"
+    );
+}
+
+#[test]
+fn read_snapshot_returns_none_for_a_row_older_than_max_age() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    let rows = make_rows(&["PROJ-1"]);
+    let stale_ts = crate::store::now_epoch_secs() - (8 * 24 * 60 * 60);
+    list_cache
+        .write_with_fetched_at(
+            "mine",
+            &key,
+            &serde_json::to_string(&rows).unwrap(),
+            stale_ts,
+        )
+        .unwrap();
+
+    assert!(
+        read_snapshot(&cache, &instance).is_none(),
+        "a row older than the 7-day max-age must be a cold entry"
+    );
+}
+
+#[test]
+fn read_snapshot_returns_none_when_no_row_exists() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+
+    assert!(read_snapshot(&cache, &instance).is_none());
+}
+
+// ---- S1: entry_cmds — the pure warm/cold seam ----
+
+#[test]
+fn entry_cmds_warm_yields_exactly_one_revalidate_list() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.revalidating = true;
+
+    assert_eq!(entry_cmds(&model), vec![Cmd::RevalidateList]);
+}
+
+#[test]
+fn entry_cmds_cold_yields_no_cmds() {
+    let model = make_list_model(&["PROJ-1"]);
+    assert!(!model.revalidating);
+
+    assert!(entry_cmds(&model).is_empty());
+}
+
+// ---- S2: RevalidationLoaded swaps rows, clamps selection, restores token ----
+
+#[test]
+fn update_revalidation_loaded_swaps_rows_clamps_selection_and_clears_flag() {
+    let mut model = make_list_model(&["OLD-1", "OLD-2", "OLD-3"]);
+    model.revalidating = true;
+    model.selected = 2;
+
+    let new_rows = vec![make_row("NEW-1"), make_row("NEW-2")];
+    let (next, cmds) = update(
+        model,
+        Msg::RevalidationLoaded(new_rows, Some("fresh-token".to_owned())),
+    );
+
+    assert_eq!(
+        next.rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+        vec!["NEW-1".to_owned(), "NEW-2".to_owned()],
+        "RevalidationLoaded must swap in the fresh rows"
+    );
+    assert_eq!(
+        next.selected, 1,
+        "selection must clamp to the new last index, not reset to 0"
+    );
+    assert_eq!(next.next_page_token.as_deref(), Some("fresh-token"));
+    assert!(
+        !next.revalidating,
+        "revalidating must clear once the swap applies"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S4: a late RevalidationLoaded never clobbers a newer search ----
+
+#[test]
+fn update_revalidation_loaded_when_not_revalidating_is_a_pure_noop() {
+    let model = make_list_model(&["SEARCH-1"]);
+    assert!(!model.revalidating);
+
+    let (next, cmds) = update(
+        model,
+        Msg::RevalidationLoaded(vec![make_row("STALE-1")], Some("stale-token".to_owned())),
+    );
+
+    assert_eq!(
+        next.rows[0].key, "SEARCH-1",
+        "a late revalidation result must not clobber the current rows"
+    );
+    assert!(next.next_page_token.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_submit_search_clears_revalidating_so_a_later_revalidation_is_ignored() {
+    let mut model = make_list_model(&["OLD-1"]);
+    model.revalidating = true;
+    model.search = Some("project = NEW".to_owned());
+
+    let (after_search, cmds) = update(model, Msg::SubmitSearch);
+    assert!(
+        !after_search.revalidating,
+        "submitting a search must clear revalidating"
+    );
+    assert_eq!(cmds, vec![Cmd::LoadList("project = NEW".to_owned())]);
+
+    let (after_search_result, _) = update(
+        after_search,
+        Msg::ListLoaded(vec![make_row("FRESH-1")], None),
+    );
+    assert_eq!(after_search_result.rows[0].key, "FRESH-1");
+
+    let (after_stale_revalidation, _) = update(
+        after_search_result,
+        Msg::RevalidationLoaded(vec![make_row("STALE-1")], None),
+    );
+
+    assert_eq!(
+        after_stale_revalidation.rows[0].key, "FRESH-1",
+        "a revalidation result arriving after a newer search must be ignored"
+    );
+}
+
+// ---- S5: RevalidationFailed keeps the painted rows and surfaces D4 status ----
+
+#[test]
+fn update_revalidation_failed_keeps_rows_clears_flag_and_sets_error_status() {
+    let mut model = make_list_model(&["KEEP-1", "KEEP-2"]);
+    model.revalidating = true;
+
+    let (next, cmds) = update(model, Msg::RevalidationFailed("network down".to_owned()));
+
+    assert_eq!(
+        next.rows.len(),
+        2,
+        "the painted rows must be kept on a revalidation failure"
+    );
+    assert!(!next.revalidating, "revalidating must clear on failure");
+    let status = next
+        .status
+        .expect("RevalidationFailed must set a status message");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "network down");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_revalidation_failed_when_not_revalidating_is_a_pure_noop() {
+    let model = make_list_model(&["KEEP-1"]);
+
+    let (next, cmds) = update(
+        model,
+        Msg::RevalidationFailed("should be ignored".to_owned()),
+    );
+
+    assert!(
+        next.status.is_none(),
+        "a RevalidationFailed with no revalidation in flight must not set a status"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S6: single-flight — load-more is dropped while revalidating ----
+
+#[test]
+fn update_load_more_while_revalidating_drops_and_leaves_model_unchanged() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.revalidating = true;
+    model.next_page_token = Some("page-2-token".to_owned());
+
+    let (next, cmds) = update(model, Msg::LoadMore);
+
+    assert!(
+        cmds.is_empty(),
+        "load-more while revalidating must emit no Cmd"
+    );
+    assert!(next.revalidating, "the revalidating flag must be unchanged");
+    assert_eq!(next.next_page_token.as_deref(), Some("page-2-token"));
 }
 
 // ---- B2: AC1 — Select on non-empty list sets screen=Detail and emits LoadDetail ----

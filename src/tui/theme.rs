@@ -14,6 +14,15 @@ pub fn header_bar() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// The dim "refreshing…" indicator on the header bar's right side while a
+/// background revalidation is in flight (ADR 0016 §5, BDR 0008 S8).
+pub fn header_refreshing() -> Style {
+    Style::default()
+        .fg(Color::Rgb(140, 165, 196))
+        .bg(Color::Rgb(38, 52, 74))
+        .add_modifier(Modifier::DIM)
+}
+
 // Issue 0030 lands the full palette up front (ADR 0014 §1); `badge`,
 // `selected`, `due_overdue` and `due_near` gained production callers in the
 // D2 list-card renderer (issue 0031); `section_title` gained one in the D3

@@ -37,10 +37,31 @@ pub fn view(model: &Model, frame: &mut Frame) {
 }
 
 /// Renders the identity header bar (ADR 0014 §2, BDR 0007 S1) into the
-/// screen's reserved top row, themed via `theme::header_bar()`.
+/// screen's reserved top row, themed via `theme::header_bar()`; while
+/// `model.revalidating` the dim "refreshing…" indicator (BDR 0008 S8) is
+/// overlaid on the row's right side without disturbing the identity text.
 fn render_header(frame: &mut Frame, chunk: Rect, model: &Model) {
     let header = Paragraph::new(header_line(&model.identities)).style(theme::header_bar());
     frame.render_widget(header, chunk);
+
+    if model.revalidating {
+        render_refreshing_indicator(frame, chunk);
+    }
+}
+
+/// Renders "refreshing…" right-aligned within a narrow slice of the header
+/// row's right side (BDR 0008 S8), so the identity text on the left survives.
+fn render_refreshing_indicator(frame: &mut Frame, chunk: Rect) {
+    let label = t("refreshing…");
+    let width = (UnicodeWidthStr::width(label.as_str()) as u16).min(chunk.width);
+    let area = Rect {
+        x: chunk.x + (chunk.width - width),
+        y: chunk.y,
+        width,
+        height: chunk.height,
+    };
+    let indicator = Paragraph::new(label).style(theme::header_refreshing());
+    frame.render_widget(indicator, area);
 }
 
 fn view_list(model: &Model, frame: &mut Frame) {
