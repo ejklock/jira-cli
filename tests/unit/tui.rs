@@ -48,6 +48,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         next_page_token: None,
         detail_links: vec![],
         detail_focused_link: None,
+        identities: vec![],
     }
 }
 

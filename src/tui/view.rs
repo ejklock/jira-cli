@@ -6,7 +6,8 @@ use ratatui::{
     Frame,
 };
 
-use super::model::{Model, Screen};
+use super::model::{header_line, Model, Screen};
+use super::theme;
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow};
 use crate::render::{adf_to_rich, relative_due, today_days_now, RichLine, RichSpan, RichStyle};
@@ -24,6 +25,13 @@ pub fn view(model: &Model, frame: &mut Frame) {
     }
 }
 
+/// Renders the identity header bar (ADR 0014 §2, BDR 0007 S1) into the
+/// screen's reserved top row, themed via `theme::header_bar()`.
+fn render_header(frame: &mut Frame, chunk: Rect, model: &Model) {
+    let header = Paragraph::new(header_line(&model.identities)).style(theme::header_bar());
+    frame.render_widget(header, chunk);
+}
+
 fn view_list(model: &Model, frame: &mut Frame) {
     let area = frame.area();
 
@@ -31,6 +39,7 @@ fn view_list(model: &Model, frame: &mut Frame) {
     let has_error_banner = model.error.is_some();
 
     let chunks = list_layout_chunks(area, has_search_bar, has_error_banner);
+    render_header(frame, chunks[0], model);
     let mut chunk_idx = 1usize;
 
     if has_search_bar {
@@ -53,13 +62,15 @@ fn view_list(model: &Model, frame: &mut Frame) {
 
     render_list_table(frame, chunks[chunk_idx], model);
 
-    let hint = Paragraph::new(list_footer_hint(model, has_search_bar)).alignment(Alignment::Center);
+    let hint = Paragraph::new(list_footer_hint(model, has_search_bar))
+        .alignment(Alignment::Center)
+        .style(theme::footer());
     frame.render_widget(hint, chunks[chunk_idx + 1]);
 }
 
-/// Builds the `view_list` vertical layout: the optional search bar and error
-/// banner rows are only reserved when active, sandwiched between the fixed
-/// top row and the table/footer pair.
+/// Builds the `view_list` vertical layout: the header occupies the fixed top
+/// row; the optional search bar and error banner rows are only reserved when
+/// active, sandwiched between the header and the table/footer pair.
 fn list_layout_chunks(
     area: Rect,
     has_search_bar: bool,
@@ -183,8 +194,11 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
         ])
         .split(area);
 
-    let footer =
-        Paragraph::new(t("↑/↓ j/k scroll  Esc/b back  q quit")).alignment(Alignment::Center);
+    render_header(frame, chunks[0], model);
+
+    let footer = Paragraph::new(t("↑/↓ j/k scroll  Esc/b back  q quit"))
+        .alignment(Alignment::Center)
+        .style(theme::footer());
     frame.render_widget(footer, chunks[2]);
 
     match &model.detail {

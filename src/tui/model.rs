@@ -7,6 +7,15 @@ pub enum Screen {
     Detail,
 }
 
+/// A logged-in identity (email + instance name) shown in the header bar
+/// (ADR 0014 §2, BDR 0007 S1). Plain data — the shell populates it from
+/// already-loaded instance configuration; the domain core never fetches it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Identity {
+    pub email: String,
+    pub instance: String,
+}
+
 pub struct Model {
     pub rows: Vec<IssueRow>,
     pub selected: usize,
@@ -28,6 +37,23 @@ pub struct Model {
     /// Index into `detail_links` of the currently focused link, or `None`
     /// when there are no links.
     pub detail_focused_link: Option<usize>,
+    /// Logged-in identities shown in the header bar. Set once by the shell
+    /// before entering the event loop; empty when none are configured.
+    pub identities: Vec<Identity>,
+}
+
+/// Builds the identity header text: "{email} · {instance}" from the first
+/// identity, with " (+N more)" appended when aggregating several instances
+/// (ADR 0014 §2, BDR 0007 S1). Empty when no identities are set.
+pub fn header_line(identities: &[Identity]) -> String {
+    let Some(first) = identities.first() else {
+        return String::new();
+    };
+    let mut line = format!("{} · {}", first.email, first.instance);
+    if identities.len() > 1 {
+        line.push_str(&format!(" (+{} more)", identities.len() - 1));
+    }
+    line
 }
 
 pub enum Msg {

@@ -15,7 +15,7 @@ use crate::models::{Issue, IssueRow, SearchResult};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::Instance;
 
-use super::model::{update, Cmd, Model, Msg, Screen};
+use super::model::{update, Cmd, Identity, Model, Msg, Screen};
 use super::view::view;
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
@@ -104,6 +104,10 @@ async fn run_tui(
         next_page_token,
         detail_links: vec![],
         detail_focused_link: None,
+        identities: vec![Identity {
+            email: instance.email.clone(),
+            instance: instance.name.clone(),
+        }],
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 

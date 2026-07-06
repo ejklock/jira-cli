@@ -1,5 +1,6 @@
 mod model;
 mod shell;
+pub mod theme;
 mod view;
 
 // `mod tests` (gated on cfg(test)) is the only consumer of these re-exports,
@@ -16,3 +17,7 @@ pub(crate) use shell::{fetch_and_run, run_search};
 #[cfg(test)]
 #[path = "../../tests/unit/tui.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/tui_render.rs"]
+mod render_tests;
