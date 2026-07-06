@@ -44,6 +44,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0035](/issues/0035-e2-401-reauth-messaging.md) | E2 | actionable 401 re-auth messaging (CLI + TUI status line) | done | 0033 |
 | [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | done | 0033 |
 | [0037](/issues/0037-b1-mouse-foundations.md) | B1 | mouse foundations: capture, wheel navigation, card click drills in | done | — |
+| [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | open | — |
+| [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | open | 0037, 0038 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -101,9 +103,15 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   **B1** = [0037](/issues/0037-b1-mouse-foundations.md) mouse foundations
   ([ADR 0017](/adr/0017-mouse-support-browse-tui.md),
   [BDR 0009](/bdr/0009-browse-mouse-interactions.md)) **done**;
-  **B2** app-managed text selection + clipboard; **B3** inline body links +
-  Ctrl/Cmd+click (detail hit-testing); **B4** attachments panel;
-  **B5** Projects→Issues axis. Per-slice ADRs at execution time.
+  **B2** inline body links + Ctrl/Cmd+click, sliced
+  [0038](/issues/0038-b2a-inline-link-rendering.md) +
+  [0039](/issues/0039-b2b-modifier-click-link-activation.md)
+  ([ADR 0018](/adr/0018-inline-body-links-modifier-click.md),
+  [BDR 0010](/bdr/0010-inline-body-link-behaviors.md)) *in progress* —
+  links before selection, mirroring the fork's dependency arc (the detail
+  hit geometry selection reuses); **B3** app-managed text selection +
+  clipboard; **B4** attachments panel; **B5** Projects→Issues axis.
+  Per-slice ADRs at execution time.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
 

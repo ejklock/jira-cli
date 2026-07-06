@@ -23,3 +23,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0015](/adr/0015-comment-write-enablement.md) | Comment write enablement — POST/PUT/DELETE on the comment endpoints only | Accepted |
 | [0016](/adr/0016-swr-first-paint-browse-entry.md) | First-paint-from-cache SWR on browse entry (task-list snapshot) | Accepted |
 | [0017](/adr/0017-mouse-support-browse-tui.md) | Mouse support in the browse TUI (capture lifecycle, wheel, card click) | Accepted |
+| [0018](/adr/0018-inline-body-links-modifier-click.md) | Inline body links ('text [url]') with modifier-gated click activation | Accepted |
