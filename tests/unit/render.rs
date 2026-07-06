@@ -890,6 +890,8 @@ fn make_issue_row(
         summary: summary.to_string(),
         status: status.to_string(),
         assignee: assignee.map(|s| s.to_string()),
+        duedate: None,
+        project: None,
     }
 }
 

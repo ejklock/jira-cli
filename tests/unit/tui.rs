@@ -27,6 +27,8 @@ fn make_row(key: &str) -> IssueRow {
         status: "Open".to_owned(),
         assignee: Some("Alice".to_owned()),
         summary: "Fix something".to_owned(),
+        duedate: None,
+        project: None,
     }
 }
 
@@ -339,29 +341,21 @@ fn update_up_never_emits_cmd_quit() {
 
 // ---- B1: AC3 — view renders to TestBackend buffer ----
 
+// issue 0031 (D2): the list Table (with KEY/TYPE/STATUS/ASSIGNEE/SUMMARY
+// column headers) was replaced by per-issue cards with no header row; card
+// content coverage lives in tests/unit/tui_render.rs (BDR 0007 S2-S4).
 #[test]
-fn view_renders_header_columns_with_issues() {
+fn view_renders_each_issue_as_a_card_showing_key_and_status() {
     let _lock = LANG_MUTEX.lock().unwrap();
     let model = make_list_model(&["PROJ-1", "PROJ-2"]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
 
+    assert!(text.contains("PROJ-1"), "PROJ-1 key must appear in buffer");
+    assert!(text.contains("PROJ-2"), "PROJ-2 key must appear in buffer");
     assert!(
-        text.contains("KEY") || text.contains("CHAVE"),
-        "header KEY missing"
-    );
-    assert!(
-        text.contains("TYPE") || text.contains("TIPO"),
-        "header TYPE missing"
-    );
-    assert!(text.contains("STATUS"), "header STATUS missing");
-    assert!(
-        text.contains("ASSIGNEE") || text.contains("RESPONSÁVEL"),
-        "header ASSIGNEE missing"
-    );
-    assert!(
-        text.contains("SUMMARY") || text.contains("RESUMO"),
-        "header SUMMARY missing"
+        text.contains("Open"),
+        "card meta line must show the row's status; got: {text}"
     );
 }
 
@@ -387,23 +381,6 @@ fn view_empty_model_renders_no_issues_notice() {
     assert!(
         text.contains("No issues.") || text.contains("Nenhuma issue encontrada."),
         "empty model must show 'No issues.' notice; got: {text}"
-    );
-}
-
-#[test]
-fn view_empty_model_still_renders_header_columns() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    let model = make_list_model(&[]);
-    let buf = render_to_buffer(&model, 120, 20);
-    let text = buffer_text(&buf);
-
-    assert!(
-        text.contains("KEY") || text.contains("CHAVE"),
-        "header KEY missing on empty model"
-    );
-    assert!(
-        text.contains("STATUS"),
-        "header STATUS missing on empty model"
     );
 }
 

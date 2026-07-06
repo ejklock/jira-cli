@@ -1,8 +1,8 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Text},
-    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Wrap},
+    text::{Line, Span, Text},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -10,7 +10,14 @@ use super::model::{header_line, Model, Screen};
 use super::theme;
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow};
-use crate::render::{adf_to_rich, relative_due, today_days_now, RichLine, RichSpan, RichStyle};
+use crate::render::{
+    adf_to_rich, due_day_delta, relative_due, today_days_now, RichLine, RichSpan, RichStyle,
+};
+
+/// The fixed terminal-row height of one list card (BDR 0007 S2): rounded top
+/// border, `KEY summary`, `{due} · {status} · {project}`, rounded bottom
+/// border.
+const CARD_HEIGHT: u16 = 4;
 
 const LOADING_NOTICE: &str = "Loading…";
 const SEARCH_PROMPT: &str = "JQL> ";
@@ -60,7 +67,7 @@ fn view_list(model: &Model, frame: &mut Frame) {
         chunk_idx += 1;
     }
 
-    render_list_table(frame, chunks[chunk_idx], model);
+    render_list_cards(frame, chunks[chunk_idx], model);
 
     let hint = Paragraph::new(list_footer_hint(model, has_search_bar))
         .alignment(Alignment::Center)
@@ -103,67 +110,173 @@ fn render_error_banner(frame: &mut Frame, chunk: Rect, msg: &str) {
     frame.render_widget(banner, chunk);
 }
 
-fn render_list_table(frame: &mut Frame, chunk: Rect, model: &Model) {
-    let header_cells = [
-        t("KEY"),
-        t("TYPE"),
-        t("STATUS"),
-        t("ASSIGNEE"),
-        t("SUMMARY"),
-    ]
-    .into_iter()
-    .map(|h| Cell::from(h).style(Style::default().add_modifier(Modifier::BOLD)));
-
-    let header_row = Row::new(header_cells).height(1);
-
-    let widths = [
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(14),
-        Constraint::Length(20),
-        Constraint::Min(20),
-    ];
-
-    let table = if model.rows.is_empty() {
-        Table::new([Row::new([Cell::from(t("No issues."))])], widths)
-    } else {
-        let data_rows: Vec<Row> = model
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| list_row(row, i == model.selected))
-            .collect();
-        Table::new(data_rows, widths)
+/// Renders the list content region as stacked per-issue cards (BDR 0007 S2-S4),
+/// windowing the visible slice so the selected card always stays in view.
+fn render_list_cards(frame: &mut Frame, chunk: Rect, model: &Model) {
+    if model.rows.is_empty() {
+        let notice = Paragraph::new(t("No issues.")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        );
+        frame.render_widget(notice, chunk);
+        return;
     }
-    .header(header_row)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded),
-    );
 
-    frame.render_widget(table, chunk);
+    let today = today_days_now();
+    let visible = (chunk.height / CARD_HEIGHT).max(1) as usize;
+    let first = first_visible_card(model.selected, model.rows.len(), visible);
+    let last = (first + visible).min(model.rows.len());
+
+    for (offset, row) in model.rows[first..last].iter().enumerate() {
+        let index = first + offset;
+        let card_area = Rect {
+            x: chunk.x,
+            y: chunk.y + (offset as u16 * CARD_HEIGHT),
+            width: chunk.width,
+            height: CARD_HEIGHT,
+        };
+        if card_area.y + CARD_HEIGHT > chunk.y + chunk.height {
+            break;
+        }
+        render_card(frame, card_area, row, index == model.selected, today);
+    }
 }
 
-fn list_row(row: &IssueRow, is_selected: bool) -> Row<'static> {
-    let assignee = row
-        .assignee
-        .as_deref()
-        .map(str::to_owned)
-        .unwrap_or_else(|| t("Unassigned"));
+/// Computes the first visible card index for the list's scroll window (BDR
+/// 0007 S4): keeps `selected` inside `[first, first + visible)`, clamped so
+/// the window never runs past the last card or before index 0.
+pub(crate) fn first_visible_card(selected: usize, count: usize, visible: usize) -> usize {
+    if visible == 0 || count <= visible {
+        return 0;
+    }
+    let max_first = count - visible;
+    let first = selected.saturating_sub(visible.saturating_sub(1));
+    first.min(max_first)
+}
 
-    let cells = [
-        Cell::from(row.key.clone()),
-        Cell::from(row.issue_type.clone()),
-        Cell::from(row.status.clone()),
-        Cell::from(assignee),
-        Cell::from(row.summary.clone()),
+/// Renders one issue card: a rounded-border block, `KEY summary` on the first
+/// content line, `{due} · {status} · {project}` on the second. A selected
+/// card is styled uniformly (border + both lines) with `theme::selected()`.
+fn render_card(frame: &mut Frame, area: Rect, row: &IssueRow, is_selected: bool, today: i64) {
+    let card_style = is_selected.then(theme::selected).unwrap_or_default();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(card_style);
+
+    let override_style = is_selected.then(theme::selected);
+    let lines = vec![
+        Line::from(card_title_spans(row, override_style)),
+        Line::from(card_meta_spans(row, today, override_style)),
     ];
 
-    if is_selected {
-        Row::new(cells).style(Style::default().add_modifier(Modifier::REVERSED))
+    let paragraph = Paragraph::new(Text::from(lines)).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+/// Builds the card's first line: `KEY summary`, the key styled as a badge
+/// (or overridden to the selection style when the card is selected).
+fn card_title_spans(row: &IssueRow, override_style: Option<Style>) -> Vec<Span<'static>> {
+    let key_style = override_style.unwrap_or_else(theme::badge);
+    let rest_style = override_style.unwrap_or_default();
+    vec![
+        Span::styled(row.key.clone(), key_style),
+        Span::styled(format!(" {}", row.summary), rest_style),
+    ]
+}
+
+/// One labeled value in a list card's meta line (BDR 0007 S2/S3): its display
+/// text and the style bucket it renders in.
+struct CardSegment {
+    text: String,
+    style: Style,
+}
+
+/// Builds the card's second line: `{due} · {status} · {project}`. The due
+/// segment always renders (falling back to the i18n "no due date" text);
+/// status and project are omitted when empty/absent, leaving no dangling
+/// `·` separator.
+fn card_meta_spans(
+    row: &IssueRow,
+    today_days: i64,
+    override_style: Option<Style>,
+) -> Vec<Span<'static>> {
+    let segments = card_meta_segments(row, today_days);
+    let mut spans = Vec::with_capacity(segments.len() * 2);
+    for (i, segment) in segments.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(
+                " · ".to_owned(),
+                override_style.unwrap_or_default(),
+            ));
+        }
+        let style = override_style.unwrap_or(segment.style);
+        spans.push(Span::styled(segment.text.clone(), style));
+    }
+    spans
+}
+
+/// The card's second-line text with no styling — `{due} · {status} · {project}`
+/// with empty/absent segments omitted (no dangling `·`). Exposed for pure
+/// unit tests of segment omission; [`card_meta_spans`] is the styled variant
+/// the renderer actually uses.
+#[cfg(test)]
+pub(crate) fn card_meta_line(row: &IssueRow, today_days: i64) -> String {
+    card_meta_segments(row, today_days)
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn card_meta_segments(row: &IssueRow, today_days: i64) -> Vec<CardSegment> {
+    let mut segments = vec![due_card_segment(row, today_days)];
+    if !row.status.is_empty() {
+        segments.push(CardSegment {
+            text: row.status.clone(),
+            style: Style::default(),
+        });
+    }
+    if let Some(project) = row.project.as_deref().filter(|p| !p.is_empty()) {
+        segments.push(CardSegment {
+            text: project.to_owned(),
+            style: Style::default(),
+        });
+    }
+    segments
+}
+
+/// Builds the due segment: the localized relative-due text colored by
+/// [`due_delta_style`], or the i18n "no due date" text in the default style
+/// when the row has no (parseable) due date.
+fn due_card_segment(row: &IssueRow, today_days: i64) -> CardSegment {
+    let parsed = row
+        .duedate
+        .as_deref()
+        .and_then(|d| due_day_delta(d, today_days).map(|delta| (d, delta)));
+
+    match parsed {
+        Some((duedate, delta)) => CardSegment {
+            text: relative_due(duedate, today_days).unwrap_or_default(),
+            style: due_delta_style(delta),
+        },
+        None => CardSegment {
+            text: t("no due date"),
+            style: Style::default(),
+        },
+    }
+}
+
+/// Maps a due day-delta to its display style (ADR 0014 §1): overdue red,
+/// near (0-2 days out) amber, otherwise the default style.
+fn due_delta_style(delta: i64) -> Style {
+    if delta < 0 {
+        theme::due_overdue()
+    } else if (0..=2).contains(&delta) {
+        theme::due_near()
     } else {
-        Row::new(cells)
+        Style::default()
     }
 }
 

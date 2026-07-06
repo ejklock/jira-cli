@@ -14,10 +14,11 @@ pub fn header_bar() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// Issue 0030 lands the full palette up front (ADR 0014 §1); the H2/H3
-// consolidation issues (0027-0029) wire these into table/badge/link
-// rendering. Until then only the render tests call them, so a plain
-// `cargo build` (which excludes `#[cfg(test)]`) sees them as unused.
+// Issue 0030 lands the full palette up front (ADR 0014 §1); `badge`,
+// `selected`, `due_overdue` and `due_near` gained production callers in the
+// D2 list-card renderer (issue 0031). `section_title`/`column_header`/`link`
+// still await later H2/H3 slices, so a plain `cargo build` (which excludes
+// `#[cfg(test)]`) would otherwise see them as unused.
 
 /// A section title inside a screen's content region.
 #[allow(dead_code)]
@@ -36,7 +37,6 @@ pub fn column_header() -> Style {
 }
 
 /// The currently selected row or item.
-#[allow(dead_code)]
 pub fn selected() -> Style {
     Style::default()
         .fg(Color::Rgb(13, 13, 13))
@@ -45,7 +45,6 @@ pub fn selected() -> Style {
 }
 
 /// A status/priority badge.
-#[allow(dead_code)]
 pub fn badge() -> Style {
     Style::default()
         .fg(Color::Rgb(210, 160, 90))
@@ -69,13 +68,11 @@ pub fn footer() -> Style {
 }
 
 /// An overdue due date.
-#[allow(dead_code)]
 pub fn due_overdue() -> Style {
     Style::default().fg(Color::Rgb(224, 108, 108))
 }
 
 /// A due date approaching soon.
-#[allow(dead_code)]
 pub fn due_near() -> Style {
     Style::default().fg(Color::Rgb(210, 160, 90))
 }

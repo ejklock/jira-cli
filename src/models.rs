@@ -59,6 +59,16 @@ pub struct IssueRow {
     pub summary: String,
     pub status: String,
     pub assignee: Option<String>,
+    /// Raw Jira due date as `"YYYY-MM-DD"`, or `None` when unset. TUI-only in
+    /// this slice (ADR 0004 freezes the CLI table and agent_json list shape).
+    /// `#[serde(default)]` keeps pre-field cached JSON deserializable.
+    #[serde(default)]
+    pub duedate: Option<String>,
+    /// The issue's project name, falling back to the project key when the
+    /// name is absent. TUI-only in this slice; `#[serde(default)]` keeps
+    /// pre-field cached JSON deserializable.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// The result of a JQL search — a page of issue rows.

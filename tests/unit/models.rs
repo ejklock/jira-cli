@@ -80,6 +80,8 @@ fn search_result_with_multiple_rows() {
                 summary: "First".to_string(),
                 status: "Open".to_string(),
                 assignee: Some("Alice".to_string()),
+                duedate: None,
+                project: None,
             },
             IssueRow {
                 key: "A-2".to_string(),
@@ -87,6 +89,8 @@ fn search_result_with_multiple_rows() {
                 summary: "Second".to_string(),
                 status: "Done".to_string(),
                 assignee: None,
+                duedate: None,
+                project: None,
             },
         ],
         total: 2,
@@ -124,6 +128,8 @@ fn issue_row_with_issue_type_roundtrips_through_serde() {
         summary: "Big initiative".to_string(),
         status: "In Progress".to_string(),
         assignee: Some("Dev Alice".to_string()),
+        duedate: None,
+        project: None,
     };
     let serialized = serde_json::to_value(&row).unwrap();
     assert_eq!(
@@ -143,6 +149,8 @@ fn issue_row_unassigned_roundtrips_through_serde() {
         summary: "Unassigned task".to_string(),
         status: "Open".to_string(),
         assignee: None,
+        duedate: None,
+        project: None,
     };
     let serialized = serde_json::to_value(&row).unwrap();
     let deserialized: IssueRow = serde_json::from_value(serialized).unwrap();

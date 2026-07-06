@@ -458,14 +458,22 @@ fn bucket_relative_due(delta: i64) -> String {
     }
 }
 
+/// The day-delta (`due - today`) behind a Jira due date, or `None` when
+/// `duedate` fails to parse. Extracted so callers (e.g. the list card
+/// renderer) can map a delta to a display style without duplicating
+/// `parse_due_days`'s date math.
+pub fn due_day_delta(duedate: &str, today_days: i64) -> Option<i64> {
+    let due_days = parse_due_days(duedate)?;
+    Some(due_days - today_days)
+}
+
 /// Render a Jira due date as a localized relative string ("today" / "tomorrow" /
 /// "in N days" / "overdue by N days"), or `None` when `duedate` fails to parse.
 /// `today_days` is injected (never read from the clock here) so this stays pure
 /// and table-testable; callers derive it from [`days_from_civil`] applied to the
 /// current date.
 pub(crate) fn relative_due(duedate: &str, today_days: i64) -> Option<String> {
-    let due_days = parse_due_days(duedate)?;
-    Some(bucket_relative_due(due_days - today_days))
+    due_day_delta(duedate, today_days).map(bucket_relative_due)
 }
 
 /// The current UTC date as a `days_from_civil` day count, for `relative_due`'s

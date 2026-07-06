@@ -256,6 +256,8 @@ fn sample_rows() -> Vec<IssueRow> {
             summary: "Fix the crash".to_string(),
             status: "Open".to_string(),
             assignee: Some("Alice".to_string()),
+            duedate: None,
+            project: None,
         },
         IssueRow {
             key: "PROJ-2".to_string(),
@@ -263,6 +265,8 @@ fn sample_rows() -> Vec<IssueRow> {
             summary: "Refactor module".to_string(),
             status: "In Progress".to_string(),
             assignee: None,
+            duedate: None,
+            project: None,
         },
     ]
 }

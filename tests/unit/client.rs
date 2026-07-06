@@ -411,7 +411,153 @@ async fn search_returns_issue_rows_with_mapped_fields() {
         result.next_page_token, None,
         "last page must map to no next_page_token"
     );
+    assert_eq!(
+        result.issues[0].duedate, None,
+        "a search payload with no duedate field must map to None"
+    );
+    assert_eq!(
+        result.issues[0].project, None,
+        "a search payload with no project field must map to None"
+    );
     server.verify().await;
+}
+
+/// A single search-result issue with `fields.duedate`/`fields.project` set, so
+/// `map_gouqi_search_results` (issue 0031 / D2) has something to extract.
+fn build_search_issue_with_due_and_project(
+    key: &str,
+    duedate: &str,
+    project_key: &str,
+    project_name: Option<&str>,
+) -> serde_json::Value {
+    let mut project = serde_json::json!({ "key": project_key, "self": "" });
+    if let Some(name) = project_name {
+        project["name"] = serde_json::json!(name);
+    }
+    serde_json::json!({
+        "id": "10001",
+        "key": key,
+        "self": "https://example.atlassian.net/rest/api/3/issue/10001",
+        "fields": {
+            "summary": "Card issue",
+            "status": {
+                "id": "1",
+                "name": "Open",
+                "description": "",
+                "iconUrl": "",
+                "self": "",
+                "statusCategory": {
+                    "id": 2,
+                    "key": "new",
+                    "colorName": "blue-gray",
+                    "name": "To Do"
+                }
+            },
+            "issuetype": {
+                "id": "10002",
+                "name": "Task",
+                "description": "",
+                "iconUrl": "",
+                "self": "",
+                "subtask": false
+            },
+            "duedate": duedate,
+            "project": project
+        }
+    })
+}
+
+#[tokio::test]
+async fn search_maps_duedate_and_project_when_present() {
+    let server = MockServer::start().await;
+    let search_payload = serde_json::json!({
+        "issues": [build_search_issue_with_due_and_project(
+            "PROJ-1",
+            "2026-07-15",
+            "PROJ",
+            Some("Proj Display"),
+        )],
+        "isLast": true,
+        "nextPageToken": null
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.search("project = PROJ", 50).await.unwrap();
+
+    assert_eq!(result.issues[0].duedate.as_deref(), Some("2026-07-15"));
+    assert_eq!(
+        result.issues[0].project.as_deref(),
+        Some("Proj Display"),
+        "project name must be preferred over the project key"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn search_maps_project_key_when_project_name_is_absent() {
+    let server = MockServer::start().await;
+    let search_payload = serde_json::json!({
+        "issues": [build_search_issue_with_due_and_project(
+            "PROJ-2",
+            "2026-07-15",
+            "PROJ",
+            None,
+        )],
+        "isLast": true,
+        "nextPageToken": null
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(search_payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.search("project = PROJ", 50).await.unwrap();
+
+    assert_eq!(
+        result.issues[0].project.as_deref(),
+        Some("PROJ"),
+        "project must fall back to the project key when the name is absent"
+    );
+    server.verify().await;
+}
+
+/// Cached search-result JSON written before `IssueRow` gained `duedate`/
+/// `project` (issue 0031) must still deserialize — `#[serde(default)]`
+/// back-compat, no wiremock needed.
+#[test]
+fn issue_row_pre_field_cached_json_deserializes_with_none_duedate_and_project() {
+    let pre_field_snapshot = serde_json::json!({
+        "key": "PROJ-9",
+        "issue_type": "Task",
+        "summary": "Cached before D2",
+        "status": "Open",
+        "assignee": "Alice"
+    });
+
+    let row: crate::models::IssueRow = serde_json::from_value(pre_field_snapshot).unwrap();
+
+    assert_eq!(row.key, "PROJ-9");
+    assert_eq!(
+        row.duedate, None,
+        "pre-field cache must default duedate to None"
+    );
+    assert_eq!(
+        row.project, None,
+        "pre-field cache must default project to None"
+    );
 }
 
 #[tokio::test]

@@ -1,9 +1,11 @@
 use super::model::{header_line, Identity};
 use super::theme;
+use super::view;
 use super::*;
 
 use crate::i18n::{set_language, LANG_MUTEX};
 use crate::models::IssueRow;
+use crate::test_support::duedate_offset_from_today;
 use ratatui::{
     backend::TestBackend,
     style::{Color, Modifier, Style},
@@ -19,7 +21,67 @@ fn make_row(key: &str) -> IssueRow {
         status: "Open".to_owned(),
         assignee: Some("Alice".to_owned()),
         summary: "Fix something".to_owned(),
+        duedate: None,
+        project: None,
     }
+}
+
+/// Builds a fully-specified card row (BDR 0007 S2/S3): every field a card
+/// can display is explicit, so tests read as the scenario they assert.
+fn make_card_row(
+    key: &str,
+    summary: &str,
+    status: &str,
+    project: Option<&str>,
+    duedate: Option<String>,
+) -> IssueRow {
+    IssueRow {
+        key: key.to_owned(),
+        issue_type: "Task".to_owned(),
+        status: status.to_owned(),
+        assignee: Some("Alice".to_owned()),
+        summary: summary.to_owned(),
+        duedate,
+        project: project.map(str::to_owned),
+    }
+}
+
+fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
+    Model {
+        rows,
+        selected,
+        screen: Screen::List,
+        detail: None,
+        detail_scroll: 0,
+        search: None,
+        error: None,
+        base_url: "https://test.atlassian.net".to_owned(),
+        jql: "assignee = currentUser()".to_owned(),
+        next_page_token: None,
+        detail_links: vec![],
+        detail_focused_link: None,
+        identities: vec![],
+    }
+}
+
+fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
+    (0..buf.area.height)
+        .map(|row| row_text(buf, row))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Finds `needle` anywhere in the buffer and returns the style of its first
+/// cell — mirrors `tests/unit/tui.rs`'s helper of the same purpose.
+fn style_at_text(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<Style> {
+    for row in 0..buf.area.height {
+        let text = row_text(buf, row);
+        if let Some(start) = text.find(needle) {
+            let col = text[..start].chars().count() as u16;
+            return Some(cell_style(buf, col, row));
+        }
+    }
+    None
 }
 
 fn make_list_model(identities: Vec<Identity>) -> Model {
@@ -252,8 +314,8 @@ fn view_detail_footer_hint_text_is_unchanged() {
     set_language("en");
 }
 
-// ---- ADR 0014 §1: remaining theme palette functions (used only here so
-// far; later H2/H3 slices apply them to table/badge/link rendering) ----
+// ---- ADR 0014 §1: remaining theme palette functions (section_title,
+// column_header, link await later H2/H3 slices) ----
 
 #[test]
 fn theme_section_title_matches_adr_0014_palette() {
@@ -320,4 +382,314 @@ fn theme_due_near_matches_adr_0014_palette() {
         theme::due_near(),
         Style::default().fg(Color::Rgb(210, 160, 90))
     );
+}
+
+// ---- BDR 0007 S2: issue card ----
+
+#[test]
+fn view_list_renders_issue_as_bordered_card_with_due_status_and_project() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row(
+        "PROJ-1",
+        "Fix login",
+        "In Progress",
+        Some("Proj"),
+        Some(duedate_offset_from_today(1)),
+    );
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+
+    let buf = render_to_buffer(&model, 60, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("PROJ-1 Fix login"),
+        "card line 1 must be 'PROJ-1 Fix login'; got: {text}"
+    );
+    assert!(
+        text.contains("tomorrow · In Progress · Proj"),
+        "card line 2 must be 'tomorrow · In Progress · Proj'; got: {text}"
+    );
+
+    let due_style = style_at_text(&buf, "tomorrow").expect("due segment must appear in buffer");
+    assert_eq!(
+        due_style.fg,
+        Some(Color::Rgb(210, 160, 90)),
+        "due segment due-tomorrow must carry the near-amber style: {due_style:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_card_omits_absent_project_and_status_segments() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row("PROJ-2", "No project set", "", None, None);
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+
+    let buf = render_to_buffer(&model, 60, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("no due date"),
+        "due segment must fall back to 'no due date'; got: {text}"
+    );
+    assert!(
+        !text.contains("no due date ·"),
+        "an omitted status/project must leave no dangling separator; got: {text}"
+    );
+
+    set_language("en");
+}
+
+// ---- BDR 0007 S3: due colors ----
+
+#[test]
+fn view_list_due_yesterday_renders_overdue_in_red() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row(
+        "PROJ-3",
+        "Overdue issue",
+        "Open",
+        None,
+        Some(duedate_offset_from_today(-1)),
+    );
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(buffer_text(&buf).contains("overdue by 1 day"));
+    let style =
+        style_at_text(&buf, "overdue by 1 day").expect("overdue segment must appear in buffer");
+    assert_eq!(style.fg, Some(Color::Rgb(224, 108, 108)));
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_due_today_renders_amber() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row(
+        "PROJ-4",
+        // summary must not contain "today" itself, or style_at_text would match
+        // this title line instead of the due segment on line 2.
+        "Due date issue",
+        "Open",
+        None,
+        Some(duedate_offset_from_today(0)),
+    );
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(buffer_text(&buf).contains("today"));
+    let style = style_at_text(&buf, "today").expect("today segment must appear in buffer");
+    assert_eq!(style.fg, Some(Color::Rgb(210, 160, 90)));
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_due_in_five_days_renders_default_style() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row(
+        "PROJ-5",
+        "Due later issue",
+        "Open",
+        None,
+        Some(duedate_offset_from_today(5)),
+    );
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(buffer_text(&buf).contains("in 5 days"));
+    let style = style_at_text(&buf, "in 5 days").expect("in-5-days segment must appear");
+    assert_eq!(
+        style.fg,
+        Some(Color::Reset),
+        "a due date outside the near window must carry no due color: {style:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_no_duedate_renders_no_due_date_in_default_style() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let row = make_card_row("PROJ-6", "No due date issue", "Open", None, None);
+    // selected=1 with a single row (index 0) so this card renders unselected —
+    // the assertions below probe its own due-color style, not the selection
+    // override.
+    let model = make_list_model_with_rows(vec![row], 1);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    assert!(buffer_text(&buf).contains("no due date"));
+    let style = style_at_text(&buf, "no due date").expect("no-due-date segment must appear");
+    assert_eq!(
+        style.fg,
+        Some(Color::Reset),
+        "no duedate must render in the default style: {style:?}"
+    );
+
+    set_language("en");
+}
+
+// ---- BDR 0007 S4: whole-card selection + windowing ----
+
+#[test]
+fn view_list_selected_card_carries_selected_style_on_all_four_rows() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let rows = vec![
+        make_card_row("PROJ-1", "First issue", "Open", None, None),
+        make_card_row("PROJ-2", "Second issue", "Open", None, None),
+    ];
+    let model = make_list_model_with_rows(rows, 1);
+    let buf = render_to_buffer(&model, 40, 20);
+
+    // Content starts at row 1 (row 0 is the identity header); card 0 spans
+    // rows 1-4, card 1 (selected) spans rows 5-8.
+    for row in 5..=8u16 {
+        for col in 0..buf.area.width {
+            assert_bar_style(
+                cell_style(&buf, col, row),
+                Color::Rgb(13, 13, 13),
+                Color::Rgb(210, 160, 90),
+            );
+        }
+    }
+
+    let unselected_has_selected_bg = (1..=4u16).any(|row| {
+        (0..buf.area.width)
+            .any(|col| cell_style(&buf, col, row).bg == Some(Color::Rgb(210, 160, 90)))
+    });
+    assert!(
+        !unselected_has_selected_bg,
+        "the non-selected card must carry no cell in the selected style"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_list_windowing_keeps_selected_last_card_fully_visible() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let rows: Vec<IssueRow> = (1..=10)
+        .map(|n| make_card_row(&format!("PROJ-{n}"), "An issue", "Open", None, None))
+        .collect();
+    let model = make_list_model_with_rows(rows, 9);
+
+    // header(1) + content(13, 3 cards worth) + footer(1)
+    let buf = render_to_buffer(&model, 40, 15);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("PROJ-10"),
+        "the selected (last) card must scroll into view; got: {text}"
+    );
+    assert!(
+        !text.contains("PROJ-1 "),
+        "cards scrolled out of the window must not render; got: {text}"
+    );
+
+    set_language("en");
+}
+
+// ---- pure unit tests: card meta line + windowing helpers ----
+
+#[test]
+fn card_meta_line_omits_absent_project() {
+    let row = make_card_row("PROJ-1", "Summary", "Open", None, None);
+    assert_eq!(view::card_meta_line(&row, 0), "no due date · Open");
+}
+
+#[test]
+fn card_meta_line_omits_empty_status() {
+    let row = make_card_row("PROJ-1", "Summary", "", Some("Proj"), None);
+    assert_eq!(view::card_meta_line(&row, 0), "no due date · Proj");
+}
+
+#[test]
+fn card_meta_line_includes_all_segments_when_present() {
+    let row = make_card_row("PROJ-1", "Summary", "Open", Some("Proj"), None);
+    assert_eq!(view::card_meta_line(&row, 0), "no due date · Open · Proj");
+}
+
+#[test]
+fn first_visible_card_fits_all_when_count_within_visible() {
+    assert_eq!(view::first_visible_card(2, 3, 5), 0);
+}
+
+#[test]
+fn first_visible_card_keeps_selected_in_window() {
+    assert_eq!(view::first_visible_card(9, 10, 3), 7);
+    assert_eq!(view::first_visible_card(0, 10, 3), 0);
+    assert_eq!(view::first_visible_card(5, 10, 3), 3);
+}
+
+#[test]
+fn first_visible_card_zero_visible_never_panics() {
+    assert_eq!(view::first_visible_card(4, 10, 0), 0);
+}
+
+// ---- AC5: no contract drift — CLI table and agent_json list ignore the
+// new TUI-only IssueRow fields ----
+
+#[test]
+fn render_issue_table_and_mine_list_object_ignore_duedate_and_project() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let base = make_card_row("PROJ-1", "Fix something", "Open", None, None);
+    let with_new_fields = IssueRow {
+        duedate: Some("2026-07-10".to_owned()),
+        project: Some("Proj".to_owned()),
+        ..base.clone()
+    };
+
+    let mut out_base = Vec::new();
+    crate::render::render_issue_table(&mut out_base, std::slice::from_ref(&base));
+    let mut out_new = Vec::new();
+    crate::render::render_issue_table(&mut out_new, std::slice::from_ref(&with_new_fields));
+    assert_eq!(
+        out_base, out_new,
+        "the CLI table must ignore duedate/project"
+    );
+
+    let json_base = crate::agent_json::mine_list_object("jql", std::slice::from_ref(&base));
+    let json_new =
+        crate::agent_json::mine_list_object("jql", std::slice::from_ref(&with_new_fields));
+    assert_eq!(
+        json_base, json_new,
+        "the agent_json list must ignore duedate/project"
+    );
+
+    set_language("en");
 }

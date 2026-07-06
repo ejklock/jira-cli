@@ -113,6 +113,8 @@ fn map_gouqi_search_results(raw: gouqi::SearchResults) -> SearchResult {
             summary: i.summary().unwrap_or_default(),
             status: i.status().map(|s| s.name).unwrap_or_default(),
             assignee: i.assignee().map(|u| u.display_name),
+            duedate: extract_duedate(&i),
+            project: extract_project(&i),
         })
         .collect();
 
@@ -177,6 +179,20 @@ fn map_gouqi_issue(raw: gouqi::Issue) -> Result<Issue> {
 /// `extract_status_category`.
 fn extract_duedate(raw: &gouqi::Issue) -> Option<String> {
     raw.fields.get("duedate")?.as_str().map(str::to_string)
+}
+
+/// Extract the search result row's project display name, falling back to the
+/// project key when the name is absent, from the raw fields BTreeMap.
+/// Mirrors `extract_duedate`'s raw-field-access-with-graceful-`None` pattern —
+/// `IssueRow` is TUI-only in this slice so this reads straight from JSON
+/// rather than adding a typed accessor.
+fn extract_project(raw: &gouqi::Issue) -> Option<String> {
+    let project_val = raw.fields.get("project")?;
+    project_val
+        .get("name")
+        .and_then(|n| n.as_str())
+        .or_else(|| project_val.get("key").and_then(|k| k.as_str()))
+        .map(str::to_string)
 }
 
 /// Extract `statusCategory.key` from the raw fields BTreeMap.
