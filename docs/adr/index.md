@@ -19,3 +19,5 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0011](/adr/0011-keyboard-inline-link-navigation-browse-detail.md) | Keyboard inline-link navigation in the browse TUI detail (Tab cycle, Enter open) | Accepted |
 | [0012](/adr/0012-comments-in-browse-tui-detail.md) | Read-only comments in the browse TUI detail (styled ADF + j/k scroll) | Accepted |
 | [0013](/adr/0013-relative-due-date-rendering.md) | Relative due-date rendering (stdlib date math, English-source i18n keys) | Accepted |
+| [0014](/adr/0014-tui-visual-design-system.md) | TUI visual design system — vibrant-dashboard parity (theme, cards, panels, footer/status, ADF tables) | Accepted |
+| [0015](/adr/0015-comment-write-enablement.md) | Comment write enablement — POST/PUT/DELETE on the comment endpoints only | Accepted |

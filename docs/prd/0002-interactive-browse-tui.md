@@ -30,6 +30,12 @@ this shape; jira-cli re-enables it read-only as its own Phase 2 slices.
 
 ## Non-goals
 
+> **Superseded (2026-07-06):** the projects-axis, attachments-panel, and mouse
+> non-goals below were reopened by [PRD 0003](/prd/0003-active-collab-parity.md)
+> (total-parity program); the write non-goal was narrowed by Constitution
+> Amendment 1 + [ADR 0015](/adr/0015-comment-write-enablement.md). Kept verbatim
+> for the record.
+
 - **Any write** (comment, transition, worklog) — stays out behind the constitution's
   write boundary and its own future ADR. The TUI is read-only ([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)).
 - **A Projects browse axis** and **an assets/attachments panel** — AC-fork features

@@ -36,6 +36,11 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0027](/issues/0027-h1-test-support-module-and-adf-issue-builders.md) | H1 | shared tests/unit/support.rs (ADF + Issue builders); migrate render/tui tests | open | — |
 | [0028](/issues/0028-h2-consolidate-json-payload-builders.md) | H2 | centralize JSON payload builders (client + commands) into support.rs | open | 0027 |
 | [0029](/issues/0029-h3-migrate-remaining-issue-fixtures.md) | H3 | migrate remaining Issue fixtures (cache/agent_json/models) to shared builder | open | 0027 |
+| [0030](/issues/0030-d1-theme-header-footer.md) | D1 | theme.rs palette + identity header bar + themed footer | open | — |
+| [0031](/issues/0031-d2-list-cards-due.md) | D2 | browse list as per-issue cards with colored relative due date | open | 0030 |
+| [0032](/issues/0032-d3-detail-panels-scrollbar.md) | D3 | detail as stacked rounded panels + title border + clamped scrollbar | open | 0030 |
+| [0033](/issues/0033-d4-contextual-footer-status-line.md) | D4 | contextual footer + thin transient status line | open | 0030 |
+| [0034](/issues/0034-d5-adf-table-rendering.md) | D5 | ADF table rendering in detail/comments | open | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -75,19 +80,24 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   styled via `adf_to_rich`, scrollable with `j/k` + `↑/↓`
   ([ADR 0012](/adr/0012-comments-in-browse-tui-detail.md)). **done**
 
-**Group B — parked, reopens a PRD 0002 non-goal (needs a superseding ADR before slicing):**
+**Total-parity program unblocked (2026-07-06):** [PRD 0003](/prd/0003-active-collab-parity.md)
++ Constitution Amendment 1 reopened the former Groups B and C. Execution order
+**D → E → B → C** (plan `ac-parity-program`):
 
-- Projects browse axis (Projects → Issues stack); assets/attachments panel
-  (Ctrl/Cmd+click open); mouse support (click-select, scroll, drag-select + clipboard copy).
+- **Group D — visual design parity** ([ADR 0014](/adr/0014-tui-visual-design-system.md),
+  [BDR 0007](/bdr/0007-tui-visual-design-behaviors.md)): slices D1–D5 = issues
+  [0030](/issues/0030-d1-theme-header-footer.md)–[0034](/issues/0034-d5-adf-table-rendering.md). **open**
+- **Group E — behavior parity** (PRD 0003 R-E1..R-E3): bare-TTY default → mine;
+  401 re-auth messaging (CLI + TUI); SWR first-paint + single-flight. *To be sliced next.*
+- **Group B — interaction parity** (PRD 0003 R-B1..R-B5): mouse, app-managed text
+  selection + clipboard, inline body links + Ctrl/Cmd+click, attachments panel,
+  Projects→Issues axis. Per-slice ADRs at execution time. *To be sliced.*
+- **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
+  compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
 
-**Group C — parked, crosses the constitution's read-only write boundary (needs a
-constitution amendment + a write-enablement ADR before slicing):**
+## Parked (not in the parity program)
 
-- Comment write: create / edit / delete (compose overlay, own-comment affordances, confirm
-  modal, `POST`/`PUT`/`DELETE`).
-
-## Parked (Phase 2 — not yet sliced)
-
-- Write operations: comment, transition status, log work (see Group C above).
+- Other writes: create/edit issue, transition status, log work (out per
+  Constitution Amendment 1 — each would need its own amendment + ADR).
 - Jira Server / Data Center (REST v2 / PAT) adapter.
 - Secret-at-rest encryption / OS keychain; native release binaries.

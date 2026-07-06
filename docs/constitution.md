@@ -123,3 +123,17 @@ instance's API and overwrites the cached row. Settings are a flat key/value stor
 
 <!-- Append amendments here; do not edit sections above once ratified.
      Format: ## Amendment N — YYYY-MM-DD: <summary> -->
+
+## Amendment 1 — 2026-07-06: comment writes enter scope (parity program)
+
+The "Writing to Jira" exclusion in **Scope Boundaries** is narrowed: **comment
+writes** (create, edit, delete your own comment on an issue) are now in scope,
+as part of the total-parity program with the fork base `active-collab-cli`
+([PRD 0003](/prd/0003-active-collab-parity.md), [ADR 0015](/adr/0015-comment-write-enablement.md)).
+
+Everything else stays read-only: creating/editing issues, transitioning status,
+and logging work remain out of scope. The write surface is exactly the Jira
+Cloud comment REST endpoints (`POST`/`PUT`/`DELETE` on
+`/rest/api/3/issue/{key}/comment`), host-pinned per the token-isolation
+non-negotiable. Falsifiable: no code path issues a non-GET request to any
+endpoint other than the comment endpoints.
