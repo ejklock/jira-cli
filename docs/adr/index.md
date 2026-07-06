@@ -21,3 +21,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0013](/adr/0013-relative-due-date-rendering.md) | Relative due-date rendering (stdlib date math, English-source i18n keys) | Accepted |
 | [0014](/adr/0014-tui-visual-design-system.md) | TUI visual design system — vibrant-dashboard parity (theme, cards, panels, footer/status, ADF tables) | Accepted |
 | [0015](/adr/0015-comment-write-enablement.md) | Comment write enablement — POST/PUT/DELETE on the comment endpoints only | Accepted |
+| [0016](/adr/0016-swr-first-paint-browse-entry.md) | First-paint-from-cache SWR on browse entry (task-list snapshot) | Accepted |

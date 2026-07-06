@@ -13,3 +13,4 @@ Append-only: supersede or amend.
 | [0005](/bdr/0005-mine-and-search-jql.md) | mine/list and search — JQL listing | Accepted |
 | [0006](/bdr/0006-browse-tui-interactions.md) | browse TUI — interactive read-only navigation | Accepted |
 | [0007](/bdr/0007-tui-visual-design-behaviors.md) | browse TUI visual design system — observable behaviors | Accepted |
+| [0008](/bdr/0008-browse-entry-swr-behaviors.md) | browse-entry SWR — instant cached paint, always revalidate, guarded swap | Accepted |
