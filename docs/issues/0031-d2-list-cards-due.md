@@ -2,7 +2,7 @@
 type: Issue
 title: "D2 — browse list as per-issue cards with colored relative due date"
 description: Replace the list Table with one bordered card per issue — line 1 KEY summary, line 2 relative colored due · status · project. Threads duedate + project into IssueRow from the search payload (serde default, no extra fetch).
-status: open
+status: done
 labels: [tui, design, cards, parity]
 blocked_by: [0030]
 tracker:

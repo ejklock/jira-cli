@@ -2,7 +2,7 @@
 type: Issue
 title: "D5 — ADF table rendering in detail/comments"
 description: rich_node handles table/tableRow/tableHeader/tableCell — one line per row, cells joined by ' │ ', header row bold. Closes the last rich-text coverage gap vs the fork base (strike/underline/codeBlock already render).
-status: open
+status: done
 labels: [adf, richtext, parity]
 blocked_by:
 tracker:

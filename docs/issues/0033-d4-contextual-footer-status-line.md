@@ -2,7 +2,7 @@
 type: Issue
 title: "D4 — contextual footer + thin transient status line"
 description: Mode-aware footer hints (list / search / detail / link-focus) and a thin one-line status row above the footer for transient feedback (copy confirmation, errors), auto-cleared on next input.
-status: open
+status: done
 labels: [tui, design, footer, parity]
 blocked_by: [0030]
 tracker:

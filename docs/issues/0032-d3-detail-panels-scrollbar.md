@@ -2,7 +2,7 @@
 type: Issue
 title: "D3 — detail as stacked rounded panels + title border + clamped scrollbar"
 description: Detail content becomes stacked rounded panels (Details meta table with Title row, Description, Comments with nested cards) in one global scroll; issue summary promoted to the frame border title; ratatui Scrollbar with end-clamped offset. Styled ADF spans preserved inside panels.
-status: open
+status: done
 labels: [tui, design, detail, parity]
 blocked_by: [0030]
 tracker:

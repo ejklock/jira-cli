@@ -2,7 +2,7 @@
 type: Issue
 title: "D1 — theme.rs palette + identity header bar + themed footer"
 description: Central truecolor theme module (sober cool-retro palette), a logged-in identity header line (email · instance, +N more), and the footer restyled through the theme. First visible slice of the ADR 0014 design system.
-status: open
+status: done
 labels: [tui, design, theme, parity]
 blocked_by:
 tracker:

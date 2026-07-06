@@ -61,12 +61,17 @@ flowchart TD
     commands --> i18n["i18n (en · pt-BR)"]
     cli --> tui_shell
     subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
-        tui_model["model.rs\npure core: Model · Msg · Cmd · update\n(no crossterm/ratatui/tokio/io)"]
-        tui_view["view.rs\nview/view_list/view_detail\n(ratatui rendering)"]
+        tui_model["model.rs\npure core: Model · Msg · Cmd · update\n+ FooterMode · StatusMsg · Identity\n(no crossterm/ratatui/tokio/io)"]
+        tui_view["view.rs\nview/view_list (cards)/view_detail (panels)\nfooter_hint · status row\n(ratatui rendering)"]
+        tui_theme["theme.rs\ntruecolor palette (ADR 0014)\nsingle Color::Rgb home"]
+        tui_panel["panel.rs\npure panel_box · fit_to_display_width\n(unicode-width geometry)"]
         tui_shell["shell.rs\nbrowse/draw_loop/dispatch_cmd\n(Humble Object, imperative shell)"]
         tui_shell --> tui_model
         tui_shell --> tui_view
         tui_view --> tui_model
+        tui_view --> tui_theme
+        tui_view --> tui_panel
+        tui_panel --> tui_theme
     end
     tui_shell --> client
     tui_shell --> store
@@ -84,6 +89,17 @@ terminal, the draw loop, and command dispatch. `Cmd` effects reuse the existing
 data seams — `client` (`JiraClient::search` for lists, cache-or-fetch for detail) and
 `store` — never the rendering `*_core` functions. Read-only by construction
 ([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)).
+
+The Group-D design system ([ADR 0014](/adr/0014-tui-visual-design-system.md))
+added two presentation modules: `theme.rs` — the single home of every
+`Color::Rgb` literal (grep-enforced) exposing named style constructors — and
+`panel.rs` — the pure rounded-panel/display-width geometry (`panel_box`,
+`fit_to_display_width`, `ellipsize_display`) that composes the detail's
+Details/Description/Comments panels. The list renders per-issue cards (due
+color from the shared `relative_due` delta); the footer is a single mode-aware
+`footer_hint(FooterMode)`; a transient `StatusMsg` row is cleared by `update()`
+on the next key event. ADF `table` nodes render one line per row through the
+single `render` mapper (CLI and TUI identical).
 
 **Boundaries / fitness:**
 
