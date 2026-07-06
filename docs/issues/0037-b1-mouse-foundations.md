@@ -2,7 +2,7 @@
 type: Issue
 title: "B1 — mouse foundations: capture lifecycle, wheel navigation, card click drills in"
 description: Enable mouse capture for the browse session (unconditional teardown); wheel maps to the existing Up/Down msgs on both screens; a left click on any row of a visible card selects and opens that issue via a pure hit-test reusing the view's own layout functions; clicks outside cards are no-ops; search mode swallows mouse input; no mouse event ever exits.
-status: open
+status: done
 labels: [tui, input, mouse, parity]
 blocked_by:
 tracker:
