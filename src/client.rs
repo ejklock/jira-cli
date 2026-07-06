@@ -5,25 +5,52 @@ use crate::store::instances::Instance;
 use anyhow::{anyhow, Result};
 use gouqi::core::SearchApiVersion;
 use gouqi::{Credentials, SearchOptions};
+use std::fmt;
+
+/// The client's typed error surface — never a raw `gouqi::Error` crosses this
+/// boundary. `Unauthorized` is the single case callers may match on by type
+/// (an HTTP 401); everything else keeps its previous `anyhow!`-wrapped text
+/// so non-401 rendering stays byte-identical to before this variant existed.
+#[derive(Debug)]
+pub enum ClientError {
+    Unauthorized { instance: String },
+    Other(anyhow::Error),
+}
+
+impl fmt::Display for ClientError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClientError::Unauthorized { instance } => {
+                write!(f, "Unauthorized for instance '{instance}'")
+            }
+            ClientError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+pub type ClientResult<T> = std::result::Result<T, ClientError>;
 
 /// The thin trait that commands depend on — never a gouqi type crosses this boundary.
 #[async_trait::async_trait]
 pub trait JiraClient: Send + Sync {
-    async fn get_issue(&self, key: &str) -> Result<Issue>;
-    async fn search(&self, jql: &str, max_results: u64) -> Result<SearchResult>;
+    async fn get_issue(&self, key: &str) -> ClientResult<Issue>;
+    async fn search(&self, jql: &str, max_results: u64) -> ClientResult<SearchResult>;
     async fn search_page(
         &self,
         jql: &str,
         max_results: u64,
         page_token: &str,
-    ) -> Result<SearchResult>;
-    async fn myself(&self) -> Result<Myself>;
+    ) -> ClientResult<SearchResult>;
+    async fn myself(&self) -> ClientResult<Myself>;
 }
 
 /// The single place where a `gouqi::async::Jira` is constructed.
 /// All calls are pinned to the `instance.base_url` — no caller can override the host.
 pub struct GouqiJiraClient {
     jira: gouqi::r#async::Jira,
+    instance_name: String,
 }
 
 impl GouqiJiraClient {
@@ -37,23 +64,44 @@ impl GouqiJiraClient {
             SearchApiVersion::V3,
         )
         .map_err(|e| anyhow!("Failed to build Jira client: {e}"))?;
-        Ok(Self { jira })
+        Ok(Self {
+            jira,
+            instance_name: instance.name.clone(),
+        })
+    }
+
+    /// Classify a raw `gouqi::Error` at the single wrapper boundary: HTTP 401
+    /// (gouqi's own `Error::Unauthorized`, matched by type) becomes the typed
+    /// `ClientError::Unauthorized` carrying this client's instance name; any
+    /// other error keeps flowing through `wrap`'s existing `anyhow!` format,
+    /// unchanged from before this mapping existed.
+    fn classify_error(
+        &self,
+        e: gouqi::Error,
+        wrap: impl FnOnce(gouqi::Error) -> anyhow::Error,
+    ) -> ClientError {
+        match e {
+            gouqi::Error::Unauthorized => ClientError::Unauthorized {
+                instance: self.instance_name.clone(),
+            },
+            other => ClientError::Other(wrap(other)),
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl JiraClient for GouqiJiraClient {
-    async fn get_issue(&self, key: &str) -> Result<Issue> {
+    async fn get_issue(&self, key: &str) -> ClientResult<Issue> {
         // issues().get() uses /rest/api/latest; we must use v3 for Cloud ADF fields.
         let raw: gouqi::Issue = self
             .jira
             .get_versioned("api", Some("3"), &format!("/issue/{key}"))
             .await
-            .map_err(|e| anyhow!("get_issue({key}): {e}"))?;
-        map_gouqi_issue(raw)
+            .map_err(|e| self.classify_error(e, |e| anyhow!("get_issue({key}): {e}")))?;
+        map_gouqi_issue(raw).map_err(ClientError::Other)
     }
 
-    async fn search(&self, jql: &str, max_results: u64) -> Result<SearchResult> {
+    async fn search(&self, jql: &str, max_results: u64) -> ClientResult<SearchResult> {
         let capped = max_results.min(5000);
         let opts = SearchOptions::builder().max_results(capped).build();
         let raw = self
@@ -61,7 +109,7 @@ impl JiraClient for GouqiJiraClient {
             .search()
             .list(jql, &opts)
             .await
-            .map_err(|e| anyhow!("search({jql}): {e}"))?;
+            .map_err(|e| self.classify_error(e, |e| anyhow!("search({jql}): {e}")))?;
         Ok(map_gouqi_search_results(raw))
     }
 
@@ -70,7 +118,7 @@ impl JiraClient for GouqiJiraClient {
         jql: &str,
         max_results: u64,
         page_token: &str,
-    ) -> Result<SearchResult> {
+    ) -> ClientResult<SearchResult> {
         let capped = max_results.min(5000);
         let opts = SearchOptions::builder()
             .max_results(capped)
@@ -81,19 +129,20 @@ impl JiraClient for GouqiJiraClient {
             .search()
             .list(jql, &opts)
             .await
-            .map_err(|e| anyhow!("search_page({jql}): {e}"))?;
+            .map_err(|e| self.classify_error(e, |e| anyhow!("search_page({jql}): {e}")))?;
         Ok(map_gouqi_search_results(raw))
     }
 
-    async fn myself(&self) -> Result<Myself> {
+    async fn myself(&self) -> ClientResult<Myself> {
         let raw: gouqi::User = self
             .jira
             .get_versioned("api", Some("3"), "/myself")
             .await
-            .map_err(|e| anyhow!("myself(): {e}"))?;
+            .map_err(|e| self.classify_error(e, |e| anyhow!("myself(): {e}")))?;
         let account_id = raw
             .account_id
-            .ok_or_else(|| anyhow!("myself() response missing accountId"))?;
+            .ok_or_else(|| anyhow!("myself() response missing accountId"))
+            .map_err(ClientError::Other)?;
         Ok(Myself {
             account_id,
             display_name: raw.display_name,

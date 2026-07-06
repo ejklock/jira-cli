@@ -2132,3 +2132,293 @@ fn cli_parses_setup_language_pt_br_to_language_args() {
         "code must be Some('pt-BR')"
     );
 }
+
+// ---- R-E2: 401 re-auth messaging (AC2/AC4) ----
+
+const EXPECTED_REAUTH_EN: &str =
+    "Authentication failed for work: your API token was rejected. Run `jira setup add` to re-authenticate.";
+const EXPECTED_REAUTH_PT_BR: &str =
+    "Falha de autenticação em work: seu API token foi rejeitado. Rode `jira setup add` para se autenticar novamente.";
+
+/// AC2: get_core on a 401 prints the exact actionable re-auth message (naming
+/// the instance and `jira setup add`) to stderr and exits non-zero.
+///
+/// The lock is held across the `.await`s (rather than only around
+/// `set_language`, ADR pattern for language-independent async tests): this
+/// test asserts on translated (`tf()`) output, so a concurrent test flipping
+/// the process-global language mid-fetch would flake the assertion.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn get_core_401_prints_reauth_message_and_exits_nonzero() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-401"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    let inst = server_instance(&server, "work");
+    let cache = TaskCache::new(store.conn());
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = get_core(
+        "PROJ-401",
+        &inst,
+        &cache,
+        GetOpts {
+            json: false,
+            no_comments: false,
+            refresh: false,
+        },
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_ne!(code, 0, "401 must exit non-zero");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains(EXPECTED_REAUTH_EN),
+        "stderr must contain the exact re-auth guidance; got: {err_text}"
+    );
+    server.verify().await;
+}
+
+/// AC2: the same 401 guidance renders in pt_BR under LANG_MUTEX (held across
+/// the `.await`s for the same reason as the sibling English test above).
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn get_core_401_renders_pt_br_reauth_message() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-401"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    let inst = server_instance(&server, "work");
+    let cache = TaskCache::new(store.conn());
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = get_core(
+        "PROJ-401",
+        &inst,
+        &cache,
+        GetOpts {
+            json: false,
+            no_comments: false,
+            refresh: false,
+        },
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    set_language("en");
+    assert_ne!(code, 0, "401 must exit non-zero");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains(EXPECTED_REAUTH_PT_BR),
+        "pt_BR stderr must contain the translated re-auth guidance; got: {err_text}"
+    );
+    server.verify().await;
+}
+
+/// AC4 no-drift guard: a non-401 error on get_core keeps its pre-existing
+/// rendering — the 404 path stays exactly `Error: issue '<key>' not found.`,
+/// never the re-auth message.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn get_core_404_error_rendering_unchanged_by_reauth_mapping() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-404"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("Issue not found"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    let inst = server_instance(&server, "work");
+    let cache = TaskCache::new(store.conn());
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = get_core(
+        "PROJ-404",
+        &inst,
+        &cache,
+        GetOpts {
+            json: false,
+            no_comments: false,
+            refresh: false,
+        },
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 1, "404 must exit 1");
+    let err_text = output_str(&err);
+    assert_eq!(
+        err_text.trim(),
+        "Error: issue 'PROJ-404' not found.",
+        "404 rendering must be byte-identical to before; got: {err_text:?}"
+    );
+    assert!(
+        !err_text.contains("API token"),
+        "a 404 must never render the re-auth guidance; got: {err_text}"
+    );
+    server.verify().await;
+}
+
+/// AC2: mine_core on a 401 prints the exact actionable re-auth message to
+/// stderr and exits non-zero.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn mine_core_401_prints_reauth_message_and_exits_nonzero() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    save_instance_for_server(&store, &server, "work");
+    let repo = InstanceRepository::new(store.conn());
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = mine_core(&repo, None, false, None, &mut out, &mut err).await;
+
+    assert_ne!(code, 0, "401 must exit non-zero");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains(EXPECTED_REAUTH_EN),
+        "stderr must contain the exact re-auth guidance; got: {err_text}"
+    );
+    server.verify().await;
+}
+
+/// AC4 no-drift guard: a non-401 error on mine_core keeps rendering
+/// `Error fetching issues: <detail>`, never the re-auth message.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn mine_core_500_error_rendering_unchanged_by_reauth_mapping() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    save_instance_for_server(&store, &server, "work");
+    let repo = InstanceRepository::new(store.conn());
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = mine_core(&repo, None, false, None, &mut out, &mut err).await;
+
+    assert_eq!(code, 1, "500 must exit 1");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.starts_with("Error fetching issues:"),
+        "500 rendering must be byte-identical to before; got: {err_text:?}"
+    );
+    assert!(
+        !err_text.contains("API token"),
+        "a 500 must never render the re-auth guidance; got: {err_text}"
+    );
+    server.verify().await;
+}
+
+/// AC3 (boundary): the TUI shell's `run_search` — the fetch every
+/// `Msg::LoadFailed` spawn site in `src/tui/shell.rs` is built on — surfaces
+/// the same typed `ClientError::Unauthorized` on a 401 that the CLI matches
+/// on. The Msg-construction seam itself (`spawn_load_list` etc.) is private
+/// to `src/tui/shell.rs` and exercised by `tests/unit/tui.rs`, which is
+/// outside this task's `scope.target_files`; this test covers the shared
+/// client-error boundary those private call sites depend on.
+#[tokio::test]
+async fn tui_run_search_401_yields_typed_unauthorized_with_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = server_instance(&server, "work");
+    let result = crate::tui::run_search(&instance, "project = PROJ").await;
+
+    match result {
+        Err(crate::client::ClientError::Unauthorized { instance }) => {
+            assert_eq!(instance, "work");
+        }
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC2: search_core on a 401 prints the exact actionable re-auth message to
+/// stderr and exits non-zero (rather than the 'invalid JQL'/'Error running
+/// search' non-401 branches).
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn search_core_401_prints_reauth_message_and_exits_nonzero() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    let instance = save_instance_for_server(&store, &server, "work");
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = search_core(Some("project = PROJ"), &instance, false, &mut out, &mut err).await;
+
+    assert_ne!(code, 0, "401 must exit non-zero");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains(EXPECTED_REAUTH_EN),
+        "stderr must contain the exact re-auth guidance; got: {err_text}"
+    );
+    assert!(
+        !err_text.contains("invalid JQL"),
+        "a 401 must never be misclassified as invalid JQL; got: {err_text}"
+    );
+    server.verify().await;
+}

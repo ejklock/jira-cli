@@ -1,6 +1,6 @@
 use crate::agent_json::{issue_to_minified_json, mine_list_to_minified_json};
 use crate::cli::extract_issue_key;
-use crate::client::{GouqiJiraClient, JiraClient};
+use crate::client::{ClientError, GouqiJiraClient, JiraClient};
 use crate::i18n::SUPPORTED;
 use crate::i18n::{t, tf};
 use crate::render::{render_issue_human, render_issue_table};
@@ -13,6 +13,16 @@ const DEFAULT_MINE_LIMIT: u64 = 50;
 pub(crate) const DEFAULT_SEARCH_LIMIT: u64 = 50;
 pub(crate) const MINE_JQL: &str =
     "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC";
+
+/// Renders the actionable re-auth guidance for a 401 (ADR 0006: translate the
+/// template, then substitute `{instance}`) — the single source shared by every
+/// `Unauthorized` render site in CLI commands and the TUI shell.
+pub(crate) fn reauth_message(instance: &str) -> String {
+    tf(
+        "Authentication failed for {instance}: your API token was rejected. Run `jira setup add` to re-authenticate.",
+        &[("instance", instance)],
+    )
+}
 
 pub fn pick_instance(
     instances: &[Instance],
@@ -495,6 +505,10 @@ async fn fetch_and_cache(
 
     let issue = match client.get_issue(issue_key).await {
         Ok(i) => i,
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(err, "{}", reauth_message(&instance)).ok();
+            return Err(1);
+        }
         Err(e) => {
             let msg = e.to_string();
             if is_not_found_error(&msg) {
@@ -579,6 +593,10 @@ pub async fn mine_core(
     let max_results = limit.unwrap_or(DEFAULT_MINE_LIMIT);
     let result = match client.search(MINE_JQL, max_results).await {
         Ok(r) => r,
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(err, "{}", reauth_message(&instance)).ok();
+            return 1;
+        }
         Err(e) => {
             writeln!(err, "Error fetching issues: {e}").ok();
             return 1;
@@ -644,6 +662,10 @@ pub async fn search_core(
         Ok(result) => {
             render_mine_output(json, trimmed, &result.issues, out);
             0
+        }
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(err, "{}", reauth_message(&instance)).ok();
+            1
         }
         Err(e) => {
             let msg = e.to_string();

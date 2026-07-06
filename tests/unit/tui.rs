@@ -2288,3 +2288,72 @@ fn update_reply_msgs_do_not_clear_a_standing_status() {
         "a background reply Msg must not clear a status set by a prior key event"
     );
 }
+
+// ---- e2-401-reauth-messaging: AC3 — a 401-driven LoadFailed surfaces the
+// re-auth guidance (not a raw error) through model.error and model.status.
+// Drives the same `Unauthorized -> reauth_message` seam every spawn site in
+// `src/tui/shell.rs` (`spawn_load_list`/`spawn_load_detail`/`spawn_load_more`)
+// builds `Msg::LoadFailed` from (ADR 0006/0008).
+
+#[test]
+fn update_load_failed_with_reauth_message_surfaces_guidance_in_error_and_status() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_list_model(&["PROJ-1"]);
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::LoadFailed(guidance.clone()));
+
+    assert_eq!(
+        next.error.as_deref(),
+        Some(guidance.as_str()),
+        "a 401 LoadFailed must set the error banner to the re-auth guidance, not a raw error"
+    );
+    let status = next
+        .status
+        .expect("a 401 LoadFailed must set a status message");
+    assert_eq!(
+        status.kind,
+        StatusKind::Error,
+        "the re-auth guidance status must be StatusKind::Error"
+    );
+    assert_eq!(status.text, guidance);
+    assert!(
+        guidance.contains("jira setup add"),
+        "the guidance text itself must carry the actionable re-auth instruction; got: {guidance:?}"
+    );
+    assert!(cmds.is_empty());
+
+    set_language("en");
+}
+
+#[test]
+fn update_load_failed_with_reauth_message_pt_br_translates_the_guidance() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let en_guidance = crate::commands::reauth_message("work");
+
+    set_language("pt_BR");
+    let model = make_list_model(&["PROJ-1"]);
+    let pt_br_guidance = crate::commands::reauth_message("work");
+
+    let (next, _) = update(model, Msg::LoadFailed(pt_br_guidance.clone()));
+
+    assert_eq!(
+        next.error.as_deref(),
+        Some(pt_br_guidance.as_str()),
+        "the pt_BR re-auth guidance must flow through unchanged into the error banner"
+    );
+    let status = next
+        .status
+        .expect("a 401 LoadFailed must set a status message");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, pt_br_guidance);
+    assert_ne!(
+        pt_br_guidance, en_guidance,
+        "the pt_BR guidance must actually be translated, not the English fallback"
+    );
+
+    set_language("en");
+}

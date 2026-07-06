@@ -231,6 +231,122 @@ async fn get_issue_404_returns_error() {
     server.verify().await;
 }
 
+/// AC1: a 401 on issue GET must map to the typed `ClientError::Unauthorized`
+/// carrying this client's instance name — matched by type, never by message.
+#[tokio::test]
+async fn get_issue_401_maps_to_typed_unauthorized_with_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-401"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.get_issue("PROJ-401").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => {
+            assert_eq!(instance, "test-instance");
+        }
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1: a 403 on issue GET must NOT map to Unauthorized — it stays `Other`.
+#[tokio::test]
+async fn get_issue_403_does_not_map_to_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-403"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.get_issue("PROJ-403").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 403, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1: a 500 on issue GET must NOT map to Unauthorized — it stays `Other`.
+#[tokio::test]
+async fn get_issue_500_does_not_map_to_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-500"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.get_issue("PROJ-500").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 500, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1: a 401 on search must also map to the typed `ClientError::Unauthorized`
+/// carrying this client's instance name.
+#[tokio::test]
+async fn search_401_maps_to_typed_unauthorized_with_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.search("project = PROJ", 50).await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => {
+            assert_eq!(instance, "test-instance");
+        }
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1: a 403 on search must NOT map to Unauthorized — it stays `Other`.
+#[tokio::test]
+async fn search_403_does_not_map_to_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/search/jql"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.search("project = PROJ", 50).await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 403, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
 #[tokio::test]
 async fn myself_returns_account_id_and_display_name() {
     let server = MockServer::start().await;

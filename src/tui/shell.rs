@@ -8,8 +8,8 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Write};
 use tokio::sync::mpsc;
 
-use crate::client::{GouqiJiraClient, JiraClient};
-use crate::commands::{DEFAULT_SEARCH_LIMIT, MINE_JQL};
+use crate::client::{ClientError, GouqiJiraClient, JiraClient};
+use crate::commands::{reauth_message, DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
 use crate::models::{Issue, IssueRow, SearchResult};
 use crate::store::cache::{IssueCache, TaskCache};
@@ -302,11 +302,15 @@ fn cache_detail(cache: &TaskCache<'_>, instance_name: &str, issue: &Issue) {
 }
 
 /// Spawns the detail fetch effect; the result is sent back over `tx` as
-/// `Msg::DetailLoaded` on success or `Msg::Back` on error (ADR 0008).
+/// `Msg::DetailLoaded` on success, `Msg::LoadFailed` with the re-auth guidance
+/// on an Unauthorized (401), or `Msg::Back` on any other error (ADR 0008).
 fn spawn_load_detail(key: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
     tokio::spawn(async move {
         let msg = match fetch_issue(&instance, &key).await {
             Ok(issue) => Msg::DetailLoaded(Box::new(issue)),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::LoadFailed(reauth_message(&instance))
+            }
             Err(_) => Msg::Back,
         };
         let _ = tx.send(msg);
@@ -314,11 +318,15 @@ fn spawn_load_detail(key: String, instance: Instance, tx: mpsc::UnboundedSender<
 }
 
 /// Spawns the list/search fetch effect; the result is sent back over `tx` as
-/// `Msg::ListLoaded` on success or `Msg::LoadFailed` on error (ADR 0008).
+/// `Msg::ListLoaded` on success or `Msg::LoadFailed` on error (ADR 0008). An
+/// Unauthorized (401) carries the same re-auth guidance text as the CLI.
 fn spawn_load_list(jql: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
     tokio::spawn(async move {
         let msg = match run_search(&instance, &jql).await {
             Ok(result) => Msg::ListLoaded(result.issues, result.next_page_token),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::LoadFailed(reauth_message(&instance))
+            }
             Err(e) => Msg::LoadFailed(e.to_string()),
         };
         let _ = tx.send(msg);
@@ -332,19 +340,25 @@ fn spawn_load_more(jql: String, token: String, instance: Instance, tx: mpsc::Unb
     tokio::spawn(async move {
         let msg = match run_search_page(&instance, &jql, &token).await {
             Ok(result) => Msg::MoreLoaded(result.issues, result.next_page_token),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::LoadFailed(reauth_message(&instance))
+            }
             Err(e) => Msg::LoadFailed(e.to_string()),
         };
         let _ = tx.send(msg);
     });
 }
 
-async fn fetch_issue(instance: &Instance, key: &str) -> anyhow::Result<Issue> {
-    let client = GouqiJiraClient::new(instance)?;
+async fn fetch_issue(instance: &Instance, key: &str) -> Result<Issue, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.get_issue(key).await
 }
 
-pub(crate) async fn run_search(instance: &Instance, jql: &str) -> anyhow::Result<SearchResult> {
-    let client = GouqiJiraClient::new(instance)?;
+pub(crate) async fn run_search(
+    instance: &Instance,
+    jql: &str,
+) -> Result<SearchResult, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.search(jql, DEFAULT_SEARCH_LIMIT).await
 }
 
@@ -352,8 +366,8 @@ async fn run_search_page(
     instance: &Instance,
     jql: &str,
     page_token: &str,
-) -> anyhow::Result<SearchResult> {
-    let client = GouqiJiraClient::new(instance)?;
+) -> Result<SearchResult, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client
         .search_page(jql, DEFAULT_SEARCH_LIMIT, page_token)
         .await
