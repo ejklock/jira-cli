@@ -165,9 +165,9 @@ pub struct RichSpan {
 pub type RichLine = Vec<RichSpan>;
 
 /// Walk an ADF JSON string into styled lines, mirroring `adf_to_plain_text`'s
-/// block shaping (paragraphs, lists, code blocks, hardBreak) but carrying each
-/// inline mark (`strong`/`em`/`code`/`strike`/`underline`/`link`) into a
-/// [`RichStyle`] per text run. Non-ADF / non-`doc` input yields a single
+/// block shaping (paragraphs, lists, code blocks, hardBreak, tables) but
+/// carrying each inline mark (`strong`/`em`/`code`/`strike`/`underline`/`link`)
+/// into a [`RichStyle`] per text run. Non-ADF / non-`doc` input yields a single
 /// unstyled line with the raw string.
 pub fn adf_to_rich(raw: &str) -> Vec<RichLine> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
@@ -207,6 +207,7 @@ fn rich_node(
             lines.push(std::mem::take(current));
         }
         "codeBlock" => rich_code_block(node, lines, current),
+        "table" => lines.extend(rich_table(node)),
         "bulletList" => rich_list(node, lines, current, list_depth, false),
         "orderedList" => rich_list(node, lines, current, list_depth, true),
         "blockquote" | "panel" => rich_block_children(node, lines, current, list_depth),
@@ -235,6 +236,117 @@ fn rich_code_block(node: &serde_json::Value, lines: &mut Vec<RichLine>, current:
         }
     }
     lines.push(std::mem::take(current));
+}
+
+/// Render an ADF `table` as one [`RichLine`] per `tableRow` (BDR 0007 S9): a
+/// legible inline row, not a spreadsheet grid. Rows/cells of the wrong or
+/// missing type are skipped rather than panicking.
+fn rich_table(node: &serde_json::Value) -> Vec<RichLine> {
+    node_content(node)
+        .iter()
+        .filter(|row| row.get("type").and_then(|t| t.as_str()) == Some("tableRow"))
+        .map(rich_table_row)
+        .collect()
+}
+
+fn rich_table_row(row: &serde_json::Value) -> RichLine {
+    let mut line: RichLine = Vec::new();
+    for (i, cell) in node_content(row)
+        .iter()
+        .filter_map(rich_table_cell)
+        .enumerate()
+    {
+        if i > 0 {
+            line.push(RichSpan {
+                text: " │ ".to_string(),
+                style: RichStyle::default(),
+            });
+        }
+        line.extend(cell);
+    }
+    line
+}
+
+/// A `tableHeader`/`tableCell`'s content flattened to inline runs, with
+/// `tableHeader` runs forced bold (merged over any existing marks). `None`
+/// for any other node type so an unexpected row child is skipped.
+fn rich_table_cell(cell: &serde_json::Value) -> Option<RichLine> {
+    let is_header = match cell.get("type").and_then(|t| t.as_str()) {
+        Some("tableHeader") => true,
+        Some("tableCell") => false,
+        _ => return None,
+    };
+    let mut runs: RichLine = Vec::new();
+    flatten_cell_content(cell, &mut runs);
+    if is_header {
+        for span in &mut runs {
+            span.style.bold = true;
+        }
+    }
+    Some(runs)
+}
+
+/// Flatten a table cell's nested block content (paragraphs, lists, etc.) into
+/// one flat run of inline spans — a cell reads as legible inline text, not a
+/// nested spreadsheet. Sibling block-level children are separated by a single
+/// space; unrecognised wrapper types (lists, panels, list items) are
+/// flattened by recursing into their own children.
+fn flatten_cell_content(node: &serde_json::Value, out: &mut RichLine) {
+    for (i, child) in node_content(node).iter().enumerate() {
+        if i > 0 {
+            push_cell_separator(out);
+        }
+        flatten_cell_block(child, out);
+    }
+}
+
+fn flatten_cell_block(node: &serde_json::Value, out: &mut RichLine) {
+    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match node_type {
+        "paragraph" | "heading" => flatten_cell_inline(node, out),
+        _ => flatten_cell_content(node, out),
+    }
+}
+
+fn push_cell_separator(out: &mut RichLine) {
+    if !out.is_empty() {
+        out.push(RichSpan {
+            text: " ".to_string(),
+            style: RichStyle::default(),
+        });
+    }
+}
+
+fn flatten_cell_inline(node: &serde_json::Value, out: &mut RichLine) {
+    for child in node_content(node) {
+        flatten_cell_inline_node(child, out);
+    }
+}
+
+fn flatten_cell_inline_node(node: &serde_json::Value, out: &mut RichLine) {
+    let node_type = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match node_type {
+        "text" => {
+            if let Some(text) = node.get("text").and_then(|t| t.as_str()) {
+                out.push(RichSpan {
+                    text: text.to_string(),
+                    style: marks_to_style(node),
+                });
+            }
+        }
+        "hardBreak" => out.push(RichSpan {
+            text: " ".to_string(),
+            style: RichStyle::default(),
+        }),
+        "mention" => push_attr_span(node, "text", out),
+        "emoji" => push_attr_span(node, "shortName", out),
+        "inlineCard" => push_attr_span(node, "url", out),
+        _ => {
+            for child in node_content(node) {
+                flatten_cell_inline_node(child, out);
+            }
+        }
+    }
 }
 
 fn rich_list(

@@ -373,6 +373,158 @@ fn adf_to_rich_empty_doc_returns_empty_vec() {
     assert!(lines.is_empty(), "empty doc must yield no lines: {lines:?}");
 }
 
+// --- adf_to_rich: table (issue 0034 / ADR 0014 §6 / BDR 0007 S9) ---
+
+#[test]
+fn adf_to_rich_table_header_and_two_rows_render_one_line_per_row_with_separators() {
+    let adf = doc(vec![table(vec![
+        table_row(vec![
+            table_header(vec![paragraph(vec![text("Name")])]),
+            table_header(vec![paragraph(vec![text("Status")])]),
+        ]),
+        table_row(vec![
+            table_cell(vec![paragraph(vec![text("Alice")])]),
+            table_cell(vec![paragraph(vec![text("Open")])]),
+        ]),
+        table_row(vec![
+            table_cell(vec![paragraph(vec![text("Bob")])]),
+            table_cell(vec![paragraph(vec![text("Done")])]),
+        ]),
+    ])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(
+        lines.len(),
+        3,
+        "table must render one line per row (header + 2 data rows): {lines:?}"
+    );
+
+    assert_eq!(lines[0][0].text, "Name");
+    assert!(
+        lines[0][0].style.bold,
+        "header cell run must be bold: {:?}",
+        lines[0][0]
+    );
+    assert_eq!(lines[0][1].text, " │ ");
+    assert_eq!(lines[0][2].text, "Status");
+    assert!(
+        lines[0][2].style.bold,
+        "header cell run must be bold: {:?}",
+        lines[0][2]
+    );
+
+    assert_eq!(lines[1][0].text, "Alice");
+    assert!(
+        !lines[1][0].style.bold,
+        "data-row cell run must not be bold: {:?}",
+        lines[1][0]
+    );
+    assert_eq!(lines[1][1].text, " │ ");
+    assert_eq!(lines[1][2].text, "Open");
+
+    assert_eq!(lines[2][0].text, "Bob");
+    assert_eq!(lines[2][1].text, " │ ");
+    assert_eq!(lines[2][2].text, "Done");
+}
+
+#[test]
+fn adf_to_rich_table_empty_cell_yields_empty_segment_between_separators() {
+    let adf = doc(vec![table(vec![table_row(vec![
+        table_cell(vec![paragraph(vec![text("Left")])]),
+        table_cell(vec![]),
+        table_cell(vec![paragraph(vec![text("Right")])]),
+    ])])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let text: String = lines[0].iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(
+        text, "Left │  │ Right",
+        "an empty cell must still leave separators on either side of it: {text}"
+    );
+}
+
+#[test]
+fn adf_to_rich_table_cell_with_marks_preserves_them() {
+    let adf = doc(vec![table(vec![table_row(vec![table_cell(vec![
+        paragraph(vec![marked_text(
+            "click",
+            vec![mark("strong"), link_mark("https://example.com")],
+        )]),
+    ])])])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let span = &lines[0][0];
+    assert_eq!(span.text, "click");
+    assert!(
+        span.style.bold,
+        "existing strong mark must survive: {span:?}"
+    );
+    assert_eq!(
+        span.style.link.as_deref(),
+        Some("https://example.com"),
+        "existing link mark must survive: {span:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_table_cell_with_nested_list_flattens_to_text() {
+    let adf = doc(vec![table(vec![table_row(vec![table_cell(vec![
+        bullet_list(vec![
+            list_item(vec![paragraph(vec![text("Item A")])]),
+            list_item(vec![paragraph(vec![text("Item B")])]),
+        ]),
+    ])])])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    let text: String = lines[0].iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(
+        text.trim_end(),
+        "Item A Item B",
+        "nested list content must flatten to plain inline text, no bullet markers: {text}"
+    );
+}
+
+#[test]
+fn adf_to_rich_table_between_paragraphs_keeps_surrounding_content_intact() {
+    let adf = doc(vec![
+        paragraph(vec![text("Before")]),
+        table(vec![table_row(vec![table_cell(vec![paragraph(vec![
+            text("Cell"),
+        ])])])]),
+        paragraph(vec![text("After")]),
+    ]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(
+        lines.len(),
+        3,
+        "surrounding paragraphs must be preserved around the table: {lines:?}"
+    );
+    assert_eq!(lines[0][0].text, "Before");
+    assert_eq!(lines[1][0].text, "Cell");
+    assert_eq!(lines[2][0].text, "After");
+}
+
+#[test]
+fn adf_to_rich_table_with_no_rows_renders_nothing() {
+    let adf = doc(vec![table(vec![])]);
+    let lines = adf_to_rich(&adf);
+    assert!(
+        lines.is_empty(),
+        "a table with no rows must render no lines, no panic: {lines:?}"
+    );
+}
+
+#[test]
+fn adf_to_rich_table_row_with_no_cells_renders_an_empty_line_without_panic() {
+    let adf = doc(vec![table(vec![table_row(vec![])])]);
+    let lines = adf_to_rich(&adf);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].is_empty(),
+        "a row with no cells must render as an empty line, no panic: {:?}",
+        lines[0]
+    );
+}
+
 // --- render_issue_human ---
 
 #[test]

@@ -1326,3 +1326,64 @@ fn ellipsize_display_truncates_with_a_single_ellipsis_column() {
 fn ellipsize_display_with_zero_columns_is_empty() {
     assert_eq!(panel::ellipsize_display("anything", 0), "");
 }
+
+// ---- issue 0034 / ADR 0014 §6 / BDR 0007 S9: ADF table in the Description panel ----
+
+fn table_description_adf() -> String {
+    use crate::test_support::{doc, paragraph, table, table_cell, table_header, table_row, text};
+    doc(vec![table(vec![
+        table_row(vec![
+            table_header(vec![paragraph(vec![text("Name")])]),
+            table_header(vec![paragraph(vec![text("Status")])]),
+        ]),
+        table_row(vec![
+            table_cell(vec![paragraph(vec![text("Alice")])]),
+            table_cell(vec![paragraph(vec![text("Open")])]),
+        ]),
+        table_row(vec![
+            table_cell(vec![paragraph(vec![text("Bob")])]),
+            table_cell(vec![paragraph(vec![text("Done")])]),
+        ]),
+    ])])
+}
+
+#[test]
+fn view_detail_description_table_renders_one_line_per_row_with_bold_header() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(table_description_adf()),
+        ..crate::test_support::issue("PROJ-80")
+    });
+
+    let buf = render_to_buffer(&model, 100, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Name │ Status"),
+        "the header row must render as one line with the ' │ ' separator; got: {text}"
+    );
+    assert!(
+        text.contains("Alice │ Open"),
+        "the first data row must render with no dropped cell text; got: {text}"
+    );
+    assert!(
+        text.contains("Bob │ Done"),
+        "the second data row must render with no dropped cell text; got: {text}"
+    );
+
+    let header_style = style_at_text(&buf, "Name").expect("header cell text must appear");
+    assert!(
+        header_style.add_modifier.contains(Modifier::BOLD),
+        "header row cells must render bold: {header_style:?}"
+    );
+    let data_style = style_at_text(&buf, "Alice").expect("data cell text must appear");
+    assert!(
+        !data_style.add_modifier.contains(Modifier::BOLD),
+        "data row cells must not render bold: {data_style:?}"
+    );
+
+    set_language("en");
+}

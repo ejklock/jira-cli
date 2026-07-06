@@ -34,6 +34,22 @@ pub(crate) fn rule_block() -> serde_json::Value {
     serde_json::json!({"type": "rule"})
 }
 
+pub(crate) fn table(rows: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "table", "content": rows})
+}
+
+pub(crate) fn table_row(cells: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "tableRow", "content": cells})
+}
+
+pub(crate) fn table_header(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "tableHeader", "content": content})
+}
+
+pub(crate) fn table_cell(content: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"type": "tableCell", "content": content})
+}
+
 pub(crate) fn bullet_list(items: Vec<serde_json::Value>) -> serde_json::Value {
     serde_json::json!({"type": "bulletList", "content": items})
 }
