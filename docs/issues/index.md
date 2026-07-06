@@ -43,6 +43,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0034](/issues/0034-d5-adf-table-rendering.md) | D5 | ADF table rendering in detail/comments | done | — |
 | [0035](/issues/0035-e2-401-reauth-messaging.md) | E2 | actionable 401 re-auth messaging (CLI + TUI status line) | done | 0033 |
 | [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | done | 0033 |
+| [0037](/issues/0037-b1-mouse-foundations.md) | B1 | mouse foundations: capture, wheel navigation, card click drills in | open | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -96,9 +97,13 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   **E3** = [0036](/issues/0036-e3-swr-first-paint-browse-entry.md)
   ([ADR 0016](/adr/0016-swr-first-paint-browse-entry.md),
   [BDR 0008](/bdr/0008-browse-entry-swr-behaviors.md)) **done**.
-- **Group B — interaction parity** (PRD 0003 R-B1..R-B5): mouse, app-managed text
-  selection + clipboard, inline body links + Ctrl/Cmd+click, attachments panel,
-  Projects→Issues axis. Per-slice ADRs at execution time. *To be sliced.*
+- **Group B — interaction parity** (PRD 0003 R-B1..R-B5), sliced B1→B5:
+  **B1** = [0037](/issues/0037-b1-mouse-foundations.md) mouse foundations
+  ([ADR 0017](/adr/0017-mouse-support-browse-tui.md),
+  [BDR 0009](/bdr/0009-browse-mouse-interactions.md)) *in progress*;
+  **B2** app-managed text selection + clipboard; **B3** inline body links +
+  Ctrl/Cmd+click (detail hit-testing); **B4** attachments panel;
+  **B5** Projects→Issues axis. Per-slice ADRs at execution time.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
 
