@@ -44,7 +44,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0035](/issues/0035-e2-401-reauth-messaging.md) | E2 | actionable 401 re-auth messaging (CLI + TUI status line) | done | 0033 |
 | [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | done | 0033 |
 | [0037](/issues/0037-b1-mouse-foundations.md) | B1 | mouse foundations: capture, wheel navigation, card click drills in | done | — |
-| [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | open | — |
+| [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | done | — |
 | [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | open | 0037, 0038 |
 
 ## Phase 2 — browse TUI (delivered)
