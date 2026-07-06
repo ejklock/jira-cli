@@ -2,7 +2,7 @@
 type: Issue
 title: "E3 — SWR first paint on browse entry (snapshot + revalidate + guards)"
 description: Wire the inherited TaskListCache so a warm browse entry opens the TUI instantly from the last mine snapshot with revalidating:true and one Cmd::RevalidateList; cold entry keeps the blocking fetch and seeds the snapshot; pure update guards (late-result, failure-keeps-list, load-more single-flight) + dim header refreshing… indicator.
-status: open
+status: done
 labels: [tui, performance, cache, swr, parity]
 blocked_by: 0033
 tracker:

@@ -42,7 +42,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0033](/issues/0033-d4-contextual-footer-status-line.md) | D4 | contextual footer + thin transient status line | done | 0030 |
 | [0034](/issues/0034-d5-adf-table-rendering.md) | D5 | ADF table rendering in detail/comments | done | — |
 | [0035](/issues/0035-e2-401-reauth-messaging.md) | E2 | actionable 401 re-auth messaging (CLI + TUI status line) | done | 0033 |
-| [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | open | 0033 |
+| [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | done | 0033 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -90,12 +90,12 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [BDR 0007](/bdr/0007-tui-visual-design-behaviors.md)): slices D1–D5 = issues
   [0030](/issues/0030-d1-theme-header-footer.md)–[0034](/issues/0034-d5-adf-table-rendering.md). **done**
   Known hardening follow-up: a tableHeader-cell-with-marks mutation test (D5 review observation).
-- **Group E — behavior parity** (PRD 0003 R-E1..R-E3): **E1** (bare TTY → `mine`)
-  required no work — already implemented and tested (`bare_no_command_action`);
+- **Group E — behavior parity** (PRD 0003 R-E1..R-E3): **done.** **E1** (bare TTY →
+  `mine`) required no work — already implemented and tested (`bare_no_command_action`);
   **E2** = [0035](/issues/0035-e2-401-reauth-messaging.md) **done**;
   **E3** = [0036](/issues/0036-e3-swr-first-paint-browse-entry.md)
   ([ADR 0016](/adr/0016-swr-first-paint-browse-entry.md),
-  [BDR 0008](/bdr/0008-browse-entry-swr-behaviors.md)) *in progress*.
+  [BDR 0008](/bdr/0008-browse-entry-swr-behaviors.md)) **done**.
 - **Group B — interaction parity** (PRD 0003 R-B1..R-B5): mouse, app-managed text
   selection + clipboard, inline body links + Ctrl/Cmd+click, attachments panel,
   Projects→Issues axis. Per-slice ADRs at execution time. *To be sliced.*

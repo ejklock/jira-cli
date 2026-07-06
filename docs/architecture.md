@@ -90,6 +90,16 @@ data seams — `client` (`JiraClient::search` for lists, cache-or-fetch for deta
 `store` — never the rendering `*_core` functions. Read-only by construction
 ([ADR 0007](/adr/0007-browse-tui-elm-architecture.md)).
 
+Browse **entry** is stale-while-revalidate
+([ADR 0016](/adr/0016-swr-first-paint-browse-entry.md)): `fetch_and_run` first
+reads the `task_list_cache` snapshot (`store`, scope `"mine"`, keyed by
+`instances_key`, 7-day max-age) — a warm hit opens the TUI instantly with
+`revalidating: true` and one `Cmd::RevalidateList` revalidating inside the
+async loop (the completion swaps the rows and rewrites the snapshot at the
+shell seam); a cold entry keeps the pre-TUI blocking fetch and seeds the
+snapshot. The single-flight and late-result guards live in the pure `update`
+([BDR 0008](/bdr/0008-browse-entry-swr-behaviors.md)).
+
 The Group-D design system ([ADR 0014](/adr/0014-tui-visual-design-system.md))
 added two presentation modules: `theme.rs` — the single home of every
 `Color::Rgb` literal (grep-enforced) exposing named style constructors — and
