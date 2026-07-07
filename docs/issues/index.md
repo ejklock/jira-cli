@@ -46,6 +46,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0037](/issues/0037-b1-mouse-foundations.md) | B1 | mouse foundations: capture, wheel navigation, card click drills in | done | — |
 | [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | done | — |
 | [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | done | 0037, 0038 |
+| [0040](/issues/0040-b3-app-managed-selection.md) | B3 | app-managed text selection in the detail (drag highlight + copy on release) | open | 0037, 0039 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -109,8 +110,11 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   ([ADR 0018](/adr/0018-inline-body-links-modifier-click.md),
   [BDR 0010](/bdr/0010-inline-body-link-behaviors.md)) **done** —
   links before selection, mirroring the fork's dependency arc (the detail
-  hit geometry selection reuses); **B3** app-managed text selection +
-  clipboard; **B4** attachments panel; **B5** Projects→Issues axis.
+  hit geometry selection reuses); **B3** = [0040](/issues/0040-b3-app-managed-selection.md)
+  app-managed text selection + clipboard
+  ([ADR 0019](/adr/0019-app-managed-text-selection.md),
+  [BDR 0011](/bdr/0011-detail-text-selection-behaviors.md)) *in progress*;
+  **B4** attachments panel; **B5** Projects→Issues axis.
   Per-slice ADRs at execution time.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*

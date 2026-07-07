@@ -16,3 +16,4 @@ Append-only: supersede or amend.
 | [0008](/bdr/0008-browse-entry-swr-behaviors.md) | browse-entry SWR — instant cached paint, always revalidate, guarded swap | Accepted |
 | [0009](/bdr/0009-browse-mouse-interactions.md) | browse TUI mouse — wheel navigates, card click drills in, nothing exits | Accepted |
 | [0010](/bdr/0010-inline-body-link-behaviors.md) | body links — inline visible '[url]', Ctrl/Cmd+click opens, plain click never navigates | Accepted |
+| [0011](/bdr/0011-detail-text-selection-behaviors.md) | detail text selection — drag highlights, release copies logical text, plain click clears | Accepted |
