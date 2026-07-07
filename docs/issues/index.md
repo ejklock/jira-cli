@@ -47,7 +47,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | done | — |
 | [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | done | 0037, 0038 |
 | [0040](/issues/0040-b3-app-managed-selection.md) | B3 | app-managed text selection in the detail (drag highlight + copy on release) | done | 0037, 0039 |
-| [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | open | — |
+| [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | done | — |
 | [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | open | 0041 |
 
 ## Phase 2 — browse TUI (delivered)
