@@ -48,7 +48,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | done | 0037, 0038 |
 | [0040](/issues/0040-b3-app-managed-selection.md) | B3 | app-managed text selection in the detail (drag highlight + copy on release) | done | 0037, 0039 |
 | [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | done | — |
-| [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | open | 0041 |
+| [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | done | 0041 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -119,7 +119,7 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   **B4** attachments ([ADR 0020](/adr/0020-issue-attachments-detail-panel.md),
   [BDR 0012](/bdr/0012-attachments-behaviors.md)), sliced
   [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) (data + agent_json) +
-  [0042](/issues/0042-b4b-attachments-tui-panel.md) (TUI panel) *in progress*;
+  [0042](/issues/0042-b4b-attachments-tui-panel.md) (TUI panel) **done**;
   **B5** Projects→Issues axis. Per-slice ADRs at execution time.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
