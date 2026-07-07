@@ -25,3 +25,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0017](/adr/0017-mouse-support-browse-tui.md) | Mouse support in the browse TUI (capture lifecycle, wheel, card click) | Accepted |
 | [0018](/adr/0018-inline-body-links-modifier-click.md) | Inline body links ('text [url]') with modifier-gated click activation | Accepted |
 | [0019](/adr/0019-app-managed-text-selection.md) | App-managed text selection in the detail (logical-coordinate drag + clipboard) | Accepted |
+| [0020](/adr/0020-issue-attachments-detail-panel.md) | Issue attachments — curated model field, agent_json array, inline Attachments panel | Accepted |
