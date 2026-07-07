@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow};
+use crate::test_support::attachment;
 
 fn sample_issue() -> Issue {
     Issue {
@@ -28,6 +29,7 @@ fn sample_issue() -> Issue {
             created: Some("2026-01-03T14:22:00.000+0000".to_string()),
             updated: None,
         }],
+        attachments: vec![],
     }
 }
 
@@ -184,6 +186,102 @@ fn issue_object_empty_comments_list_yields_empty_array() {
     let obj = issue_object(&issue, "work", "https://acme.atlassian.net", false);
     let comments = obj["comments"].as_array().unwrap();
     assert_eq!(comments.len(), 0, "empty comments must produce empty array");
+}
+
+// --- issue_object: attachments (ADR 0020 / BDR 0012 S2) ---
+
+#[test]
+fn issue_object_attachments_contains_both_entries_with_exact_shape() {
+    let issue = Issue {
+        attachments: vec![
+            attachment(
+                "screenshot.png",
+                "https://acme.atlassian.net/attachments/1",
+                Some("image/png"),
+                Some(2048),
+            ),
+            attachment(
+                "notes.txt",
+                "https://acme.atlassian.net/attachments/2",
+                None,
+                None,
+            ),
+        ],
+        ..sample_issue()
+    };
+    let obj = issue_object(&issue, "work", "https://acme.atlassian.net", false);
+    let attachments = obj["attachments"].as_array().unwrap();
+    assert_eq!(attachments.len(), 2, "both attachments must be present");
+
+    let first = &attachments[0];
+    let mut keys: Vec<&str> = first
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec!["filename", "mime_type", "size", "url"],
+        "each attachment must have exactly {{filename, url, mime_type, size}}"
+    );
+    assert_eq!(first["filename"], "screenshot.png");
+    assert_eq!(first["url"], "https://acme.atlassian.net/attachments/1");
+    assert_eq!(first["mime_type"], "image/png");
+    assert_eq!(first["size"], 2048);
+
+    let second = &attachments[1];
+    assert_eq!(second["filename"], "notes.txt");
+    assert_eq!(
+        second["mime_type"],
+        serde_json::Value::Null,
+        "absent mime_type must map to null"
+    );
+    assert_eq!(
+        second["size"],
+        serde_json::Value::Null,
+        "absent size must map to null"
+    );
+}
+
+#[test]
+fn issue_object_no_attachments_yields_empty_array() {
+    let obj = issue_object(&sample_issue(), "work", "https://acme.atlassian.net", false);
+    let attachments = obj["attachments"].as_array().unwrap();
+    assert_eq!(
+        attachments.len(),
+        0,
+        "an issue with no attachments must yield an empty array"
+    );
+}
+
+#[test]
+fn issue_object_attachments_are_additive_pre_existing_keys_unchanged() {
+    let issue = Issue {
+        attachments: vec![attachment(
+            "file.pdf",
+            "https://acme.atlassian.net/attachments/1",
+            Some("application/pdf"),
+            Some(10),
+        )],
+        ..sample_issue()
+    };
+    let obj = issue_object(&issue, "work", "https://acme.atlassian.net", false);
+    assert!(
+        obj["attachments"].as_array().unwrap().len() == 1,
+        "attachments must be present alongside pre-existing keys"
+    );
+    assert_eq!(
+        obj["comments"].as_array().unwrap().len(),
+        1,
+        "adding attachments must not change the pre-existing comments key"
+    );
+    assert_eq!(
+        obj["duedate"],
+        serde_json::Value::Null,
+        "adding attachments must not change the pre-existing duedate key"
+    );
 }
 
 // --- issue_object: raw duedate (issue 0026 A3b / ADR 0013) ---

@@ -1,4 +1,4 @@
-use crate::models::{Issue, IssueAssignee, IssueComment};
+use crate::models::{Attachment, Issue, IssueAssignee, IssueComment};
 
 // --- ADF fixture builders (shared by render.rs and tui.rs ADF/description/comment tests) ---
 //
@@ -133,6 +133,20 @@ pub(crate) fn comment(
     }
 }
 
+pub(crate) fn attachment(
+    filename: &str,
+    url: &str,
+    mime_type: Option<&str>,
+    size: Option<u64>,
+) -> Attachment {
+    Attachment {
+        filename: filename.to_owned(),
+        url: url.to_owned(),
+        mime_type: mime_type.map(str::to_owned),
+        size,
+    }
+}
+
 /// A neutral `Issue` fixture with sane defaults covering every field. Tests
 /// override only the field(s) they assert via `Issue { field: value, ..issue(key) }`,
 /// so a new `Issue` field is added once, here, instead of in every test file.
@@ -151,5 +165,6 @@ pub(crate) fn issue(key: &str) -> Issue {
         duedate: None,
         description: Some(plain_paragraph("A neutral issue description.")),
         comments: vec![],
+        attachments: vec![],
     }
 }

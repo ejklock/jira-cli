@@ -390,6 +390,7 @@ fn make_issue(key: &str) -> Issue {
         duedate: None,
         description: Some("Description text".to_string()),
         comments: vec![],
+        attachments: vec![],
     }
 }
 

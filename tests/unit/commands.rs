@@ -850,6 +850,7 @@ fn pre_populate_cache(store: &Store, instance_name: &str) {
             created: None,
             updated: None,
         }],
+        attachments: vec![],
     };
     IssueCache::new(store.conn())
         .write(instance_name, &issue)

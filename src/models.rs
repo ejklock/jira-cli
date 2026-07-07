@@ -19,6 +19,17 @@ pub struct IssueComment {
     pub updated: Option<String>,
 }
 
+/// A single attachment on a Jira issue (ADR 0020 / BDR 0012).
+/// Only the curated fields the tool uses are present — not a mirror of the
+/// raw `fields.attachment` entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub filename: String,
+    pub url: String,
+    pub mime_type: Option<String>,
+    pub size: Option<u64>,
+}
+
 /// The curated domain model for a Jira Cloud issue.
 /// Only the fields the tool actually uses are present here — not a mirror of gouqi's rep types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +53,11 @@ pub struct Issue {
     /// Callers must pass this through `adf_to_plain_text` before displaying.
     pub description: Option<String>,
     pub comments: Vec<IssueComment>,
+    /// Curated attachment metadata (ADR 0020 / BDR 0012). `#[serde(default)]`
+    /// keeps older cached issues (written before this field existed)
+    /// deserializable without a migration, mirroring `duedate`.
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// Curated representation of the authenticated user.

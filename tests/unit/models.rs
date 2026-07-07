@@ -29,6 +29,7 @@ fn issue_roundtrips_through_serde() {
             created: None,
             updated: None,
         }],
+        attachments: vec![],
     };
 
     let serialized = serde_json::to_value(&issue).unwrap();

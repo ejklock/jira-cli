@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow, Myself, SearchResult};
+use crate::models::{
+    Attachment, Issue, IssueAssignee, IssueComment, IssueRow, Myself, SearchResult,
+};
 use crate::store::instances::Instance;
 use anyhow::{anyhow, Result};
 use gouqi::core::SearchApiVersion;
@@ -205,6 +207,7 @@ fn map_gouqi_issue(raw: gouqi::Issue) -> Result<Issue> {
     let status_category = extract_status_category(&raw);
 
     let comments = map_comments(&raw);
+    let attachments = extract_attachments(&raw);
 
     Ok(Issue {
         key: raw.key,
@@ -220,6 +223,7 @@ fn map_gouqi_issue(raw: gouqi::Issue) -> Result<Issue> {
         duedate,
         description,
         comments,
+        attachments,
     })
 }
 
@@ -255,6 +259,39 @@ fn extract_status_category(raw: &gouqi::Issue) -> Option<String> {
         .and_then(|sc| sc.get("key"))
         .and_then(|n| n.as_str())
         .map(|s| s.to_string())
+}
+
+/// Extract `fields.attachment` from the raw fields BTreeMap into curated
+/// `Attachment`s, mirroring `extract_duedate`'s raw-field-access pattern.
+/// Absent, `null`, or non-array yields an empty vec; each array entry is
+/// parsed by `parse_attachment_entry`, which skips (never errors on) an
+/// entry missing its required `filename`/`content`.
+fn extract_attachments(raw: &gouqi::Issue) -> Vec<Attachment> {
+    raw.fields
+        .get("attachment")
+        .and_then(|v| v.as_array())
+        .map(|entries| entries.iter().filter_map(parse_attachment_entry).collect())
+        .unwrap_or_default()
+}
+
+/// Parse a single raw `fields.attachment` entry into a curated `Attachment`.
+/// `filename` and `content` (mapped to `url`) are required — the entry is
+/// skipped (returns `None`) when either is missing or not a string.
+/// `mimeType` and `size` are optional.
+fn parse_attachment_entry(entry: &serde_json::Value) -> Option<Attachment> {
+    let filename = entry.get("filename")?.as_str()?.to_string();
+    let url = entry.get("content")?.as_str()?.to_string();
+    let mime_type = entry
+        .get("mimeType")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let size = entry.get("size").and_then(|v| v.as_u64());
+    Some(Attachment {
+        filename,
+        url,
+        mime_type,
+        size,
+    })
 }
 
 fn map_comments(raw: &gouqi::Issue) -> Vec<IssueComment> {

@@ -93,7 +93,21 @@ fn build_issue_payload() -> serde_json::Value {
                 "maxResults": 1,
                 "total": 1,
                 "startAt": 0
-            }
+            },
+            "attachment": [
+                {
+                    "id": "200",
+                    "filename": "screenshot.png",
+                    "content": "https://example.atlassian.net/secure/attachment/200/screenshot.png",
+                    "mimeType": "image/png",
+                    "size": 2048
+                },
+                {
+                    "id": "201",
+                    "filename": "notes.txt",
+                    "content": "https://example.atlassian.net/secure/attachment/201/notes.txt"
+                }
+            ]
         }
     })
 }
@@ -152,6 +166,127 @@ async fn get_issue_returns_mapped_issue_with_all_curated_fields() {
     assert_eq!(issue.comments[0].body, "Reproduced on v2.1.");
     assert_eq!(issue.comments[0].author.as_deref(), Some("Bob Dev"));
 
+    assert_eq!(
+        issue.attachments.len(),
+        2,
+        "both attachments must be mapped"
+    );
+    assert_eq!(issue.attachments[0].filename, "screenshot.png");
+    assert_eq!(
+        issue.attachments[0].url,
+        "https://example.atlassian.net/secure/attachment/200/screenshot.png"
+    );
+    assert_eq!(issue.attachments[0].mime_type.as_deref(), Some("image/png"));
+    assert_eq!(issue.attachments[0].size, Some(2048));
+    assert_eq!(issue.attachments[1].filename, "notes.txt");
+    assert_eq!(
+        issue.attachments[1].url,
+        "https://example.atlassian.net/secure/attachment/201/notes.txt"
+    );
+    assert_eq!(
+        issue.attachments[1].mime_type, None,
+        "mimeType absent must map to None"
+    );
+    assert_eq!(
+        issue.attachments[1].size, None,
+        "size absent must map to None"
+    );
+
+    server.verify().await;
+}
+
+/// AC1: a payload with no `fields.attachment` key must map to an empty vec,
+/// never an error.
+#[tokio::test]
+async fn get_issue_maps_attachments_to_empty_vec_when_field_absent() {
+    let server = MockServer::start().await;
+    let mut payload = build_issue_payload();
+    payload["fields"]
+        .as_object_mut()
+        .unwrap()
+        .remove("attachment");
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert!(
+        issue.attachments.is_empty(),
+        "absent attachment field must map to an empty vec"
+    );
+    server.verify().await;
+}
+
+/// AC1: `fields.attachment: null` must map to an empty vec, never an error.
+#[tokio::test]
+async fn get_issue_maps_attachments_to_empty_vec_when_field_is_null() {
+    let server = MockServer::start().await;
+    let mut payload = build_issue_payload();
+    payload["fields"]["attachment"] = serde_json::Value::Null;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert!(
+        issue.attachments.is_empty(),
+        "null attachment field must map to an empty vec"
+    );
+    server.verify().await;
+}
+
+/// AC1: a malformed entry (missing filename) among otherwise valid entries is
+/// skipped — never an error or panic — while valid entries still parse.
+#[tokio::test]
+async fn get_issue_skips_malformed_attachment_entry_and_keeps_valid_ones() {
+    let server = MockServer::start().await;
+    let mut payload = build_issue_payload();
+    payload["fields"]["attachment"] = serde_json::json!([
+        {
+            "id": "200",
+            "filename": "screenshot.png",
+            "content": "https://example.atlassian.net/secure/attachment/200/screenshot.png",
+            "mimeType": "image/png",
+            "size": 2048
+        },
+        {
+            "id": "202",
+            "content": "https://example.atlassian.net/secure/attachment/202/missing-filename"
+        },
+        {
+            "id": "203",
+            "filename": "no-content.txt"
+        }
+    ]);
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert_eq!(
+        issue.attachments.len(),
+        1,
+        "malformed entries (missing filename or content) must be skipped"
+    );
+    assert_eq!(issue.attachments[0].filename, "screenshot.png");
     server.verify().await;
 }
 
@@ -673,6 +808,69 @@ fn issue_row_pre_field_cached_json_deserializes_with_none_duedate_and_project() 
     assert_eq!(
         row.project, None,
         "pre-field cache must default project to None"
+    );
+}
+
+/// AC2: cached `Issue` JSON written before `attachments` existed (pre-B4)
+/// must still deserialize, defaulting to an empty vec — the same
+/// `#[serde(default)]` back-compat pattern as `duedate`/`comments`.
+#[test]
+fn issue_pre_attachments_cached_json_deserializes_with_empty_attachments() {
+    let pre_field_snapshot = serde_json::json!({
+        "key": "PROJ-9",
+        "summary": "Cached before B4",
+        "status": "Open",
+        "status_category": null,
+        "issue_type": "Task",
+        "assignee": null,
+        "reporter": null,
+        "priority": null,
+        "created": null,
+        "updated": null,
+        "description": null,
+        "comments": []
+    });
+
+    let issue: crate::models::Issue = serde_json::from_value(pre_field_snapshot).unwrap();
+
+    assert!(
+        issue.attachments.is_empty(),
+        "pre-B4 cache without the attachments key must default to an empty vec"
+    );
+}
+
+/// AC2: a populated `attachments` vec survives a serialize/deserialize
+/// round-trip — the cache write/read guarantee (BDR 0012 S1).
+#[test]
+fn issue_attachments_roundtrip_through_serde() {
+    let issue = crate::models::Issue {
+        key: "PROJ-10".to_string(),
+        summary: "Has attachments".to_string(),
+        status: "Open".to_string(),
+        status_category: None,
+        issue_type: "Task".to_string(),
+        assignee: None,
+        reporter: None,
+        priority: None,
+        created: None,
+        updated: None,
+        duedate: None,
+        description: None,
+        comments: vec![],
+        attachments: vec![crate::test_support::attachment(
+            "screenshot.png",
+            "https://example.atlassian.net/secure/attachment/200/screenshot.png",
+            Some("image/png"),
+            Some(2048),
+        )],
+    };
+
+    let serialized = serde_json::to_value(&issue).unwrap();
+    let deserialized: crate::models::Issue = serde_json::from_value(serialized).unwrap();
+
+    assert_eq!(
+        deserialized.attachments, issue.attachments,
+        "a populated attachments vec must round-trip unchanged"
     );
 }
 

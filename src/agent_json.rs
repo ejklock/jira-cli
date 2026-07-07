@@ -1,4 +1,4 @@
-use crate::models::{Issue, IssueComment, IssueRow};
+use crate::models::{Attachment, Issue, IssueComment, IssueRow};
 use crate::render::adf_to_plain_text;
 use crate::store::cache::derive_project_key;
 use serde_json::{json, Value};
@@ -50,6 +50,8 @@ pub fn issue_object(
         Value::Array(issue.comments.iter().map(shape_comment).collect())
     };
 
+    let attachments = Value::Array(issue.attachments.iter().map(shape_attachment).collect());
+
     json!({
         "ref": issue.key,
         "instance": instance_name,
@@ -70,6 +72,7 @@ pub fn issue_object(
         "url": issue_url,
         "description": description_text,
         "comments": comments,
+        "attachments": attachments,
     })
 }
 
@@ -127,6 +130,15 @@ fn shape_comment(comment: &IssueComment) -> Value {
         "author_id": Value::Null,
         "created": comment.created,
         "body": body,
+    })
+}
+
+fn shape_attachment(attachment: &Attachment) -> Value {
+    json!({
+        "filename": attachment.filename,
+        "url": attachment.url,
+        "mime_type": attachment.mime_type,
+        "size": attachment.size,
     })
 }
 
