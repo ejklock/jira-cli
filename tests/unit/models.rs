@@ -25,6 +25,7 @@ fn issue_roundtrips_through_serde() {
         comments: vec![IssueComment {
             id: Some("10".to_string()),
             author: Some("Bob".to_string()),
+            author_account_id: None,
             body: "Nice work".to_string(),
             created: None,
             updated: None,

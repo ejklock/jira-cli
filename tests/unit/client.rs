@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::instances::Instance;
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn make_instance(base_url: &str) -> Instance {
@@ -1154,5 +1154,319 @@ async fn list_projects_500_does_not_map_to_unauthorized() {
         Err(ClientError::Other(_)) => {}
         other => panic!("expected ClientError::Other for 500, got: {other:?}"),
     }
+    server.verify().await;
+}
+
+// --- plain_text_to_adf (AC2) ---
+
+#[test]
+fn plain_text_to_adf_single_line_yields_one_text_node() {
+    let doc = plain_text_to_adf("hello world");
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{"type": "text", "text": "hello world"}]
+            }]
+        })
+    );
+}
+
+#[test]
+fn plain_text_to_adf_multi_line_interleaves_hard_breaks() {
+    let doc = plain_text_to_adf("a\nb");
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"},
+                    {"type": "text", "text": "b"}
+                ]
+            }]
+        })
+    );
+}
+
+#[test]
+fn plain_text_to_adf_empty_input_yields_valid_doc_without_empty_text_nodes() {
+    let doc = plain_text_to_adf("");
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": []}]
+        })
+    );
+}
+
+#[test]
+fn plain_text_to_adf_leading_and_trailing_newlines_never_emit_empty_text_nodes() {
+    let doc = plain_text_to_adf("\na\n");
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "hardBreak"},
+                    {"type": "text", "text": "a"},
+                    {"type": "hardBreak"}
+                ]
+            }]
+        })
+    );
+}
+
+// --- add_comment / update_comment / delete_comment (AC1, AC3) ---
+
+fn expected_comment_adf_body(text: &str) -> serde_json::Value {
+    serde_json::json!({ "body": plain_text_to_adf(text) })
+}
+
+/// AC1: add_comment POSTs to the literal v3 path with the ADF-wrapped body
+/// and maps the response into `CommentWriteResult`.
+#[tokio::test]
+async fn add_comment_posts_v3_path_with_adf_body_and_returns_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .and(body_json(expected_comment_adf_body(
+            "Reproduced on staging.",
+        )))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": "10001"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client
+        .add_comment("PROJ-1", "Reproduced on staging.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.id, "10001");
+    server.verify().await;
+}
+
+/// AC1: a 401 on add_comment maps to the typed `ClientError::Unauthorized`.
+#[tokio::test]
+async fn add_comment_401_maps_to_typed_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.add_comment("PROJ-1", "text").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test-instance"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC3: a 400 on add_comment must never be a false Ok — it stays `Other`.
+#[tokio::test]
+async fn add_comment_400_does_not_map_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.add_comment("PROJ-1", "text").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 400, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1: update_comment PUTs to the literal v3 path (the received-path assert
+/// IS the dot-segment normalization's falsifiability guard — ADR 0022 addendum).
+#[tokio::test]
+async fn update_comment_puts_v3_path_with_adf_body_and_returns_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .and(body_json(expected_comment_adf_body("Updated text.")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "10001"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client
+        .update_comment("PROJ-1", "10001", "Updated text.")
+        .await
+        .unwrap();
+
+    assert_eq!(result.id, "10001");
+    server.verify().await;
+}
+
+/// AC3: a 403 on update_comment must never be a false Ok — it stays `Other`.
+#[tokio::test]
+async fn update_comment_403_does_not_map_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.update_comment("PROJ-1", "10001", "text").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 403, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC1/AC3: delete_comment DELETEs to the literal v3 path and maps a 204
+/// empty body to `Ok(())` — the received-path assert is the same dot-segment
+/// falsifiability guard as `update_comment`'s.
+#[tokio::test]
+async fn delete_comment_deletes_v3_path_and_maps_204_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.delete_comment("PROJ-1", "10001").await;
+
+    assert!(
+        result.is_ok(),
+        "204 empty body must map to Ok(()): {result:?}"
+    );
+    server.verify().await;
+}
+
+/// AC3: a 401 on delete_comment maps to the typed `ClientError::Unauthorized`.
+#[tokio::test]
+async fn delete_comment_401_maps_to_typed_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.delete_comment("PROJ-1", "10001").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test-instance"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC3: a 500 on delete_comment must never be a false Ok — it stays `Other`.
+#[tokio::test]
+async fn delete_comment_500_does_not_map_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.delete_comment("PROJ-1", "10001").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 500, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+// --- comment author_account_id read regression (AC4) ---
+
+/// AC4: a comment payload with `author.accountId` maps to `Some`.
+#[tokio::test]
+async fn get_issue_comment_author_account_id_maps_to_some_when_present() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_issue_payload()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert_eq!(
+        issue.comments[0].author_account_id.as_deref(),
+        Some("aaa"),
+        "comment author.accountId must map to author_account_id"
+    );
+    server.verify().await;
+}
+
+/// AC4: a comment payload with no `author` at all maps `author_account_id`
+/// to `None`, never an error.
+#[tokio::test]
+async fn get_issue_comment_author_account_id_maps_to_none_when_author_absent() {
+    let server = MockServer::start().await;
+    let mut payload = build_issue_payload();
+    payload["fields"]["comment"]["comments"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("author");
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let issue = client.get_issue("PROJ-123").await.unwrap();
+
+    assert_eq!(
+        issue.comments[0].author_account_id, None,
+        "absent author must map author_account_id to None"
+    );
     server.verify().await;
 }

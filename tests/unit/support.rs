@@ -127,6 +127,7 @@ pub(crate) fn comment(
     IssueComment {
         id: id.map(str::to_owned),
         author: author.map(str::to_owned),
+        author_account_id: None,
         body: body.to_owned(),
         created: created.map(str::to_owned),
         updated: updated.map(str::to_owned),

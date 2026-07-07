@@ -14,9 +14,22 @@ pub struct IssueAssignee {
 pub struct IssueComment {
     pub id: Option<String>,
     pub author: Option<String>,
+    /// The comment author's Cloud account ID (ADR 0022 / issue 0045).
+    /// `#[serde(default)]` keeps older cached JSON (written before this field
+    /// existed) deserializable without a migration, mirroring `duedate`.
+    #[serde(default)]
+    pub author_account_id: Option<String>,
     pub body: String,
     pub created: Option<String>,
     pub updated: Option<String>,
+}
+
+/// The curated result of a comment write (add/update): the server-assigned
+/// comment ID. Never a raw `serde_json::Value` — the only shape the
+/// `JiraClient` write trait exposes to callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentWriteResult {
+    pub id: String,
 }
 
 /// A single attachment on a Jira issue (ADR 0020 / BDR 0012).

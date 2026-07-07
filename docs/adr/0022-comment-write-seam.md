@@ -68,6 +68,24 @@ affordance predicate (ADR 0015 §3) needs. The ADF read mapper
    endpoint path. This is the unit-test enforcement ADR 0015 §1 promised
    for Constitution Amendment 1.
 
+### Addendum — PUT/DELETE versioning workaround (2026-07-07)
+
+Implementation surfaced that gouqi 0.20.0 (the latest published release) has
+**no** `put_versioned`/`delete_versioned` — only GET/POST have versioned
+helpers; the unversioned `put`/`delete` build `rest/{api}/latest{endpoint}`,
+which aliases the non-ADF v2 surface (the same reason `get_issue` already
+bypasses `issues().get()`). Decision: keep the single wrapped instance and
+reach v3 through **RFC 3986 dot-segment normalization** — a single private
+helper prefixes the endpoint with `/../3` so the `url` crate's parse-time
+path normalization collapses `latest/../3` into `3`. The dependence on the
+third-party URL builder is made falsifiable: the wiremock write tests assert
+the **received** request path is literally `/rest/api/3/...`, so any gouqi
+or `url`-crate change breaks the build, never production. Follow-up:
+contribute `put_versioned`/`delete_versioned` upstream and delete the
+workaround. Rejected here: forking gouqi (maintenance/supply-chain cost for
+two helpers) and accepting the `latest` v2 alias (unverifiable ADF-body
+compatibility — silent production risk).
+
 ## Alternatives considered
 
 - **A raw reqwest fallback for writes.** Rejected — a second network stack

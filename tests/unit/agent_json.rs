@@ -25,6 +25,7 @@ fn sample_issue() -> Issue {
         comments: vec![IssueComment {
             id: Some("100".to_string()),
             author: Some("John".to_string()),
+            author_account_id: None,
             body: "A comment body.".to_string(),
             created: Some("2026-01-03T14:22:00.000+0000".to_string()),
             updated: None,

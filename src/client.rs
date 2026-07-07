@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use crate::models::{
-    Attachment, Issue, IssueAssignee, IssueComment, IssueRow, Myself, ProjectRow, SearchResult,
+    Attachment, CommentWriteResult, Issue, IssueAssignee, IssueComment, IssueRow, Myself,
+    ProjectRow, SearchResult,
 };
 use crate::store::instances::Instance;
 use anyhow::{anyhow, Result};
@@ -47,6 +48,62 @@ pub trait JiraClient: Send + Sync {
     ) -> ClientResult<SearchResult>;
     async fn myself(&self) -> ClientResult<Myself>;
     async fn list_projects(&self) -> ClientResult<Vec<ProjectRow>>;
+    async fn add_comment(&self, key: &str, body_text: &str) -> ClientResult<CommentWriteResult>;
+    async fn update_comment(
+        &self,
+        key: &str,
+        comment_id: &str,
+        body_text: &str,
+    ) -> ClientResult<CommentWriteResult>;
+    async fn delete_comment(&self, key: &str, comment_id: &str) -> ClientResult<()>;
+}
+
+/// Build the minimal ADF document Jira Cloud's comment-write endpoints
+/// require: a single paragraph whose text is split on `\n` and interleaved
+/// with `hardBreak` nodes. Pure — no I/O. Empty text yields a structurally
+/// valid doc with an empty paragraph `content` array (ADF rejects empty text
+/// nodes, so blank segments are never emitted).
+fn plain_text_to_adf(text: &str) -> serde_json::Value {
+    let mut lines = text.split('\n');
+    let mut content = Vec::new();
+    if let Some(first) = lines.next() {
+        push_text_node(&mut content, first);
+    }
+    for line in lines {
+        content.push(serde_json::json!({"type": "hardBreak"}));
+        push_text_node(&mut content, line);
+    }
+    serde_json::json!({
+        "type": "doc",
+        "version": 1,
+        "content": [{"type": "paragraph", "content": content}],
+    })
+}
+
+fn push_text_node(content: &mut Vec<serde_json::Value>, segment: &str) {
+    if !segment.is_empty() {
+        content.push(serde_json::json!({"type": "text", "text": segment}));
+    }
+}
+
+/// gouqi 0.20 exposes no `put_versioned`/`delete_versioned` — only GET/POST
+/// have versioned helpers. Its unversioned `put`/`delete` build
+/// `rest/{api}/latest{endpoint}`; prefixing the endpoint with this
+/// dot-segment makes the `url` crate's RFC 3986 parse-time normalization
+/// collapse `latest/../3` into `3`, reaching the v3 (ADF) API without a
+/// second HTTP client or construction site (ADR 0022 addendum). The
+/// wiremock tests assert the literal received path is the falsifiability
+/// guard for this workaround.
+fn v3_write_endpoint(path: &str) -> String {
+    format!("/../3{path}")
+}
+
+/// The server-assigned ID returned by the comment write endpoints — the only
+/// shape parsed out of the raw POST/PUT response body before it is mapped
+/// into the curated `CommentWriteResult`.
+#[derive(serde::Deserialize)]
+struct CommentIdResponse {
+    id: String,
 }
 
 /// The single place where a `gouqi::async::Jira` is constructed.
@@ -159,6 +216,38 @@ impl JiraClient for GouqiJiraClient {
             .await
             .map_err(|e| self.classify_error(e, |e| anyhow!("list_projects(): {e}")))?;
         Ok(extract_project_rows(&raw))
+    }
+
+    async fn add_comment(&self, key: &str, body_text: &str) -> ClientResult<CommentWriteResult> {
+        let body = serde_json::json!({ "body": plain_text_to_adf(body_text) });
+        let raw: CommentIdResponse = self
+            .jira
+            .post_versioned("api", Some("3"), &format!("/issue/{key}/comment"), body)
+            .await
+            .map_err(|e| self.classify_error(e, |e| anyhow!("add_comment({key}): {e}")))?;
+        Ok(CommentWriteResult { id: raw.id })
+    }
+
+    async fn update_comment(
+        &self,
+        key: &str,
+        comment_id: &str,
+        body_text: &str,
+    ) -> ClientResult<CommentWriteResult> {
+        let body = serde_json::json!({ "body": plain_text_to_adf(body_text) });
+        let endpoint = v3_write_endpoint(&format!("/issue/{key}/comment/{comment_id}"));
+        let raw: CommentIdResponse = self.jira.put("api", &endpoint, body).await.map_err(|e| {
+            self.classify_error(e, |e| anyhow!("update_comment({key}, {comment_id}): {e}"))
+        })?;
+        Ok(CommentWriteResult { id: raw.id })
+    }
+
+    async fn delete_comment(&self, key: &str, comment_id: &str) -> ClientResult<()> {
+        let endpoint = v3_write_endpoint(&format!("/issue/{key}/comment/{comment_id}"));
+        let result: Result<(), gouqi::Error> = self.jira.delete("api", &endpoint).await;
+        result.map_err(|e| {
+            self.classify_error(e, |e| anyhow!("delete_comment({key}, {comment_id}): {e}"))
+        })
     }
 }
 
@@ -327,19 +416,20 @@ fn parse_project_entry(entry: &serde_json::Value) -> Option<ProjectRow> {
 
 fn map_comments(raw: &gouqi::Issue) -> Vec<IssueComment> {
     raw.comments()
-        .map(|c| {
-            c.comments
-                .into_iter()
-                .map(|comment| IssueComment {
-                    id: comment.id,
-                    author: comment.author.map(|u| u.display_name),
-                    body: comment.body.to_string(),
-                    created: comment.created.map(|dt| dt.to_string()),
-                    updated: comment.updated.map(|dt| dt.to_string()),
-                })
-                .collect()
-        })
+        .map(|c| c.comments.into_iter().map(map_single_comment).collect())
         .unwrap_or_default()
+}
+
+fn map_single_comment(comment: gouqi::Comment) -> IssueComment {
+    let author_account_id = comment.author.as_ref().and_then(|u| u.account_id.clone());
+    IssueComment {
+        id: comment.id,
+        author: comment.author.map(|u| u.display_name),
+        author_account_id,
+        body: comment.body.to_string(),
+        created: comment.created.map(|dt| dt.to_string()),
+        updated: comment.updated.map(|dt| dt.to_string()),
+    }
 }
 
 #[cfg(test)]
