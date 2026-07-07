@@ -18,3 +18,4 @@ Append-only: supersede or amend.
 | [0010](/bdr/0010-inline-body-link-behaviors.md) | body links — inline visible '[url]', Ctrl/Cmd+click opens, plain click never navigates | Accepted |
 | [0011](/bdr/0011-detail-text-selection-behaviors.md) | detail text selection — drag highlights, release copies logical text, plain click clears | Accepted |
 | [0012](/bdr/0012-attachments-behaviors.md) | attachments — agent_json array + inline detail panel (link rows, footnote, no clipping) | Accepted |
+| [0013](/bdr/0013-projects-axis-behaviors.md) | projects axis — 'p' lists projects, Enter drills into the project's issues, back pops home | Accepted |

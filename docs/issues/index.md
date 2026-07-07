@@ -49,6 +49,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0040](/issues/0040-b3-app-managed-selection.md) | B3 | app-managed text selection in the detail (drag highlight + copy on release) | done | 0037, 0039 |
 | [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | done | — |
 | [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | done | 0041 |
+| [0043](/issues/0043-b5a-projects-client-seam.md) | B5a | projects client seam: ProjectRow model + JiraClient::list_projects | open | — |
+| [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | open | 0043 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -120,7 +122,10 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [BDR 0012](/bdr/0012-attachments-behaviors.md)), sliced
   [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) (data + agent_json) +
   [0042](/issues/0042-b4b-attachments-tui-panel.md) (TUI panel) **done**;
-  **B5** Projects→Issues axis. Per-slice ADRs at execution time.
+  **B5** Projects→Issues axis ([ADR 0021](/adr/0021-projects-axis-browse.md),
+  [BDR 0013](/bdr/0013-projects-axis-behaviors.md)), sliced
+  [0043](/issues/0043-b5a-projects-client-seam.md) (client seam) +
+  [0044](/issues/0044-b5b-projects-screen-tui.md) (TUI screen) *in progress*.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
 

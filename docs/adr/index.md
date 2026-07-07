@@ -26,3 +26,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0018](/adr/0018-inline-body-links-modifier-click.md) | Inline body links ('text [url]') with modifier-gated click activation | Accepted |
 | [0019](/adr/0019-app-managed-text-selection.md) | App-managed text selection in the detail (logical-coordinate drag + clipboard) | Accepted |
 | [0020](/adr/0020-issue-attachments-detail-panel.md) | Issue attachments — curated model field, agent_json array, inline Attachments panel | Accepted |
+| [0021](/adr/0021-projects-axis-browse.md) | Projects axis in the browse TUI — 'p' opens Projects; a project drills into its issues | Accepted |
