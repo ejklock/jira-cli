@@ -1,14 +1,16 @@
 use super::*;
 
-use super::model::{entry_cmds, footer_mode, FooterMode, Selection, StatusKind, StatusMsg};
+use super::model::{
+    entry_cmds, footer_mode, FooterMode, ListOrigin, Selection, StatusKind, StatusMsg,
+};
 use super::shell::{
-    map_key_in_normal_mode, map_key_in_search_mode, map_mouse_to_msg, read_snapshot,
+    handle_reply, map_key_in_normal_mode, map_key_in_search_mode, map_mouse_to_msg, read_snapshot,
     resolve_mouse_msg, MouseIntent,
 };
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
-use crate::models::IssueRow;
+use crate::models::{IssueRow, ProjectRow};
 use crate::store::cache::{instances_key, TaskListCache};
 use crate::test_support::*;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -102,6 +104,18 @@ fn make_list_model(keys: &[&str]) -> Model {
         status: None,
         revalidating: false,
         selection: None,
+        list_origin: ListOrigin::Mine,
+        projects: vec![],
+        projects_selected: 0,
+    }
+}
+
+fn make_projects_model(projects: Vec<ProjectRow>) -> Model {
+    Model {
+        screen: Screen::Projects,
+        projects,
+        projects_selected: 0,
+        ..make_list_model(&[])
     }
 }
 
@@ -3517,4 +3531,590 @@ fn update_link_clicked_with_an_attachment_url_on_detail_emits_exactly_one_open_u
         vec![Cmd::OpenUrl("https://example.com/a.pdf".to_owned())]
     );
     assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+}
+
+// ---- ADR 0021 / BDR 0013 S1: 'p' opens the Projects screen ----
+
+#[test]
+fn update_open_projects_from_list_opens_screen_and_emits_load_projects() {
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, cmds) = update(model, Msg::OpenProjects);
+
+    assert_eq!(next.screen, Screen::Projects);
+    assert_eq!(next.projects_selected, 0);
+    assert_eq!(cmds, vec![Cmd::LoadProjects]);
+}
+
+#[test]
+fn update_open_projects_keeps_existing_projects_rows_while_loading() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.projects = vec![project_row("OLD", "Old Project")];
+
+    let (next, cmds) = update(model, Msg::OpenProjects);
+
+    assert_eq!(
+        next.projects,
+        vec![project_row("OLD", "Old Project")],
+        "existing projects rows must be kept while the fresh fetch is in flight"
+    );
+    assert_eq!(cmds, vec![Cmd::LoadProjects]);
+}
+
+#[test]
+fn update_open_projects_on_detail_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let (next, cmds) = update(model, Msg::OpenProjects);
+
+    assert_eq!(next.screen, Screen::Detail, "'p' on Detail must be inert");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_open_projects_while_search_active_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.search = Some("proj".to_owned());
+
+    let (next, cmds) = update(model, Msg::OpenProjects);
+
+    assert_eq!(
+        next.screen,
+        Screen::List,
+        "OpenProjects while search is active must not switch screens"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn map_key_in_normal_mode_p_is_open_projects() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('p'), KeyModifiers::NONE),
+        Some(Msg::OpenProjects)
+    ));
+}
+
+#[test]
+fn map_key_in_search_mode_p_types_into_the_query() {
+    assert!(matches!(
+        map_key_in_search_mode(KeyCode::Char('p'), KeyModifiers::NONE),
+        Some(Msg::SearchInput('p'))
+    ));
+}
+
+#[test]
+fn update_projects_loaded_sets_rows_and_clamps_selection() {
+    let mut model = make_projects_model(vec![]);
+    model.projects_selected = 5;
+    model.status = Some(StatusMsg {
+        text: "Loading…".to_owned(),
+        kind: StatusKind::Info,
+    });
+
+    let rows = vec![
+        project_row("ALPHA", "Alpha Project"),
+        project_row("BETA", "Beta Project"),
+    ];
+    let (next, cmds) = update(model, Msg::ProjectsLoaded(rows.clone()));
+
+    assert_eq!(next.projects, rows);
+    assert_eq!(
+        next.projects_selected, 1,
+        "selection must clamp to the new last index"
+    );
+    assert!(
+        next.status.is_none(),
+        "ProjectsLoaded must clear the loading status"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_projects_loaded_off_projects_screen_updates_data_but_never_changes_screen() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let rows = vec![project_row("ALPHA", "Alpha Project")];
+    let (next, cmds) = update(model, Msg::ProjectsLoaded(rows.clone()));
+
+    assert_eq!(
+        next.projects, rows,
+        "a late ProjectsLoaded still updates the data (harmless)"
+    );
+    assert_eq!(
+        next.screen,
+        Screen::Detail,
+        "a late ProjectsLoaded must never change the screen"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_projects_failed_sets_error_status_and_stays_on_projects() {
+    let model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+
+    let (next, cmds) = update(model, Msg::ProjectsFailed("network unreachable".to_owned()));
+
+    assert_eq!(
+        next.screen,
+        Screen::Projects,
+        "failure must stay on Projects"
+    );
+    let status = next
+        .status
+        .expect("ProjectsFailed must set a status message");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "network unreachable");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_projects_failed_with_reauth_message_surfaces_the_e2_guidance() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_projects_model(vec![]);
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::ProjectsFailed(guidance.clone()));
+
+    let status = next
+        .status
+        .expect("a 401 ProjectsFailed must set a status message");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, guidance);
+    assert!(
+        guidance.contains("jira setup add"),
+        "the guidance text must carry the actionable re-auth instruction; got: {guidance:?}"
+    );
+    assert_eq!(next.screen, Screen::Projects, "screen must be unchanged");
+    assert!(cmds.is_empty());
+
+    set_language("en");
+}
+
+#[tokio::test]
+async fn run_list_projects_success_returns_rows() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "values": [{ "key": "ALPHA", "name": "Alpha Project" }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = run_list_projects(&instance).await.expect("must succeed");
+
+    assert_eq!(result, vec![project_row("ALPHA", "Alpha Project")]);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn run_list_projects_401_maps_to_unauthorized() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = run_list_projects(&instance).await;
+
+    assert!(matches!(
+        result,
+        Err(crate::client::ClientError::Unauthorized { .. })
+    ));
+    server.verify().await;
+}
+
+// ---- ADR 0021 / BDR 0013 S2: navigation mirrors the list ----
+
+#[test]
+fn update_down_on_projects_increments_projects_selected() {
+    let model = make_projects_model(vec![
+        project_row("A", "A"),
+        project_row("B", "B"),
+        project_row("C", "C"),
+    ]);
+    let (next, cmds) = update(model, Msg::Down);
+
+    assert_eq!(next.projects_selected, 1);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_down_on_projects_clamps_at_last_row() {
+    let mut model = make_projects_model(vec![project_row("A", "A"), project_row("B", "B")]);
+    model.projects_selected = 1;
+    let (next, cmds) = update(model, Msg::Down);
+
+    assert_eq!(next.projects_selected, 1, "Down at last row must clamp");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_up_on_projects_decrements_projects_selected() {
+    let mut model = make_projects_model(vec![project_row("A", "A"), project_row("B", "B")]);
+    model.projects_selected = 1;
+    let (next, cmds) = update(model, Msg::Up);
+
+    assert_eq!(next.projects_selected, 0);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_up_on_projects_clamps_at_zero() {
+    let model = make_projects_model(vec![project_row("A", "A")]);
+    let (next, cmds) = update(model, Msg::Up);
+
+    assert_eq!(next.projects_selected, 0, "Up at first row must clamp");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_down_on_empty_projects_is_noop() {
+    let model = make_projects_model(vec![]);
+    let (next, cmds) = update(model, Msg::Down);
+
+    assert_eq!(next.projects_selected, 0);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_up_on_empty_projects_is_noop() {
+    let model = make_projects_model(vec![]);
+    let (next, cmds) = update(model, Msg::Up);
+
+    assert_eq!(next.projects_selected, 0);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_project_clicked_in_range_selects_and_drills_in() {
+    let model = make_projects_model(vec![
+        project_row("A", "A Project"),
+        project_row("B", "B Project"),
+    ]);
+
+    let (next, cmds) = update(model, Msg::ProjectClicked(1));
+
+    assert_eq!(next.projects_selected, 1);
+    assert_eq!(next.screen, Screen::List);
+    assert_eq!(next.list_origin, ListOrigin::Project("B".to_owned()));
+    assert_eq!(
+        cmds,
+        vec![Cmd::LoadList(
+            "project = B ORDER BY updated DESC".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn update_project_clicked_out_of_range_is_noop_no_panic() {
+    let model = make_projects_model(vec![project_row("A", "A Project")]);
+    let (next, cmds) = update(model, Msg::ProjectClicked(5));
+
+    assert_eq!(next.screen, Screen::Projects);
+    assert_eq!(next.projects_selected, 0);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_project_clicked_on_empty_projects_is_noop_no_panic() {
+    let model = make_projects_model(vec![]);
+    let (next, cmds) = update(model, Msg::ProjectClicked(0));
+
+    assert_eq!(next.screen, Screen::Projects);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_project_clicked_on_non_projects_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, cmds) = update(model, Msg::ProjectClicked(0));
+
+    assert_eq!(next.screen, Screen::List);
+    assert!(cmds.is_empty());
+}
+
+// ---- BDR 0009 S6 / BDR 0013 S2 — the no-exit property extends to the
+// Projects screen ----
+
+#[test]
+fn no_msg_on_projects_screen_ever_emits_cmd_quit() {
+    let projects = vec![project_row("A", "A Project"), project_row("B", "B Project")];
+    let msgs = vec![
+        Msg::Up,
+        Msg::Down,
+        Msg::Select,
+        Msg::Back,
+        Msg::ProjectClicked(0),
+        Msg::ProjectClicked(99),
+        Msg::OpenProjects,
+        Msg::ProjectsLoaded(vec![project_row("C", "C Project")]),
+        Msg::ProjectsFailed("boom".to_owned()),
+    ];
+
+    for msg in msgs {
+        let model = make_projects_model(projects.clone());
+        let (_, cmds) = update(model, msg);
+        assert!(
+            !cmds.contains(&Cmd::Quit),
+            "no Msg on the Projects screen may ever emit Cmd::Quit"
+        );
+    }
+}
+
+// ---- ADR 0021 / BDR 0013 S3: drill-in loads the project's issues ----
+
+#[test]
+fn update_select_projects_sets_origin_jql_clears_list_state_and_emits_load_list() {
+    let mut model = make_projects_model(vec![
+        project_row("ALPHA", "Alpha Project"),
+        project_row("BETA", "Beta Project"),
+    ]);
+    model.projects_selected = 0;
+    model.rows = make_rows(&["OLD-1", "OLD-2"]);
+    model.selected = 1;
+    model.next_page_token = Some("stale-token".to_owned());
+    model.search = Some("stale search".to_owned());
+    model.error = Some("stale error".to_owned());
+
+    let (next, cmds) = update(model, Msg::Select);
+
+    assert_eq!(next.screen, Screen::List);
+    assert_eq!(next.list_origin, ListOrigin::Project("ALPHA".to_owned()));
+    assert_eq!(next.jql, "project = ALPHA ORDER BY updated DESC");
+    assert!(next.rows.is_empty(), "drill-in must clear the prior rows");
+    assert_eq!(next.selected, 0);
+    assert!(next.next_page_token.is_none());
+    assert!(next.search.is_none());
+    assert!(next.error.is_none());
+    assert_eq!(
+        cmds,
+        vec![Cmd::LoadList(
+            "project = ALPHA ORDER BY updated DESC".to_owned()
+        )],
+        "drill-in must emit exactly one LoadList"
+    );
+}
+
+#[test]
+fn update_select_projects_with_empty_projects_is_noop() {
+    let model = make_projects_model(vec![]);
+    let (next, cmds) = update(model, Msg::Select);
+
+    assert_eq!(next.screen, Screen::Projects);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn drilled_in_project_list_pagination_still_works() {
+    let mut model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    model.projects_selected = 0;
+    let (drilled, _) = update(model, Msg::Select);
+
+    let (loaded, _) = update(
+        drilled,
+        Msg::ListLoaded(make_rows(&["ALPHA-1"]), Some("page-2".to_owned())),
+    );
+    assert_eq!(loaded.list_origin, ListOrigin::Project("ALPHA".to_owned()));
+
+    let (next, cmds) = update(loaded, Msg::LoadMore);
+    assert_eq!(
+        cmds,
+        vec![Cmd::LoadMore(
+            "project = ALPHA ORDER BY updated DESC".to_owned(),
+            "page-2".to_owned()
+        )],
+        "LoadMore on a project-origin list must still fire using the project's JQL"
+    );
+    assert_eq!(next.list_origin, ListOrigin::Project("ALPHA".to_owned()));
+}
+
+#[test]
+fn drilled_in_project_list_search_still_works() {
+    let model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    let (drilled, _) = update(model, Msg::Select);
+    let (loaded, _) = update(drilled, Msg::ListLoaded(make_rows(&["ALPHA-1"]), None));
+
+    let (searching, _) = update(loaded, Msg::OpenSearch);
+    let (next, cmds) = update(searching, Msg::SearchInput('x'));
+    assert_eq!(next.search.as_deref(), Some("x"));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn drilled_in_project_list_select_opens_detail_like_normal() {
+    let model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    let (drilled, _) = update(model, Msg::Select);
+    let (loaded, _) = update(drilled, Msg::ListLoaded(make_rows(&["ALPHA-1"]), None));
+
+    let (next, cmds) = update(loaded, Msg::Select);
+
+    assert_eq!(next.screen, Screen::Detail);
+    assert_eq!(cmds, vec![Cmd::LoadDetail("ALPHA-1".to_owned())]);
+}
+
+// ---- ADR 0021 / BDR 0013 S4: back pops the axis ----
+
+#[test]
+fn back_from_list_with_project_origin_returns_to_projects_with_rows_retained_no_cmd() {
+    let mut model = make_list_model(&["ALPHA-1", "ALPHA-2"]);
+    model.list_origin = ListOrigin::Project("ALPHA".to_owned());
+    model.projects = vec![project_row("ALPHA", "Alpha Project")];
+    model.projects_selected = 0;
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert_eq!(next.screen, Screen::Projects);
+    assert_eq!(
+        next.projects,
+        vec![project_row("ALPHA", "Alpha Project")],
+        "the projects rows must be retained, not refetched"
+    );
+    assert!(cmds.is_empty(), "returning to Projects must emit no Cmd");
+}
+
+#[test]
+fn back_from_projects_with_project_origin_restores_mine_list_reloaded() {
+    let mut model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    model.list_origin = ListOrigin::Project("ALPHA".to_owned());
+    model.rows = vec![];
+    model.jql = "project = ALPHA ORDER BY updated DESC".to_owned();
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert_eq!(next.screen, Screen::List);
+    assert_eq!(next.list_origin, ListOrigin::Mine);
+    assert_eq!(next.jql, crate::commands::MINE_JQL);
+    assert!(next.rows.is_empty());
+    assert_eq!(
+        cmds,
+        vec![Cmd::LoadList(crate::commands::MINE_JQL.to_owned())],
+        "restoring the mine list must emit exactly one reload"
+    );
+}
+
+#[test]
+fn back_from_projects_with_mine_origin_returns_to_list_with_rows_intact_no_cmd() {
+    let mut model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    model.rows = make_rows(&["MINE-1", "MINE-2"]);
+    assert_eq!(model.list_origin, ListOrigin::Mine);
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert_eq!(next.screen, Screen::List);
+    assert_eq!(next.list_origin, ListOrigin::Mine);
+    assert_eq!(
+        next.rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+        vec!["MINE-1".to_owned(), "MINE-2".to_owned()],
+        "the mine rows were never replaced, so nothing needs reloading"
+    );
+    assert!(
+        cmds.is_empty(),
+        "nothing was replaced, so no Cmd is emitted"
+    );
+}
+
+#[test]
+fn back_from_list_with_mine_origin_is_still_a_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+    assert_eq!(model.list_origin, ListOrigin::Mine);
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert_eq!(next.screen, Screen::List);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn quit_from_projects_screen_emits_cmd_quit() {
+    let model = make_projects_model(vec![project_row("A", "A Project")]);
+    let (_, cmds) = update(model, Msg::Quit);
+
+    assert!(cmds.contains(&Cmd::Quit));
+}
+
+// ---- ADR 0021 §7 / BDR 0013 S6: the mine SWR snapshot stays clean ----
+
+#[test]
+fn project_issue_list_loaded_never_writes_the_mine_snapshot() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    let mut model = make_list_model(&[]);
+    model.list_origin = ListOrigin::Project("ALPHA".to_owned());
+
+    let _ = handle_reply(
+        Msg::ListLoaded(make_rows(&["ALPHA-1"]), None),
+        model,
+        &instance,
+        &cache,
+        &tx,
+    );
+
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    let stored = list_cache
+        .read("mine", &key, 3600)
+        .expect("read must not error");
+    assert!(
+        stored.is_none(),
+        "a project ListLoaded must never write the mine-scope snapshot"
+    );
+}
+
+#[test]
+fn revalidation_loaded_still_writes_the_mine_snapshot_unaffected() {
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let instance = make_test_instance();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    let mut model = make_list_model(&["MINE-1"]);
+    model.revalidating = true;
+
+    let _ = handle_reply(
+        Msg::RevalidationLoaded(make_rows(&["MINE-2"]), None),
+        model,
+        &instance,
+        &cache,
+        &tx,
+    );
+
+    let list_cache = TaskListCache::new(store.conn());
+    let key = instances_key(std::slice::from_ref(&instance));
+    let stored = list_cache
+        .read("mine", &key, 3600)
+        .expect("read must not error")
+        .expect("RevalidationLoaded must still write the mine-scope snapshot");
+    assert!(stored.contains("MINE-2"));
 }

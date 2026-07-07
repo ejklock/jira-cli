@@ -15,7 +15,7 @@ use super::model::{
 use super::panel;
 use super::theme;
 use crate::i18n::t;
-use crate::models::{Attachment, Issue, IssueComment, IssueRow};
+use crate::models::{Attachment, Issue, IssueComment, IssueRow, ProjectRow};
 use crate::render::{
     adf_to_rich, due_day_delta, relative_due, today_days_now, RichLine, RichSpan, RichStyle,
 };
@@ -34,6 +34,7 @@ const SEARCH_ERROR_PREFIX: &str = "Error: ";
 pub fn view(model: &Model, frame: &mut Frame) {
     match model.screen {
         Screen::List => view_list(model, frame),
+        Screen::Projects => view_projects(model, frame),
         Screen::Detail => view_detail(model, frame),
     }
 }
@@ -374,6 +375,7 @@ pub(crate) fn footer_hint(mode: FooterMode) -> String {
     match mode {
         FooterMode::List => t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"),
         FooterMode::ListSearch => t("Enter submit  Esc cancel  Backspace delete"),
+        FooterMode::Projects => t("↑/↓ navigate  Enter select  Esc/b back  q quit"),
         FooterMode::Detail => t("↑/↓ j/k scroll  Esc/b back  q quit"),
         FooterMode::DetailLink => {
             t("↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit")
@@ -392,6 +394,158 @@ fn view_footer_text(model: &Model) -> String {
     } else {
         hint
     }
+}
+
+/// The Projects screen's row height — one line per `KEY — name` row (ADR
+/// 0021, BDR 0013 S1-S2), plainer than the List screen's bordered cards.
+const PROJECT_ROW_HEIGHT: u16 = 1;
+
+/// The Projects screen's title line height, reserved above its rows.
+const PROJECTS_TITLE_HEIGHT: u16 = 1;
+
+/// Builds the `view_projects` vertical layout: the header occupies the fixed
+/// top row; the content region takes the remaining space; the optional
+/// status row is only reserved when active; the footer is the fixed bottom
+/// row — mirrors `detail_layout_chunks`'s shape (no search/error banners on
+/// this screen) so `projects_click_row` can recompute the exact content
+/// chunk `view_projects` draws into (single layout source, ADR 0017).
+fn projects_layout_chunks(area: Rect, has_status_row: bool) -> std::rc::Rc<[Rect]> {
+    let mut constraints = vec![Constraint::Length(1), Constraint::Min(0)];
+    if has_status_row {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Length(1));
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area)
+}
+
+/// The content chunk's rows sub-region, below the reserved title line — the
+/// same split `render_projects_rows` and `projects_click_row` both read.
+fn projects_rows_chunk(chunk: Rect) -> Rect {
+    let title_height = PROJECTS_TITLE_HEIGHT.min(chunk.height);
+    Rect {
+        x: chunk.x,
+        y: chunk.y + title_height,
+        width: chunk.width,
+        height: chunk.height.saturating_sub(title_height),
+    }
+}
+
+/// The Projects screen (ADR 0021, BDR 0013 S1-S5): themed header, a
+/// localized "Projects" title, one `KEY — name` row per project (the
+/// selected row styled like the list's selected card), a localized
+/// empty-state notice when there are no projects, the status row (fetch
+/// error or the loading indicator), and the mode-aware footer hint.
+fn view_projects(model: &Model, frame: &mut Frame) {
+    let area = frame.area();
+    let has_status_row = model.status.is_some();
+    let chunks = projects_layout_chunks(area, has_status_row);
+
+    render_header(frame, chunks[0], model);
+    render_projects_rows(frame, chunks[1], model);
+
+    if let Some(status) = &model.status {
+        render_status_row(frame, chunks[2], status);
+    }
+
+    let footer_idx = chunks.len() - 1;
+    let hint = Paragraph::new(footer_hint(footer_mode(model)))
+        .alignment(Alignment::Center)
+        .style(theme::footer());
+    frame.render_widget(hint, chunks[footer_idx]);
+}
+
+fn render_projects_title(frame: &mut Frame, area: Rect) {
+    let title = Paragraph::new(t("Projects")).style(theme::section_title());
+    frame.render_widget(title, area);
+}
+
+/// Renders the Projects screen's content region: the title line, then either
+/// the localized empty-state notice or the windowed `KEY — name` rows (BDR
+/// 0013 S1-S2), keeping the selected row in view exactly like the list's
+/// card window (`first_visible_card` — single windowing source).
+fn render_projects_rows(frame: &mut Frame, chunk: Rect, model: &Model) {
+    let title_height = PROJECTS_TITLE_HEIGHT.min(chunk.height);
+    render_projects_title(
+        frame,
+        Rect {
+            x: chunk.x,
+            y: chunk.y,
+            width: chunk.width,
+            height: title_height,
+        },
+    );
+
+    let rows_chunk = projects_rows_chunk(chunk);
+    if model.projects.is_empty() {
+        let notice = Paragraph::new(t("No projects.")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded),
+        );
+        frame.render_widget(notice, rows_chunk);
+        return;
+    }
+
+    let visible = rows_chunk.height.max(1) as usize;
+    let first = first_visible_card(model.projects_selected, model.projects.len(), visible);
+    let last = (first + visible).min(model.projects.len());
+
+    for (offset, project) in model.projects[first..last].iter().enumerate() {
+        let index = first + offset;
+        let row_area = Rect {
+            x: rows_chunk.x,
+            y: rows_chunk.y + offset as u16,
+            width: rows_chunk.width,
+            height: PROJECT_ROW_HEIGHT,
+        };
+        if row_area.y + PROJECT_ROW_HEIGHT > rows_chunk.y + rows_chunk.height {
+            break;
+        }
+        render_project_row(frame, row_area, project, index == model.projects_selected);
+    }
+}
+
+/// One `KEY — name` row; the selected row carries `theme::selected()` (the
+/// same style the list's selected card uses).
+fn render_project_row(frame: &mut Frame, area: Rect, project: &ProjectRow, is_selected: bool) {
+    let style = is_selected.then(theme::selected).unwrap_or_default();
+    let text = format!("{} — {}", project.key, project.name);
+    let paragraph = Paragraph::new(text).style(style);
+    frame.render_widget(paragraph, area);
+}
+
+/// Resolves a left click at absolute terminal row `y` within the Projects
+/// screen's full frame `area` to the clicked row's index (ADR 0021, BDR 0013
+/// S2-S3): built on the exact `projects_layout_chunks`/`projects_rows_chunk`/
+/// `first_visible_card` the renderer uses (single layout source, ADR 0017),
+/// mirroring `list_click_card`'s contract. `None` when the click lands
+/// outside the rows chunk, past the last visible row, or the list is empty.
+pub(super) fn projects_click_row(model: &Model, area: Rect, y: u16) -> Option<usize> {
+    if model.projects.is_empty() {
+        return None;
+    }
+
+    let has_status_row = model.status.is_some();
+    let chunks = projects_layout_chunks(area, has_status_row);
+    let rows_chunk = projects_rows_chunk(chunks[1]);
+
+    if y < rows_chunk.y || y >= rows_chunk.y + rows_chunk.height {
+        return None;
+    }
+
+    let visible = rows_chunk.height.max(1) as usize;
+    let slot = (y - rows_chunk.y) as usize;
+    if slot >= visible {
+        return None;
+    }
+
+    let first = first_visible_card(model.projects_selected, model.projects.len(), visible);
+    let candidate = first + slot;
+    (candidate < model.projects.len()).then_some(candidate)
 }
 
 /// The frame border + the scroll-content region's top/bottom rows (BDR 0007

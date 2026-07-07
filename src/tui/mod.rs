@@ -13,7 +13,7 @@ pub use shell::browse;
 pub use view::{view, view_detail};
 
 #[allow(unused_imports)]
-pub(crate) use shell::{fetch_and_run, run_search};
+pub(crate) use shell::{fetch_and_run, run_list_projects, run_search};
 
 #[cfg(test)]
 #[path = "../../tests/unit/tui.rs"]

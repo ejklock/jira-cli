@@ -1,12 +1,14 @@
-use super::model::{header_line, FooterMode, Identity, Selection, StatusKind, StatusMsg};
+use super::model::{
+    header_line, FooterMode, Identity, ListOrigin, Selection, StatusKind, StatusMsg,
+};
 use super::panel;
 use super::theme;
 use super::view;
 use super::*;
 
 use crate::i18n::{set_language, LANG_MUTEX};
-use crate::models::IssueRow;
-use crate::test_support::duedate_offset_from_today;
+use crate::models::{IssueRow, ProjectRow};
+use crate::test_support::{duedate_offset_from_today, project_row};
 use ratatui::{
     backend::TestBackend,
     layout::Rect,
@@ -67,6 +69,9 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         status: None,
         revalidating: false,
         selection: None,
+        list_origin: ListOrigin::Mine,
+        projects: vec![],
+        projects_selected: 0,
     }
 }
 
@@ -122,7 +127,17 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         status: None,
         revalidating: false,
         selection: None,
+        list_origin: ListOrigin::Mine,
+        projects: vec![],
+        projects_selected: 0,
     }
+}
+
+fn make_projects_model(projects: Vec<ProjectRow>) -> Model {
+    let mut model = make_list_model(vec![]);
+    model.screen = Screen::Projects;
+    model.projects = projects;
+    model
 }
 
 fn make_detail_model(identities: Vec<Identity>) -> Model {
@@ -2551,4 +2566,166 @@ fn render_detail_panels_highlights_exactly_the_selected_chars_reversed() {
     );
 
     set_language("en");
+}
+
+// ---- ADR 0021 / BDR 0013 — Projects screen rendering ----
+
+#[test]
+fn view_projects_renders_title_rows_and_footer_hint() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_projects_model(vec![
+        project_row("ALPHA", "Alpha Project"),
+        project_row("BETA", "Beta Project"),
+    ]);
+    let buf = render_to_buffer(&model, 80, 20);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("Projects"), "title must render; got: {text}");
+    assert!(
+        text.contains("ALPHA — Alpha Project"),
+        "first row must render as 'KEY — name'; got: {text}"
+    );
+    assert!(
+        text.contains("BETA — Beta Project"),
+        "second row must render as 'KEY — name'; got: {text}"
+    );
+    assert!(
+        row_text(&buf, 19).contains("↑/↓ navigate  Enter select  Esc/b back  q quit"),
+        "footer hint must be the Projects mode hint; got: {:?}",
+        row_text(&buf, 19)
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_projects_styles_the_selected_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_projects_model(vec![
+        project_row("ALPHA", "Alpha Project"),
+        project_row("BETA", "Beta Project"),
+    ]);
+    model.projects_selected = 1;
+
+    let buf = render_to_buffer(&model, 80, 20);
+
+    let selected_style =
+        style_at_text(&buf, "BETA — Beta Project").expect("selected row must render");
+    assert_eq!(selected_style.fg, Some(Color::Rgb(13, 13, 13)));
+    assert_eq!(selected_style.bg, Some(Color::Rgb(210, 160, 90)));
+    assert!(selected_style.add_modifier.contains(Modifier::BOLD));
+
+    let unselected_style =
+        style_at_text(&buf, "ALPHA — Alpha Project").expect("unselected row must render");
+    assert_ne!(
+        unselected_style.bg,
+        Some(Color::Rgb(210, 160, 90)),
+        "the unselected row must not carry the selected-row background"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_projects_empty_shows_localized_empty_state_en() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_projects_model(vec![]);
+    let buf = render_to_buffer(&model, 80, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("No projects."),
+        "empty projects must show the localized empty-state notice; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_projects_pt_br_title_hint_and_empty_state() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let model = make_projects_model(vec![]);
+    let buf = render_to_buffer(&model, 80, 20);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Projetos"),
+        "the pt-BR title must be localized; got: {text}"
+    );
+    assert!(
+        text.contains("Nenhum projeto encontrado."),
+        "the pt-BR empty state must be localized; got: {text}"
+    );
+    assert!(
+        row_text(&buf, 19).contains("↑/↓ navegar  Enter selecionar  Esc/b voltar  q sair"),
+        "the pt-BR footer hint must be localized; got: {:?}",
+        row_text(&buf, 19)
+    );
+
+    set_language("en");
+}
+
+// ---- ADR 0017 single-layout-source — projects_click_row hit test ----
+
+#[test]
+fn projects_click_row_resolves_each_row_to_its_index() {
+    let model = make_projects_model(vec![
+        project_row("ALPHA", "Alpha Project"),
+        project_row("BETA", "Beta Project"),
+        project_row("GAMMA", "Gamma Project"),
+    ]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    // header(1) + title(1) => rows start at y=2, one row per project.
+    assert_eq!(view::projects_click_row(&model, area, 2), Some(0));
+    assert_eq!(view::projects_click_row(&model, area, 3), Some(1));
+    assert_eq!(view::projects_click_row(&model, area, 4), Some(2));
+}
+
+#[test]
+fn projects_click_row_header_and_title_rows_are_none() {
+    let model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert_eq!(view::projects_click_row(&model, area, 0), None);
+    assert_eq!(view::projects_click_row(&model, area, 1), None);
+}
+
+#[test]
+fn projects_click_row_below_last_row_is_none() {
+    let model = make_projects_model(vec![project_row("ALPHA", "Alpha Project")]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert_eq!(view::projects_click_row(&model, area, 3), None);
+}
+
+#[test]
+fn projects_click_row_empty_projects_is_none() {
+    let model = make_projects_model(vec![]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert_eq!(view::projects_click_row(&model, area, 2), None);
+}
+
+#[test]
+fn projects_click_row_windowed_click_resolves_windowed_index_not_zero() {
+    let projects: Vec<ProjectRow> = (1..=10)
+        .map(|n| project_row(&format!("PROJ{n}"), &format!("Project {n}")))
+        .collect();
+    let mut model = make_projects_model(projects);
+    model.projects_selected = 9;
+    // header(1) + title(1) + rows(15) + footer(1) => 18 rows of content.
+    let area = Rect::new(0, 0, 40, 18);
+
+    // first_visible_card(9, 10, 15) == 0 (all fit), so a click on the last
+    // row (index 9 => y = 2 + 9 = 11) must resolve to 9, not clamp away.
+    assert_eq!(view::projects_click_row(&model, area, 11), Some(9));
 }

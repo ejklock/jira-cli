@@ -1,11 +1,22 @@
+use crate::commands::MINE_JQL;
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow};
+use crate::models::{Issue, IssueRow, ProjectRow};
 use crate::render::adf_to_rich;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
     List,
+    Projects,
     Detail,
+}
+
+/// The active list's provenance (ADR 0021 §3, BDR 0013): the mine list, or a
+/// specific project's issues (`Project(key)`) drilled into from the Projects
+/// screen. Determines what a Back from the List screen restores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListOrigin {
+    Mine,
+    Project(String),
 }
 
 /// The footer's mode-aware hint bucket (ADR 0014 §5, BDR 0007 S7): derived
@@ -15,6 +26,7 @@ pub enum Screen {
 pub enum FooterMode {
     List,
     ListSearch,
+    Projects,
     Detail,
     DetailLink,
 }
@@ -25,6 +37,7 @@ pub fn footer_mode(model: &Model) -> FooterMode {
     match model.screen {
         Screen::List if model.search.is_some() => FooterMode::ListSearch,
         Screen::List => FooterMode::List,
+        Screen::Projects => FooterMode::Projects,
         Screen::Detail if model.detail_focused_link.is_some() => FooterMode::DetailLink,
         Screen::Detail => FooterMode::Detail,
     }
@@ -44,6 +57,11 @@ pub enum StatusKind {
     Info,
     Error,
 }
+
+/// The status text shown on opening the Projects screen while its fetch is
+/// in flight (ADR 0021 §8, BDR 0013 S1) — the existing status seam, no
+/// bespoke spinner.
+const LOADING_STATUS_TEXT: &str = "Loading…";
 
 /// A logged-in identity (email + instance name) shown in the header bar
 /// (ADR 0014 §2, BDR 0007 S1). Plain data — the shell populates it from
@@ -93,6 +111,17 @@ pub struct Model {
     /// scrolling never moves the selection (BDR 0011 S8). Cleared on leaving
     /// the detail screen.
     pub selection: Option<Selection>,
+    /// Which list is currently loaded — the mine list, or a specific
+    /// project's issues (ADR 0021 §3). Determines what a Back from the List
+    /// screen restores.
+    pub list_origin: ListOrigin,
+    /// The projects fetched by the Projects screen (ADR 0021), retained
+    /// across a Back so returning to Projects from a project's issue list
+    /// shows the same rows with no refetch (BDR 0013 S4).
+    pub projects: Vec<ProjectRow>,
+    /// The Projects screen's selected row index, bounded to
+    /// `[0, projects.len() - 1]` (BDR 0013 S2).
+    pub projects_selected: usize,
 }
 
 /// An active detail-body text selection (ADR 0019 §1): `anchor` is where the
@@ -167,6 +196,21 @@ pub enum Msg {
     /// status) and keeps the highlight; `None` (a plain click) clears the
     /// selection and copies nothing.
     SelEnd(Option<String>),
+    /// `p` on the issue list (normal mode, ADR 0021 §1, BDR 0013 S1): opens
+    /// the Projects screen and issues a fetch. A no-op off the List screen or
+    /// with search active.
+    OpenProjects,
+    /// The projects fetch completed (BDR 0013 S1): the fetched rows, applied
+    /// regardless of the current screen (a late result is harmless — it never
+    /// changes `screen`).
+    ProjectsLoaded(Vec<ProjectRow>),
+    /// The projects fetch failed (BDR 0013 S5): the message (already mapped
+    /// to the E2 re-auth guidance for a 401), surfaced on the status row
+    /// while staying on the Projects screen.
+    ProjectsFailed(String),
+    /// A left click resolved to a visible Projects row's index (ADR 0021,
+    /// BDR 0013 S2-S3): mirrors `CardClicked`'s contract on the List screen.
+    ProjectClicked(usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -180,6 +224,9 @@ pub enum Cmd {
     /// The one-shot entry revalidation fetch (BDR 0008 S1), dispatched by
     /// `entry_cmds` immediately after a warm `Model` is constructed.
     RevalidateList,
+    /// The Projects screen's fetch (ADR 0021 §2, BDR 0013 S1): `list_projects`
+    /// on 'p', dispatched at most once per Projects screen entry.
+    LoadProjects,
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
@@ -222,6 +269,10 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::SelStart(pos) => update_sel_start(model, pos),
         Msg::SelDrag(pos) => update_sel_drag(model, pos),
         Msg::SelEnd(text) => update_sel_end(model, text),
+        Msg::OpenProjects => update_open_projects(model),
+        Msg::ProjectsLoaded(rows) => update_projects_loaded(model, rows),
+        Msg::ProjectsFailed(msg) => update_projects_failed(model, msg),
+        Msg::ProjectClicked(index) => update_project_clicked(model, index),
     }
 }
 
@@ -249,6 +300,8 @@ fn is_reply_msg(msg: &Msg) -> bool {
             | Msg::LoadFailed(_)
             | Msg::RevalidationLoaded(_, _)
             | Msg::RevalidationFailed(_)
+            | Msg::ProjectsLoaded(_)
+            | Msg::ProjectsFailed(_)
     )
 }
 
@@ -258,6 +311,17 @@ fn update_down(model: Model) -> (Model, Vec<Cmd>) {
             let last = model.rows.len().saturating_sub(1);
             let selected = (model.selected + 1).min(last);
             (Model { selected, ..model }, vec![])
+        }
+        Screen::Projects => {
+            let last = model.projects.len().saturating_sub(1);
+            let projects_selected = (model.projects_selected + 1).min(last);
+            (
+                Model {
+                    projects_selected,
+                    ..model
+                },
+                vec![],
+            )
         }
         Screen::Detail => {
             let detail_scroll = model.detail_scroll.saturating_add(1);
@@ -278,6 +342,16 @@ fn update_up(model: Model) -> (Model, Vec<Cmd>) {
             let selected = model.selected.saturating_sub(1);
             (Model { selected, ..model }, vec![])
         }
+        Screen::Projects => {
+            let projects_selected = model.projects_selected.saturating_sub(1);
+            (
+                Model {
+                    projects_selected,
+                    ..model
+                },
+                vec![],
+            )
+        }
         Screen::Detail => {
             let detail_scroll = model.detail_scroll.saturating_sub(1);
             (
@@ -297,6 +371,7 @@ fn update_up(model: Model) -> (Model, Vec<Cmd>) {
 fn update_select(model: Model) -> (Model, Vec<Cmd>) {
     match model.screen {
         Screen::List => update_select_list(model),
+        Screen::Projects => update_select_projects(model),
         Screen::Detail => update_select_focused_link(model),
     }
 }
@@ -330,6 +405,52 @@ fn update_card_clicked(model: Model, index: usize) -> (Model, Vec<Cmd>) {
     })
 }
 
+/// Enter on the Projects screen drills into the selected project (ADR 0021
+/// §4, BDR 0013 S3): a no-op with no projects loaded.
+fn update_select_projects(model: Model) -> (Model, Vec<Cmd>) {
+    if model.projects.is_empty() {
+        return (model, vec![]);
+    }
+    let project = model.projects[model.projects_selected].clone();
+    drill_into_project(model, project)
+}
+
+/// A left click on a visible Projects row (ADR 0021, BDR 0013 S2-S3): in
+/// range it sets `projects_selected` then delegates to
+/// `update_select_projects` — the exact same drill-in contract as
+/// `Select`/`Enter`. Out-of-range, an empty list, or a non-Projects-screen
+/// click are pure no-ops, mirroring `update_card_clicked`'s defense in depth.
+fn update_project_clicked(model: Model, index: usize) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Projects || index >= model.projects.len() {
+        return (model, vec![]);
+    }
+    update_select_projects(Model {
+        projects_selected: index,
+        ..model
+    })
+}
+
+/// Drills into `project`'s issues (ADR 0021 §4): sets the origin/JQL, clears
+/// the list state (rows, selection, paging cursor, search), returns to
+/// `Screen::List`, and emits the same `Cmd::LoadList` shape
+/// `update_submit_search` uses — so pagination, search, and detail all apply
+/// unchanged to the project's issues (BDR 0013 S3).
+fn drill_into_project(model: Model, project: ProjectRow) -> (Model, Vec<Cmd>) {
+    let jql = format!("project = {} ORDER BY updated DESC", project.key);
+    let next = Model {
+        screen: Screen::List,
+        list_origin: ListOrigin::Project(project.key),
+        jql: jql.clone(),
+        rows: vec![],
+        selected: 0,
+        next_page_token: None,
+        search: None,
+        error: None,
+        ..model
+    };
+    (next, vec![Cmd::LoadList(jql)])
+}
+
 fn update_select_focused_link(model: Model) -> (Model, Vec<Cmd>) {
     match model.detail_focused_link {
         Some(i) => {
@@ -352,7 +473,22 @@ fn update_link_clicked(model: Model, href: String) -> (Model, Vec<Cmd>) {
     (model, vec![Cmd::OpenUrl(href)])
 }
 
+/// Back pops the axis by `(screen, list_origin)` (ADR 0021 §5, BDR 0013 S4):
+/// Detail always returns to the list it came from (unchanged); a
+/// `Project`-origin list returns to Projects (rows retained, no refetch); a
+/// `Mine`-origin list is a no-op (today's behavior); Projects with a
+/// `Project` origin restores the mine list (reloaded); Projects with the
+/// `Mine` origin goes straight back to the list with its rows intact (no
+/// refetch — nothing was ever replaced).
 fn update_back(model: Model) -> (Model, Vec<Cmd>) {
+    match model.screen {
+        Screen::Detail => back_from_detail(model),
+        Screen::List => back_from_list(model),
+        Screen::Projects => back_from_projects(model),
+    }
+}
+
+fn back_from_detail(model: Model) -> (Model, Vec<Cmd>) {
     let next = Model {
         screen: Screen::List,
         detail: None,
@@ -362,6 +498,52 @@ fn update_back(model: Model) -> (Model, Vec<Cmd>) {
         ..model
     };
     (next, vec![])
+}
+
+fn back_from_list(model: Model) -> (Model, Vec<Cmd>) {
+    match model.list_origin {
+        ListOrigin::Project(_) => {
+            let next = Model {
+                screen: Screen::Projects,
+                ..model
+            };
+            (next, vec![])
+        }
+        ListOrigin::Mine => (model, vec![]),
+    }
+}
+
+fn back_from_projects(model: Model) -> (Model, Vec<Cmd>) {
+    match model.list_origin {
+        ListOrigin::Project(_) => restore_mine_list(model),
+        ListOrigin::Mine => {
+            let next = Model {
+                screen: Screen::List,
+                ..model
+            };
+            (next, vec![])
+        }
+    }
+}
+
+/// Restores the mine list (ADR 0021 §5): origin back to `Mine`, the shared
+/// `MINE_JQL` constant (the single source, also used at browse entry),
+/// cleared list state, and the same `Cmd::LoadList` shape every other
+/// list-replacing transition emits — a reload is required since the
+/// project's issues replaced the rows.
+fn restore_mine_list(model: Model) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        screen: Screen::List,
+        list_origin: ListOrigin::Mine,
+        jql: MINE_JQL.to_owned(),
+        rows: vec![],
+        selected: 0,
+        next_page_token: None,
+        search: None,
+        error: None,
+        ..model
+    };
+    (next, vec![Cmd::LoadList(MINE_JQL.to_owned())])
 }
 
 /// Unmodified left DOWN anchors a fresh selection on the Detail screen,
@@ -465,6 +647,56 @@ fn update_open_search(model: Model) -> (Model, Vec<Cmd>) {
     let next = Model {
         search: Some(String::new()),
         error: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// `p` opens the Projects screen from the issue list (ADR 0021 §1, BDR 0013
+/// S1): only from `Screen::List` with search inactive (the key mapper
+/// already never emits this while search is active; the guard here is
+/// defense in depth, mirroring `update_open_search`). Existing `projects`
+/// rows are kept (not cleared) while the fresh fetch is in flight, and a
+/// loading status is set on the existing status seam.
+fn update_open_projects(model: Model) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::List || model.search.is_some() {
+        return (model, vec![]);
+    }
+    let next = Model {
+        screen: Screen::Projects,
+        projects_selected: 0,
+        status: Some(StatusMsg {
+            text: t(LOADING_STATUS_TEXT),
+            kind: StatusKind::Info,
+        }),
+        ..model
+    };
+    (next, vec![Cmd::LoadProjects])
+}
+
+/// The projects fetch completed (BDR 0013 S1): sets the fetched rows,
+/// clamps `projects_selected` into range, and clears the loading status. A
+/// late result while off the Projects screen still updates the data
+/// (harmless) but never changes `screen`.
+fn update_projects_loaded(model: Model, rows: Vec<ProjectRow>) -> (Model, Vec<Cmd>) {
+    let projects_selected = model.projects_selected.min(rows.len().saturating_sub(1));
+    let next = Model {
+        projects: rows,
+        projects_selected,
+        status: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// A projects fetch failure (BDR 0013 S5): an Error status on the existing
+/// status seam, staying on the Projects screen (never changes `screen`).
+fn update_projects_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        status: Some(StatusMsg {
+            text: msg,
+            kind: StatusKind::Error,
+        }),
         ..model
     };
     (next, vec![])

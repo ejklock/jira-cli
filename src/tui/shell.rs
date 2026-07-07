@@ -14,13 +14,14 @@ use tokio::sync::mpsc;
 use crate::client::{ClientError, GouqiJiraClient, JiraClient};
 use crate::commands::{reauth_message, DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow, SearchResult};
+use crate::models::{Issue, IssueRow, ProjectRow, SearchResult};
 use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
-use super::model::{entry_cmds, update, Cmd, Identity, Model, Msg, Screen};
+use super::model::{entry_cmds, update, Cmd, Identity, ListOrigin, Model, Msg, Screen};
 use super::view::{
-    detail_link_at, detail_pos_at, detail_pos_at_clamped, list_click_card, selection_text, view,
+    detail_link_at, detail_pos_at, detail_pos_at_clamped, list_click_card, projects_click_row,
+    selection_text, view,
 };
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
@@ -163,6 +164,9 @@ async fn run_tui(
         }],
         status: None,
         revalidating,
+        list_origin: ListOrigin::Mine,
+        projects: vec![],
+        projects_selected: 0,
     };
     let exit_code = event_loop(&mut terminal, model, instance, cache).await;
 
@@ -215,6 +219,7 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         'o' => Some(Msg::OpenLink),
         'y' => Some(Msg::CopyKey),
         'n' => Some(Msg::LoadMore),
+        'p' => Some(Msg::OpenProjects),
         'c' if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         _ => None,
     }
@@ -295,8 +300,10 @@ pub(super) fn resolve_mouse_msg(
 }
 
 /// Resolves a click candidate by screen and modifier set (BDR 0010 S5-S8, BDR
-/// 0011 S1/S4): on the List screen every click (plain or modifier-carrying)
-/// resolves through `view::list_click_card` unchanged (B1 semantics, S8); on
+/// 0011 S1/S4, ADR 0021): on the List screen every click (plain or
+/// modifier-carrying) resolves through `view::list_click_card` unchanged (B1
+/// semantics, S8); on the Projects screen a click resolves through
+/// `view::projects_click_row` — the projects analogue (BDR 0013 S2-S3); on
 /// the Detail screen a CONTROL/SUPER-carrying click resolves through
 /// `view::detail_link_at` (link activation, never a selection); a plain
 /// click anchors a selection through `view::detail_pos_at` (ADR 0019 §3).
@@ -309,6 +316,9 @@ fn resolve_click(
 ) -> Option<Msg> {
     if model.screen == Screen::List {
         return list_click_card(model, area, y).map(Msg::CardClicked);
+    }
+    if model.screen == Screen::Projects {
+        return projects_click_row(model, area, y).map(Msg::ProjectClicked);
     }
     let link_modifier = modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
     if link_modifier {
@@ -350,7 +360,7 @@ fn resolve_release(model: &Model, modifiers: KeyModifiers) -> Option<Msg> {
 
 /// Outcome of one event-loop turn: either the model to keep drawing with, or the
 /// process exit code once the loop is done.
-enum StepOutcome {
+pub(super) enum StepOutcome {
     Continue(Box<Model>),
     Exit(i32),
 }
@@ -417,8 +427,10 @@ fn handle_terminal_event(
 /// A reply from a spawned `Cmd` effect. A completed detail fetch is cached here
 /// (never inside the spawned task, which owns no borrow of `cache`); a
 /// completed revalidation rewrites the mine-scope snapshot (BDR 0008 S2)
-/// before the guarded swap in `update` runs.
-fn handle_reply(
+/// before the guarded swap in `update` runs. The mine-scope snapshot write is
+/// bound EXCLUSIVELY to `Msg::RevalidationLoaded` (ADR 0021 §7, BDR 0013 S6)
+/// — a project's `Msg::ListLoaded` never reaches it.
+pub(super) fn handle_reply(
     msg: Msg,
     model: Model,
     instance: &Instance,
@@ -479,6 +491,10 @@ fn dispatch_cmd(
         }
         Cmd::RevalidateList => {
             spawn_revalidate_list(instance.clone(), tx.clone());
+            model
+        }
+        Cmd::LoadProjects => {
+            spawn_load_projects(instance.clone(), tx.clone());
             model
         }
     }
@@ -556,6 +572,28 @@ fn spawn_revalidate_list(instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
         };
         let _ = tx.send(msg);
     });
+}
+
+/// Spawns the projects fetch effect (ADR 0021 §2, BDR 0013 S1/S5); mirrors
+/// `spawn_load_list`'s reply-channel and error-string shape (same
+/// `Unauthorized -> reauth_message` mapping for E2 parity) but reports
+/// through `Msg::ProjectsLoaded`/`Msg::ProjectsFailed`.
+fn spawn_load_projects(instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match run_list_projects(&instance).await {
+            Ok(rows) => Msg::ProjectsLoaded(rows),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::ProjectsFailed(reauth_message(&instance))
+            }
+            Err(e) => Msg::ProjectsFailed(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn run_list_projects(instance: &Instance) -> Result<Vec<ProjectRow>, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.list_projects().await
 }
 
 /// Spawns the load-more page fetch effect (ADR 0009); the result is sent back
