@@ -51,7 +51,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | done | 0041 |
 | [0043](/issues/0043-b5a-projects-client-seam.md) | B5a | projects client seam: ProjectRow model + JiraClient::list_projects | done | — |
 | [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | done | 0043 |
-| [0045](/issues/0045-c1-comment-write-seam.md) | C1 | comment write seam: add/update/delete_comment + ADF builder + write-surface gate | todo | — |
+| [0045](/issues/0045-c1-comment-write-seam.md) | C1 | comment write seam: add/update/delete_comment + ADF builder + write-surface gate | done | — |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -129,7 +129,7 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [0044](/issues/0044-b5b-projects-screen-tui.md) (TUI screen) **done**.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)),
   sliced C1→C4: **C1** = [0045](/issues/0045-c1-comment-write-seam.md) write seam
-  ([ADR 0022](/adr/0022-comment-write-seam.md)) **todo**; **C2** non-TTY
+  ([ADR 0022](/adr/0022-comment-write-seam.md)) **done**; **C2** non-TTY
   `jira comment`; **C3** TUI modal overlay + compose + server-truth refresh;
   **C4** edit/delete own + Sim/Não confirm + affordances. C2–C4 get their
   ADR/BDR/issue at execution time.
