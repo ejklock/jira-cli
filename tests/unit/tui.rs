@@ -3450,3 +3450,71 @@ fn drag_and_release_variants_never_yield_quit_on_either_screen() {
         }
     }
 }
+
+// ---- ADR 0020 / BDR 0012 S6-S7: attachment rows reuse B2b/B3 machinery
+// with zero new click/selection code ----
+
+fn make_detail_model_with_attachment() -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(crate::models::Issue {
+        attachments: vec![attachment("a.pdf", "https://example.com/a.pdf", None, None)],
+        ..make_issue("PROJ-1")
+    });
+    model
+}
+
+#[test]
+fn resolve_mouse_msg_plain_click_on_attachment_row_anchors_selection_never_opens() {
+    let model = make_detail_model_with_attachment();
+    let area = Rect::new(0, 0, 60, 30);
+    let buf = render_to_buffer(&model, 60, 30);
+    let (col, row) =
+        find_text_position(&buf, "[1] ↗ a.pdf").expect("the attachment row must render");
+
+    let msg = resolve_mouse_msg(mouse_click_at(col, row), false, &model, area);
+    assert!(
+        matches!(msg, Some(Msg::SelStart(_))),
+        "a plain click over an attachment row must go down the B3 selection path (SelStart), \
+         never open a URL"
+    );
+}
+
+#[test]
+fn selection_text_over_an_attachment_row_extracts_the_rows_logical_text() {
+    let mut model = make_detail_model_with_attachment();
+    let area = Rect::new(0, 0, 60, 30);
+    let buf = render_to_buffer(&model, 60, 30);
+    let (col, row) =
+        find_text_position(&buf, "[1] ↗ a.pdf").expect("the attachment row must render");
+
+    let (line, _) = view::detail_pos_at(&model, area, col, row)
+        .expect("the attachment row must resolve to a logical position");
+    model.selection = Some(Selection {
+        anchor: (line, 0),
+        cursor: (line, "[1] ↗ a.pdf".chars().count()),
+        dragged: true,
+    });
+
+    assert_eq!(
+        view::selection_text(&model),
+        Some("[1] ↗ a.pdf".to_owned()),
+        "selection over an attachment row must extract exactly its logical text"
+    );
+}
+
+#[test]
+fn update_link_clicked_with_an_attachment_url_on_detail_emits_exactly_one_open_url() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    let (next, cmds) = update(
+        model,
+        Msg::LinkClicked("https://example.com/a.pdf".to_owned()),
+    );
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::OpenUrl("https://example.com/a.pdf".to_owned())]
+    );
+    assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+}

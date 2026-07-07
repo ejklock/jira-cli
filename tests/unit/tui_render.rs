@@ -1436,6 +1436,379 @@ fn detail_link_at_on_a_wrapped_url_fragment_returns_the_complete_href() {
     set_language("en");
 }
 
+// ---- ADR 0020 / BDR 0012 S3-S8: the Attachments panel (after Comments,
+// link-styled '[n] ↗ filename' rows carrying href, blank-row breathing room,
+// italic/dim footnote, reachable-by-scroll, empty list renders no panel) ----
+
+fn make_issue_with_attachments(
+    key: &str,
+    attachments: Vec<crate::models::Attachment>,
+) -> crate::models::Issue {
+    crate::models::Issue {
+        attachments,
+        ..crate::test_support::issue(key)
+    }
+}
+
+fn make_issue_with_marked_attachments(
+    key: &str,
+    count: usize,
+    last_filename: &str,
+) -> crate::models::Issue {
+    let attachments = (0..count)
+        .map(|i| {
+            let filename = if i + 1 == count {
+                last_filename.to_owned()
+            } else {
+                format!("file-{i}.txt")
+            };
+            crate::test_support::attachment(
+                &filename,
+                &format!("https://example.com/{i}"),
+                None,
+                None,
+            )
+        })
+        .collect();
+    make_issue_with_attachments(key, attachments)
+}
+
+#[test]
+fn view_detail_renders_attachments_panel_after_comments_with_link_styled_rows() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut issue = make_issue_with_description_and_two_comments("PROJ-100");
+    issue.attachments = vec![
+        crate::test_support::attachment("a.pdf", "https://example.com/a.pdf", None, None),
+        crate::test_support::attachment("b.png", "https://example.com/b.png", None, None),
+    ];
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(issue);
+
+    let buf = render_to_buffer(&model, 100, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Attachments (2)"),
+        "the localized counted header must appear; got: {text}"
+    );
+    assert!(
+        text.contains("[1] ↗ a.pdf"),
+        "the first attachment row must appear; got: {text}"
+    );
+    assert!(
+        text.contains("[2] ↗ b.png"),
+        "the second attachment row must appear; got: {text}"
+    );
+
+    let comments_line = text
+        .lines()
+        .position(|l| l.contains("Comments (2)"))
+        .expect("the Comments panel must render");
+    let attachments_line = text
+        .lines()
+        .position(|l| l.contains("Attachments (2)"))
+        .expect("the Attachments panel must render");
+    assert!(
+        attachments_line > comments_line,
+        "the Attachments panel must render AFTER the Comments panel"
+    );
+
+    let row_style =
+        style_at_text(&buf, "[1] ↗ a.pdf").expect("the first attachment row must render");
+    assert_eq!(
+        row_style.fg,
+        theme::link().fg,
+        "an attachment row must carry the theme link color: {row_style:?}"
+    );
+    assert!(
+        row_style.add_modifier.contains(Modifier::UNDERLINED),
+        "an attachment row must carry the theme link style: {row_style:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_attachments_header_and_footnote_translate_under_pt_br() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_attachments(
+        "PROJ-101",
+        vec![crate::test_support::attachment(
+            "a.pdf",
+            "https://example.com/a.pdf",
+            None,
+            None,
+        )],
+    ));
+
+    let buf = render_to_buffer(&model, 100, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Anexos (1)"),
+        "pt_BR must translate the counted header; got: {text}"
+    );
+    assert!(
+        text.contains("Ctrl/Cmd+clique abre um anexo"),
+        "pt_BR must translate the footnote; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_attachments_panel_has_one_blank_row_between_rows_and_italic_dim_footnote_last() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_attachments(
+        "PROJ-102",
+        vec![
+            crate::test_support::attachment("a.pdf", "https://example.com/a.pdf", None, None),
+            crate::test_support::attachment("b.png", "https://example.com/b.png", None, None),
+        ],
+    ));
+
+    let buf = render_to_buffer(&model, 100, 30);
+
+    let (_, row1) =
+        find_text_position(&buf, "[1] ↗ a.pdf").expect("the first attachment row must render");
+    let (_, row2) =
+        find_text_position(&buf, "[2] ↗ b.png").expect("the second attachment row must render");
+    assert_eq!(
+        row2,
+        row1 + 2,
+        "exactly one blank row must separate consecutive attachment rows"
+    );
+    let between_row = row_text(&buf, row1 + 1);
+    assert!(
+        !between_row.contains('↗')
+            && !between_row.contains("a.pdf")
+            && !between_row.contains("b.png"),
+        "the row between two attachment rows must carry no attachment content (only box \
+         border/padding); got: {between_row:?}"
+    );
+
+    let (_, footnote_row) = find_text_position(&buf, "Ctrl/Cmd+click opens an attachment")
+        .expect("the footnote must render");
+    assert_eq!(
+        footnote_row,
+        row2 + 1,
+        "the footnote must be the panel's very next (last) content line after the last \
+         attachment row"
+    );
+
+    let footnote_style = style_at_text(&buf, "Ctrl/Cmd+click opens an attachment")
+        .expect("the footnote must render");
+    assert!(
+        footnote_style.add_modifier.contains(Modifier::ITALIC),
+        "the footnote must render italic: {footnote_style:?}"
+    );
+    assert!(
+        footnote_style.add_modifier.contains(Modifier::DIM),
+        "the footnote must render dim: {footnote_style:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_scroll_to_max_offset_exposes_the_last_attachment_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_marked_attachments(
+        "PROJ-103",
+        30,
+        "LASTATTACHMENT",
+    ));
+    model.detail_scroll = u16::MAX;
+
+    let buf = render_to_buffer(&model, 60, 15);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("LASTATTACHMENT"),
+        "scrolling to the max offset must expose the final attachment row (BDR 0012 S5); \
+         got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_over_an_attachment_row_returns_its_content_url() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_attachments(
+        "PROJ-104",
+        vec![crate::test_support::attachment(
+            "a.pdf",
+            "https://example.com/a.pdf",
+            None,
+            None,
+        )],
+    ));
+
+    let (width, height) = (100, 30);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+    let (col, row) =
+        find_text_position(&buf, "[1] ↗ a.pdf").expect("the attachment row must render");
+
+    assert_eq!(
+        view::detail_link_at(&model, area, col, row),
+        Some("https://example.com/a.pdf".to_owned())
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_over_the_attachments_header_blank_row_and_footnote_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_attachments(
+        "PROJ-105",
+        vec![
+            crate::test_support::attachment("a.pdf", "https://example.com/a.pdf", None, None),
+            crate::test_support::attachment("b.png", "https://example.com/b.png", None, None),
+        ],
+    ));
+
+    let (width, height) = (100, 30);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+
+    let (header_col, header_row) =
+        find_text_position(&buf, "Attachments (2)").expect("the header must render");
+    assert_eq!(
+        view::detail_link_at(&model, area, header_col, header_row),
+        None,
+        "a modifier-click on the Attachments header must resolve to None"
+    );
+
+    let (row1_col, row1_row) =
+        find_text_position(&buf, "[1] ↗ a.pdf").expect("the first attachment row must render");
+    assert_eq!(
+        view::detail_link_at(&model, area, row1_col, row1_row + 1),
+        None,
+        "a modifier-click on the blank separator row must resolve to None"
+    );
+
+    let (footnote_col, footnote_row) =
+        find_text_position(&buf, "Ctrl/Cmd+click opens an attachment")
+            .expect("the footnote must render");
+    assert_eq!(
+        view::detail_link_at(&model, area, footnote_col, footnote_row),
+        None,
+        "a modifier-click on the footnote must resolve to None"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_over_an_attachment_row_resolves_href_at_a_non_zero_scroll_offset() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_marked_attachments("PROJ-106", 20, "z.zip"));
+    model.detail_scroll = u16::MAX;
+
+    let (width, height) = (60, 12);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+    let (col, row) = find_text_position(&buf, "z.zip")
+        .expect("the last attachment row must be visible after scrolling to the max offset");
+
+    assert_eq!(
+        view::detail_link_at(&model, area, col, row),
+        Some("https://example.com/19".to_owned()),
+        "the last attachment's href must resolve at its scrolled row"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_with_no_attachments_renders_no_attachments_panel() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::test_support::issue("PROJ-107"));
+
+    let buf = render_to_buffer(&model, 100, 30);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("Attachments"),
+        "an issue with no attachments must render no Attachments header; got: {text}"
+    );
+    assert!(
+        !text.contains("Ctrl/Cmd+click opens an attachment"),
+        "an issue with no attachments must render no footnote; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_attachments_panel_adds_lines_that_push_content_past_the_viewport() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    // 4 numbered comments compose content that fits exactly within a 40-row
+    // viewport with no scrollbar (baseline); adding the Attachments panel's
+    // own lines (blank separator + border + row + footnote + border) must
+    // push the SAME content past that viewport, proving the panel actually
+    // appends composed lines rather than merely swapping displayed text.
+    let base_issue = make_issue_with_numbered_comments("PROJ-108", 4, "LASTMARKER");
+    let mut with_attachment = base_issue.clone();
+    with_attachment.attachments = vec![crate::test_support::attachment(
+        "a.pdf",
+        "https://example.com/a.pdf",
+        None,
+        None,
+    )];
+
+    let (width, height) = (100, 40);
+    let mut model_without = make_detail_model(vec![]);
+    model_without.detail = Some(base_issue);
+    let mut model_with = make_detail_model(vec![]);
+    model_with.detail = Some(with_attachment);
+
+    let text_without = buffer_text(&render_to_buffer(&model_without, width, height));
+    let text_with = buffer_text(&render_to_buffer(&model_with, width, height));
+
+    assert!(
+        !text_without.contains('█'),
+        "the baseline content must fit the viewport with no scrollbar; got: {text_without}"
+    );
+    assert!(
+        text_with.contains('█'),
+        "adding one attachment must grow the composed content enough to require scrolling; \
+         got: {text_with}"
+    );
+    assert!(!text_without.contains("Attachments"));
+    assert!(text_with.contains("Attachments (1)"));
+
+    set_language("en");
+}
+
 #[test]
 fn view_detail_border_title_ellipsizes_a_long_summary() {
     let _lock = LANG_MUTEX.lock().unwrap();

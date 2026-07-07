@@ -60,6 +60,8 @@
   "My Open Tasks": "Minhas Tarefas Abertas",
   "Assets": "Anexos",
   "Attachment": "Anexo",
+  "Attachments": "Anexos",
+  "Ctrl/Cmd+click opens an attachment": "Ctrl/Cmd+clique abre um anexo",
   "Branch type (Enter to confirm, q cancel)": "Tipo de branch (Enter para confirmar, q cancelar)",
   "Terminal too small": "Terminal muito pequeno",
   "Resize to continue": "Redimensione para continuar",

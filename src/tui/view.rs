@@ -15,7 +15,7 @@ use super::model::{
 use super::panel;
 use super::theme;
 use crate::i18n::t;
-use crate::models::{Issue, IssueComment, IssueRow};
+use crate::models::{Attachment, Issue, IssueComment, IssueRow};
 use crate::render::{
     adf_to_rich, due_day_delta, relative_due, today_days_now, RichLine, RichSpan, RichStyle,
 };
@@ -562,10 +562,11 @@ struct DetailCompose {
 
 /// Composes the single globally-scrolled line buffer (BDR 0007 S5) alongside
 /// its hit-test metadata, row for row (ADR 0018 §5, ADR 0019 §1): the Details
-/// meta panel, the Description panel, and — when present — the Comments
-/// panel, each drawn via `panel::panel_box` at the same `width`. Only the
-/// Description panel's inline `[url]` tokens carry an `href`; every content
-/// cell across all three panels carries logical provenance for selection.
+/// meta panel, the Description panel, and — when present — the Comments and
+/// Attachments panels, each drawn via `panel::panel_box` at the same `width`.
+/// The Description panel's inline `[url]` tokens and the Attachments panel's
+/// `[n] ↗ filename` rows carry an `href` (ADR 0020); every content cell
+/// across all panels carries logical provenance for selection.
 fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> DetailCompose {
     let mut logical_lines = Vec::new();
 
@@ -589,6 +590,15 @@ fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> Det
         lines.extend(comments_lines);
         link_rows.push(Vec::new());
         link_rows.extend(comments_link_rows);
+    }
+
+    if let Some((attachments_lines, attachments_link_rows)) =
+        attachments_panel(issue, width, &mut logical_lines)
+    {
+        lines.push(Line::from(""));
+        lines.extend(attachments_lines);
+        link_rows.push(Vec::new());
+        link_rows.extend(attachments_link_rows);
     }
 
     DetailCompose {
@@ -904,6 +914,88 @@ fn comment_header_line(comment: &IssueComment) -> Line<'static> {
         .unwrap_or_else(|| t("Unknown"));
     let created = comment.created.as_deref().unwrap_or("");
     Line::from(format!("[{author}] {created}"))
+}
+
+/// The Attachments panel (ADR 0020, BDR 0012 S3-S8): titled `Attachments
+/// (N)`, one `[n] ↗ filename` row per attachment whose WHOLE row carries the
+/// theme link style and `href` = the attachment's content URL — so B2b's
+/// modifier-click activation and B3's selection/extraction work over
+/// attachment rows through the SAME `RunLine`/`SpanRun` pipeline every other
+/// panel uses, with zero new click/selection machinery. One blank row
+/// separates consecutive attachment rows (S4 breathing room); the panel's
+/// last line is the italic/dim Ctrl/Cmd+click footnote. `None` when the issue
+/// has no attachments, so `compose_detail` renders no Attachments panel at
+/// all (S8).
+fn attachments_panel(
+    issue: &Issue,
+    width: u16,
+    logical_lines: &mut Vec<String>,
+) -> Option<(Vec<Line<'static>>, Vec<Vec<LinkCell>>)> {
+    if issue.attachments.is_empty() {
+        return None;
+    }
+    let inner_width = panel::inner_content_width(width);
+    let mut rows = attachment_run_lines(&issue.attachments, logical_lines);
+    rows.push(attachments_footnote_run_line(logical_lines));
+
+    let wrapped = wrap_run_lines_to_width(rows, inner_width);
+    let label = format!("{} ({})", t("Attachments"), issue.attachments.len());
+    let lines = panel::panel_box(&label, run_lines_to_lines(&wrapped), width);
+    let content_link_rows: Vec<Vec<LinkCell>> =
+        wrapped.iter().map(run_line_to_link_cells).collect();
+    let link_rows = box_link_rows(content_link_rows);
+    Some((lines, link_rows))
+}
+
+/// One `[n] ↗ filename` run-line per attachment (S3/S6), with one blank
+/// run-line between consecutive attachments (S4).
+fn attachment_run_lines(
+    attachments: &[Attachment],
+    logical_lines: &mut Vec<String>,
+) -> Vec<RunLine> {
+    let mut rows = Vec::with_capacity(attachments.len() * 2);
+    for (index, attachment) in attachments.iter().enumerate() {
+        if index > 0 {
+            rows.push(Vec::new());
+        }
+        rows.push(attachment_run_line(attachment, index, logical_lines));
+    }
+    rows
+}
+
+/// One attachment's row: the WHOLE `[n] ↗ filename` text is a single
+/// href-carrying, link-styled `SpanRun` (ADR 0020) — the entire row activates
+/// on modifier-click and extracts as one logical line on selection.
+fn attachment_run_line(
+    attachment: &Attachment,
+    index: usize,
+    logical_lines: &mut Vec<String>,
+) -> RunLine {
+    let text = format!("[{}] ↗ {}", index + 1, attachment.filename);
+    let logical_line = register_logical_line(logical_lines, text.clone());
+    vec![SpanRun {
+        text,
+        style: theme::link(),
+        href: Some(attachment.url.clone()),
+        logical_line,
+        char_start: 0,
+    }]
+}
+
+/// The panel's last line (S4): the localized Ctrl/Cmd+click footnote, no
+/// `href`. Styled italic+dim via plain `Modifier` flags — carrying no
+/// `Color::Rgb`, they need no new `theme.rs` constructor, mirroring
+/// `rich_style_to_ratatui`'s own direct use of `Modifier::ITALIC`/`DIM`.
+fn attachments_footnote_run_line(logical_lines: &mut Vec<String>) -> RunLine {
+    let text = t("Ctrl/Cmd+click opens an attachment");
+    let logical_line = register_logical_line(logical_lines, text.clone());
+    vec![SpanRun {
+        text,
+        style: Style::default().add_modifier(Modifier::ITALIC | Modifier::DIM),
+        href: None,
+        logical_line,
+        char_start: 0,
+    }]
 }
 
 /// Word-agnostic display-width wrap: splits each line into as many lines as
