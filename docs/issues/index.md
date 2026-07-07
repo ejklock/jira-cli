@@ -45,7 +45,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0036](/issues/0036-e3-swr-first-paint-browse-entry.md) | E3 | SWR first paint on browse entry (snapshot + revalidate + guards) | done | 0033 |
 | [0037](/issues/0037-b1-mouse-foundations.md) | B1 | mouse foundations: capture, wheel navigation, card click drills in | done | — |
 | [0038](/issues/0038-b2a-inline-link-rendering.md) | B2a | inline body-link rendering: 'text [url]' visible token | done | — |
-| [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | open | 0037, 0038 |
+| [0039](/issues/0039-b2b-modifier-click-link-activation.md) | B2b | Ctrl/Cmd+click opens the '[url]' token; plain click never navigates | done | 0037, 0038 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -107,7 +107,7 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [0038](/issues/0038-b2a-inline-link-rendering.md) +
   [0039](/issues/0039-b2b-modifier-click-link-activation.md)
   ([ADR 0018](/adr/0018-inline-body-links-modifier-click.md),
-  [BDR 0010](/bdr/0010-inline-body-link-behaviors.md)) *in progress* —
+  [BDR 0010](/bdr/0010-inline-body-link-behaviors.md)) **done** —
   links before selection, mirroring the fork's dependency arc (the detail
   hit geometry selection reuses); **B3** app-managed text selection +
   clipboard; **B4** attachments panel; **B5** Projects→Issues axis.
