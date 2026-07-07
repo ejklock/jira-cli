@@ -89,6 +89,20 @@ fn style_at_text(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<Style> {
     None
 }
 
+/// Finds `needle`'s first rendered cell's `(column, row)` — mirrors
+/// `tests/unit/tui.rs`'s helper of the same purpose; used by the ADR 0018
+/// `detail_link_at` geometry tests to click exactly on a rendered token.
+fn find_text_position(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16, u16)> {
+    for row in 0..buf.area.height {
+        let text = row_text(buf, row);
+        if let Some(start) = text.find(needle) {
+            let col = text[..start].chars().count() as u16;
+            return Some((col, row));
+        }
+    }
+    None
+}
+
 fn make_list_model(identities: Vec<Identity>) -> Model {
     Model {
         rows: vec![make_row("PROJ-1")],
@@ -1233,6 +1247,188 @@ fn view_detail_description_shows_visible_url_token_styled_anchor_text_plain() {
     assert!(
         token_style.add_modifier.contains(Modifier::UNDERLINED),
         "the [url] token must carry the link style: {token_style:?}"
+    );
+
+    // ADR 0018 §6 (D-group parity): the token additionally carries the theme
+    // link color; the anchor text stays body-colored (no fg override).
+    assert_eq!(
+        token_style.fg,
+        theme::link().fg,
+        "the [url] token must render with the theme link color: {token_style:?}"
+    );
+    assert_ne!(
+        anchor_style.fg,
+        theme::link().fg,
+        "anchor text must not carry the theme link color: {anchor_style:?}"
+    );
+
+    set_language("en");
+}
+
+// ---- ADR 0018 §5 / BDR 0010 S5, S7, S8: detail_link_at geometry (single
+// geometry source — recomputes the same compose path render_detail_panels
+// draws) ----
+
+fn make_issue_with_inline_link_and_comments(key: &str, count: usize) -> crate::models::Issue {
+    let comments = (0..count)
+        .map(|i| {
+            crate::test_support::comment(
+                None,
+                Some("Alice"),
+                &crate::test_support::plain_paragraph(&format!("comment body number {i}")),
+                Some("2026-01-01"),
+                None,
+            )
+        })
+        .collect();
+    crate::models::Issue {
+        comments,
+        ..make_issue_with_inline_link(key)
+    }
+}
+
+#[test]
+fn detail_link_at_on_the_url_token_column_returns_the_href() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_inline_link("PROJ-80"));
+
+    let (width, height) = (120, 30);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+    let (col, row) =
+        find_text_position(&buf, "[https://example.com]").expect("the token must render");
+
+    assert_eq!(
+        view::detail_link_at(&model, area, col, row),
+        Some("https://example.com".to_owned())
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_on_anchor_text_or_chrome_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_inline_link("PROJ-81"));
+
+    let (width, height) = (120, 30);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+
+    let (anchor_col, anchor_row) =
+        find_text_position(&buf, "read the docs").expect("anchor text must render");
+    assert_eq!(
+        view::detail_link_at(&model, area, anchor_col, anchor_row),
+        None,
+        "a modifier-click on plain anchor text must resolve to None"
+    );
+
+    let (details_col, details_row) =
+        find_text_position(&buf, "Details").expect("the Details panel border/title must render");
+    assert_eq!(
+        view::detail_link_at(&model, area, details_col, details_row),
+        None,
+        "a modifier-click on a panel border/title must resolve to None"
+    );
+
+    assert_eq!(
+        view::detail_link_at(&model, area, 0, 0),
+        None,
+        "a modifier-click on the header row (outside the content viewport) must resolve to None"
+    );
+
+    let (_, assignee_row) =
+        find_text_position(&buf, "Assignee:").expect("the Assignee meta row must render");
+    let blank_row = assignee_row + 2;
+    assert_eq!(
+        view::detail_link_at(&model, area, 5, blank_row),
+        None,
+        "a modifier-click on the blank separator row between panels must resolve to None"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_finds_the_token_at_its_scrolled_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_inline_link_and_comments("PROJ-82", 20));
+
+    let (width, height) = (100, 15);
+    let area = Rect::new(0, 0, width, height);
+
+    let buf_unscrolled = render_to_buffer(&model, width, height);
+    let (col, row_unscrolled) = find_text_position(&buf_unscrolled, "[https://example.com]")
+        .expect("the token must render unscrolled");
+
+    model.detail_scroll = 2;
+    let buf_scrolled = render_to_buffer(&model, width, height);
+    let expected_row = row_unscrolled
+        .checked_sub(2)
+        .expect("the token must still be below the header after a scroll offset of 2");
+    assert_eq!(
+        find_text_position(&buf_scrolled, "[https://example.com]").map(|(_, r)| r),
+        Some(expected_row),
+        "sanity: a scroll offset of 2 must shift the token up by exactly 2 rows"
+    );
+
+    assert_eq!(
+        view::detail_link_at(&model, area, col, expected_row),
+        Some("https://example.com".to_owned()),
+        "the token must resolve at its shifted row under a non-zero scroll offset"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_link_at_on_a_wrapped_url_fragment_returns_the_complete_href() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let href = format!(
+        "https://example.com/{}MARKER{}",
+        "a".repeat(120),
+        "b".repeat(20)
+    );
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::doc(vec![
+            crate::test_support::paragraph(vec![crate::test_support::marked_text(
+                "docs",
+                vec![crate::test_support::link_mark(&href)],
+            )]),
+        ])),
+        ..crate::test_support::issue("PROJ-83")
+    });
+
+    let (width, height) = (40, 30);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+
+    let (_, first_row) = find_text_position(&buf, "[https://example.com/a")
+        .expect("the token's first wrapped fragment must render");
+    let (marker_col, marker_row) =
+        find_text_position(&buf, "MARKER").expect("a later wrapped fragment must render");
+
+    assert!(
+        marker_row > first_row,
+        "the URL must actually wrap across rows for this test to exercise S7; first_row={first_row}, marker_row={marker_row}"
+    );
+
+    assert_eq!(
+        view::detail_link_at(&model, area, marker_col, marker_row),
+        Some(href),
+        "a click on a later wrapped fragment must resolve the COMPLETE href"
     );
 
     set_language("en");

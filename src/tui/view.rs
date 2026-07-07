@@ -397,21 +397,30 @@ fn view_footer_text(model: &Model) -> String {
 const DETAIL_FRAME_BORDER_ROWS: u16 = 2;
 const DETAIL_FRAME_BORDER_COLS: u16 = 2;
 
-/// Pure detail view — renders the loaded issue or a loading notice.
-pub fn view_detail(model: &Model, frame: &mut Frame) {
-    let area = frame.area();
-    let has_status_row = model.status.is_some();
-
+/// Builds the `view_detail` vertical layout: the header occupies the fixed
+/// top row, the content region takes the remaining space, the optional
+/// status row is only reserved when active, and the footer is the fixed
+/// bottom row (mirrors `list_layout_chunks`'s pattern) — so `detail_link_at`
+/// can recompute the exact content chunk `render_detail_panels` draws into
+/// (ADR 0018 §5, single geometry source).
+fn detail_layout_chunks(area: Rect, has_status_row: bool) -> std::rc::Rc<[Rect]> {
     let mut constraints = vec![Constraint::Length(1), Constraint::Min(0)];
     if has_status_row {
         constraints.push(Constraint::Length(1));
     }
     constraints.push(Constraint::Length(1));
 
-    let chunks = Layout::default()
+    Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(area);
+        .split(area)
+}
+
+/// Pure detail view — renders the loaded issue or a loading notice.
+pub fn view_detail(model: &Model, frame: &mut Frame) {
+    let area = frame.area();
+    let has_status_row = model.status.is_some();
+    let chunks = detail_layout_chunks(area, has_status_row);
 
     render_header(frame, chunks[0], model);
 
@@ -453,7 +462,7 @@ fn render_detail_panels(
     scroll: u16,
 ) {
     let inner_width = area.width.saturating_sub(DETAIL_FRAME_BORDER_COLS);
-    let lines = build_detail_lines(issue, focused_link, inner_width);
+    let lines = compose_detail(issue, focused_link, inner_width).lines;
     let viewport_height = area.height.saturating_sub(DETAIL_FRAME_BORDER_ROWS);
     let total_lines = lines.len() as u16;
     let effective_offset = clamp_scroll_offset(scroll, total_lines, viewport_height);
@@ -508,22 +517,57 @@ fn detail_frame_title(issue: &Issue, frame_width: u16) -> String {
     panel::ellipsize_display(raw, budget)
 }
 
-/// Composes the single globally-scrolled line buffer (BDR 0007 S5): the
-/// Details meta panel, the Description panel, and — when present — the
-/// Comments panel, each drawn via `panel::panel_box` at the same `width`.
-fn build_detail_lines(
-    issue: &Issue,
-    focused_link: Option<usize>,
+/// One href-carrying cell in a composed row's cursor-hit metadata (ADR 0018
+/// §5): its display width and the href of the span it belongs to (`None` for
+/// plain body text, borders, and padding). `detail_link_at` walks a row's
+/// cells by width to find the one under the click column; the renderer never
+/// reads this.
+#[derive(Clone)]
+struct LinkCell {
     width: u16,
-) -> Vec<Line<'static>> {
-    let mut lines = details_panel(issue, width);
+    href: Option<String>,
+}
+
+/// The single detail compose result (ADR 0018 §5): the ratatui `Line`s the
+/// renderer draws, and — row for row — the href hit-test metadata
+/// `detail_link_at` walks. Both come out of the same pass over the same
+/// wrapped content, so they cannot drift apart (no duplicated wrap/border
+/// math).
+struct DetailCompose {
+    lines: Vec<Line<'static>>,
+    link_rows: Vec<Vec<LinkCell>>,
+}
+
+/// Composes the single globally-scrolled line buffer (BDR 0007 S5) alongside
+/// its href hit-test metadata, row for row (ADR 0018 §5): the Details meta
+/// panel, the Description panel, and — when present — the Comments panel,
+/// each drawn via `panel::panel_box` at the same `width`. The Details and
+/// Comments panels carry no hrefs (empty rows); only the Description panel's
+/// inline `[url]` tokens do.
+fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> DetailCompose {
+    let details_lines = details_panel(issue, width);
+    let details_link_rows = vec![Vec::new(); details_lines.len()];
+
+    let (description_lines, description_link_rows) =
+        description_panel_compose(issue, focused_link, width);
+
+    let mut lines = details_lines;
     lines.push(Line::from(""));
-    lines.extend(description_panel(issue, focused_link, width));
-    if let Some(comments) = comments_panel(issue, width) {
+    lines.extend(description_lines);
+
+    let mut link_rows = details_link_rows;
+    link_rows.push(Vec::new());
+    link_rows.extend(description_link_rows);
+
+    if let Some(comments_lines) = comments_panel(issue, width) {
+        let comments_link_rows = vec![Vec::new(); comments_lines.len()];
         lines.push(Line::from(""));
-        lines.extend(comments);
+        lines.extend(comments_lines);
+        link_rows.push(Vec::new());
+        link_rows.extend(comments_link_rows);
     }
-    lines
+
+    DetailCompose { lines, link_rows }
 }
 
 /// The Details panel (BDR 0007 S5): a 2-column meta table — Title, Key,
@@ -578,25 +622,120 @@ fn due_relative_text(issue: &Issue) -> Option<String> {
     relative_due(duedate, today_days_now())
 }
 
-/// The Description panel (BDR 0007 S5): the existing styled ADF lines,
-/// wrapped to the panel's inner width before boxing so no line exceeds it
-/// (offset math stays exact) and focused-link `REVERSED` styling survives.
-fn description_panel(issue: &Issue, focused_link: Option<usize>, width: u16) -> Vec<Line<'static>> {
+/// One rendered text run's ratatui style alongside its href (`None` off the
+/// visible `[url]` token) — the shared unit `wrap_run_line_to_width` carries
+/// through wrapping, so the renderer's `Line`s and `detail_link_at`'s
+/// hit-test cells walk the identical width-driven wrap decision (ADR 0018
+/// §5, single geometry source).
+#[derive(Clone)]
+struct SpanRun {
+    text: String,
+    style: Style,
+    href: Option<String>,
+}
+
+/// A wrapped/unwrapped line of [`SpanRun`]s — the run-carrying counterpart of
+/// a ratatui `Line` before hrefs are dropped for rendering.
+type RunLine = Vec<SpanRun>;
+
+fn run_line_to_line(run_line: &RunLine) -> Line<'static> {
+    Line::from(
+        run_line
+            .iter()
+            .map(|run| Span::styled(run.text.clone(), run.style))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn run_lines_to_lines(run_lines: &[RunLine]) -> Vec<Line<'static>> {
+    run_lines.iter().map(run_line_to_line).collect()
+}
+
+/// Lifts an already-built ratatui `Line` (no href) into a [`RunLine`], so
+/// plain content (e.g. a comment's header line) can be wrapped through the
+/// same run-based pipeline as href-carrying ADF content.
+fn line_to_run_line(line: &Line<'static>) -> RunLine {
+    line.spans
+        .iter()
+        .map(|span| SpanRun {
+            text: span.content.to_string(),
+            style: span.style,
+            href: None,
+        })
+        .collect()
+}
+
+/// The panel-content left offset a boxed row's rendered `Line` starts with
+/// (`panel::panel_box`'s `"│ "`: one border column, one padding column) —
+/// `detail_link_at`'s column walk must skip exactly this many columns before
+/// reaching the first content cell.
+const PANEL_CONTENT_LEFT_OFFSET: u16 = 2;
+
+fn run_line_to_link_cells(run_line: &RunLine) -> Vec<LinkCell> {
+    run_line
+        .iter()
+        .map(|run| LinkCell {
+            width: UnicodeWidthStr::width(run.text.as_str()) as u16,
+            href: run.href.clone(),
+        })
+        .collect()
+}
+
+/// Wraps a boxed panel's content link-rows with the border/padding row and
+/// per-row left-offset cell `panel::panel_box` renders around the content
+/// (ADR 0018 §5): a borderless row for the top border, one leading no-href
+/// cell per content row for `"│ "`, and a borderless row for the bottom
+/// border.
+fn box_link_rows(content_rows: Vec<Vec<LinkCell>>) -> Vec<Vec<LinkCell>> {
+    let mut rows = Vec::with_capacity(content_rows.len() + 2);
+    rows.push(Vec::new());
+    for row in content_rows {
+        let mut boxed_row = Vec::with_capacity(row.len() + 1);
+        boxed_row.push(LinkCell {
+            width: PANEL_CONTENT_LEFT_OFFSET,
+            href: None,
+        });
+        boxed_row.extend(row);
+        rows.push(boxed_row);
+    }
+    rows.push(Vec::new());
+    rows
+}
+
+/// The Description panel (BDR 0007 S5) plus its href hit-test metadata (ADR
+/// 0018 §5): the styled ADF run-lines, wrapped to the panel's inner width
+/// before boxing so no line exceeds it (offset math stays exact),
+/// focused-link `REVERSED` styling survives, and every wrapped fragment of a
+/// `[url]` token keeps the complete href (BDR 0010 S7).
+fn description_panel_compose(
+    issue: &Issue,
+    focused_link: Option<usize>,
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<Vec<LinkCell>>) {
     let description = issue
         .description
         .as_deref()
         .map(adf_to_rich)
         .unwrap_or_default();
-    let styled = description_lines_to_ratatui(&description, focused_link);
     let inner_width = panel::inner_content_width(width);
-    let wrapped = wrap_lines_to_width(styled, inner_width);
-    panel::panel_box(&t("Description"), wrapped, width)
+    let styled = description_lines_to_runs(&description, focused_link);
+    let wrapped = wrap_run_lines_to_width(styled, inner_width);
+
+    let lines = panel::panel_box(&t("Description"), run_lines_to_lines(&wrapped), width);
+    let content_link_rows: Vec<Vec<LinkCell>> =
+        wrapped.iter().map(run_line_to_link_cells).collect();
+    let link_rows = box_link_rows(content_link_rows);
+
+    (lines, link_rows)
 }
 
 /// The Comments panel (BDR 0007 S5): titled `Comments (N)`, its body made of
 /// nested per-comment cards (empty label, author `[created]` header line +
 /// styled body). `None` when the issue has no comments, so `view_detail`
-/// renders no Comments panel at all.
+/// renders no Comments panel at all. Comment bodies carry no href hit-test
+/// metadata (out of BDR 0010's scope — only the Description panel's tokens
+/// are click-activated this slice); a modifier-click over one safely
+/// resolves to `None`.
 fn comments_panel(issue: &Issue, width: u16) -> Option<Vec<Line<'static>>> {
     if issue.comments.is_empty() {
         return None;
@@ -618,17 +757,18 @@ fn comments_panel(issue: &Issue, width: u16) -> Option<Vec<Line<'static>>> {
 /// body.
 fn comment_card(comment: &IssueComment, width: u16) -> Vec<Line<'static>> {
     let inner_width = panel::inner_content_width(width);
-    let mut body = vec![comment_header_line(comment)];
+    let mut body = vec![line_to_run_line(&comment_header_line(comment))];
 
     let mut link_occurrence = 0usize;
     let rich_body = adf_to_rich(&comment.body);
     body.extend(
         rich_body
             .iter()
-            .map(|line| rich_line_to_ratatui(line, None, &mut link_occurrence)),
+            .map(|line| rich_line_to_runs(line, None, &mut link_occurrence)),
     );
 
-    panel::panel_box("", wrap_lines_to_width(body, inner_width), width)
+    let wrapped = wrap_run_lines_to_width(body, inner_width);
+    panel::panel_box("", run_lines_to_lines(&wrapped), width)
 }
 
 fn comment_header_line(comment: &IssueComment) -> Line<'static> {
@@ -642,27 +782,28 @@ fn comment_header_line(comment: &IssueComment) -> Line<'static> {
 }
 
 /// Word-agnostic display-width wrap: splits each line into as many lines as
-/// needed so none exceeds `width` columns, preserving span styling across the
-/// break. A zero `width` degrades to one line per input line (no infinite
-/// loop).
-fn wrap_lines_to_width(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+/// needed so none exceeds `width` columns, preserving each run's style and
+/// href across the break (BDR 0010 S7: a wrapped `[url]` fragment keeps the
+/// complete href). A zero `width` degrades to one line per input line (no
+/// infinite loop).
+fn wrap_run_lines_to_width(lines: Vec<RunLine>, width: u16) -> Vec<RunLine> {
     lines
         .iter()
-        .flat_map(|line| wrap_line_to_width(line, width))
+        .flat_map(|line| wrap_run_line_to_width(line, width))
         .collect()
 }
 
-fn wrap_line_to_width(line: &Line<'static>, width: u16) -> Vec<Line<'static>> {
+fn wrap_run_line_to_width(line: &RunLine, width: u16) -> Vec<RunLine> {
     let width = width.max(1) as usize;
     let mut result = Vec::new();
-    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut current: RunLine = Vec::new();
     let mut current_width = 0usize;
 
-    for span in &line.spans {
-        let mut remaining: &str = span.content.as_ref();
+    for run in line {
+        let mut remaining: &str = run.text.as_str();
         while !remaining.is_empty() {
             if current_width >= width {
-                result.push(Line::from(std::mem::take(&mut current)));
+                result.push(std::mem::take(&mut current));
                 current_width = 0;
             }
             let (chunk, rest) = panel::split_at_width(remaining, (width - current_width) as u16);
@@ -670,16 +811,24 @@ fn wrap_line_to_width(line: &Line<'static>, width: u16) -> Vec<Line<'static>> {
                 break;
             }
             current_width += UnicodeWidthStr::width(chunk);
-            current.push(Span::styled(chunk.to_owned(), span.style));
+            current.push(SpanRun {
+                text: chunk.to_owned(),
+                style: run.style,
+                href: run.href.clone(),
+            });
             remaining = rest;
         }
     }
     if !current.is_empty() || result.is_empty() {
-        result.push(Line::from(current));
+        result.push(current);
     }
     result
 }
 
+/// Maps a rich-render style to its ratatui equivalent (ADR 0014 §1, ADR 0018
+/// §6): an href-carrying run additionally takes the theme link color (in
+/// addition to its own modifiers) so the `[url]` token renders visibly
+/// link-styled; anchor text (no href) stays body-colored.
 fn rich_style_to_ratatui(style: &RichStyle) -> Style {
     let mut result = Style::default();
     if style.bold {
@@ -697,35 +846,41 @@ fn rich_style_to_ratatui(style: &RichStyle) -> Style {
     if style.code {
         result = result.add_modifier(Modifier::DIM);
     }
+    if style.link.is_some() {
+        result = result.patch(theme::link());
+    }
     result
 }
 
-/// Maps the description's rich lines to ratatui lines, reversing the style of
-/// the inline link whose render-order occurrence matches `focused_link`.
-fn description_lines_to_ratatui(
+/// Maps the description's rich lines to run-lines (style + href), reversing
+/// the style of the inline link whose render-order occurrence matches
+/// `focused_link`.
+fn description_lines_to_runs(
     description: &[RichLine],
     focused_link: Option<usize>,
-) -> Vec<Line<'static>> {
+) -> Vec<RunLine> {
     let mut link_occurrence = 0usize;
     description
         .iter()
-        .map(|line| rich_line_to_ratatui(line, focused_link, &mut link_occurrence))
+        .map(|line| rich_line_to_runs(line, focused_link, &mut link_occurrence))
         .collect()
 }
 
-fn rich_line_to_ratatui(
+fn rich_line_to_runs(
     line: &RichLine,
     focused_link: Option<usize>,
     link_occurrence: &mut usize,
-) -> Line<'static> {
-    Line::from(
-        line.iter()
-            .map(|span| {
-                let style = span_style(span, focused_link, link_occurrence);
-                ratatui::text::Span::styled(span.text.clone(), style)
-            })
-            .collect::<Vec<_>>(),
-    )
+) -> RunLine {
+    line.iter()
+        .map(|span| {
+            let style = span_style(span, focused_link, link_occurrence);
+            SpanRun {
+                text: span.text.clone(),
+                style,
+                href: span.style.link.clone(),
+            }
+        })
+        .collect()
 }
 
 fn span_style(span: &RichSpan, focused_link: Option<usize>, link_occurrence: &mut usize) -> Style {
@@ -740,4 +895,55 @@ fn span_style(span: &RichSpan, focused_link: Option<usize>, link_occurrence: &mu
     } else {
         style
     }
+}
+
+/// Resolves a modifier-click at absolute terminal `(x, y)` within the Detail
+/// screen's full frame `area` to the href of the span under the cursor (ADR
+/// 0018 §5, BDR 0010 S5/S7/S8): recomputes `compose_detail`'s own
+/// wrap/scroll/panel-chrome pipeline — the exact one `render_detail_panels`
+/// draws — so the hit test can never drift from what is on screen. `None`
+/// when there is no loaded issue, the coordinate falls outside the content
+/// viewport, lands on chrome (borders/padding/blank rows), or the span under
+/// the cursor carries no href.
+pub(super) fn detail_link_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<String> {
+    let issue = model.detail.as_ref()?;
+    let has_status_row = model.status.is_some();
+    let content_area = detail_layout_chunks(area, has_status_row)[1];
+
+    let inner_width = content_area.width.saturating_sub(DETAIL_FRAME_BORDER_COLS);
+    let compose = compose_detail(issue, model.detail_focused_link, inner_width);
+
+    let viewport_height = content_area.height.saturating_sub(DETAIL_FRAME_BORDER_ROWS);
+    let total_lines = compose.lines.len() as u16;
+    let offset = clamp_scroll_offset(model.detail_scroll, total_lines, viewport_height);
+
+    let content_top = content_area.y + 1;
+    let content_left = content_area.x + 1;
+    if y < content_top || x < content_left {
+        return None;
+    }
+    let row_in_viewport = y - content_top;
+    if row_in_viewport >= viewport_height {
+        return None;
+    }
+
+    let row_index = (offset + row_in_viewport) as usize;
+    let col = x - content_left;
+    let row = compose.link_rows.get(row_index)?;
+    cell_at_column(row, col)
+}
+
+/// Walks a composed row's href-carrying cells by display width
+/// (unicode-width, consistent with `panel.rs`) to find the cell under
+/// column `col`. `None` when `col` falls past the row's content or lands on
+/// a cell carrying no href.
+fn cell_at_column(row: &[LinkCell], col: u16) -> Option<String> {
+    let mut used = 0u16;
+    for cell in row {
+        if col < used + cell.width {
+            return cell.href.clone();
+        }
+        used += cell.width;
+    }
+    None
 }

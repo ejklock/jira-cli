@@ -178,6 +178,22 @@ fn style_at_text(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<ratatui:
     None
 }
 
+/// Finds `needle`'s first rendered cell's `(column, row)` — used by the ADR
+/// 0018 modifier-click mapper tests to click exactly on a rendered `[url]`
+/// token without hardcoding panel geometry.
+fn find_text_position(buf: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16, u16)> {
+    let (width, height) = (buf.area.width as usize, buf.area.height as usize);
+    for row in 0..height {
+        let row_text: String = (0..width)
+            .map(|col| buf[(col as u16, row as u16)].symbol().to_owned())
+            .collect();
+        if let Some(start) = row_text.find(needle) {
+            return Some((start as u16, row as u16));
+        }
+    }
+    None
+}
+
 fn make_issue_with_styled_description(key: &str) -> crate::models::Issue {
     crate::models::Issue {
         description: Some(doc(vec![paragraph(vec![
@@ -881,6 +897,30 @@ fn update_card_clicked_on_detail_screen_is_noop() {
     let (next, cmds) = update(model, Msg::CardClicked(0));
 
     assert_eq!(next.screen, Screen::Detail, "screen stays Detail");
+    assert!(cmds.is_empty());
+}
+
+// ---- ADR 0018 §4 / BDR 0010 S5 — LinkClicked emits Cmd::OpenUrl on Detail ----
+
+#[test]
+fn update_link_clicked_on_detail_screen_emits_exactly_one_open_url_and_changes_no_state() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_scroll = 3;
+    let (next, cmds) = update(model, Msg::LinkClicked("https://example.com/y".to_owned()));
+
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0], Cmd::OpenUrl("https://example.com/y".to_owned()));
+    assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+    assert_eq!(next.detail_scroll, 3, "scroll must be unchanged");
+}
+
+#[test]
+fn update_link_clicked_on_list_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+    let (next, cmds) = update(model, Msg::LinkClicked("https://example.com".to_owned()));
+
+    assert_eq!(next.screen, Screen::List);
     assert!(cmds.is_empty());
 }
 
@@ -2480,7 +2520,23 @@ fn map_mouse_to_msg_left_down_is_click_intent_with_coordinates() {
     let mouse = mouse_click_at(12, 7);
     assert!(matches!(
         map_mouse_to_msg(mouse, false),
-        Some(MouseIntent::Click { x: 12, y: 7 })
+        Some(MouseIntent::Click { x: 12, y: 7, .. })
+    ));
+}
+
+// ---- ADR 0018 §4 / BDR 0010 S5-S8 — the click intent carries modifiers ----
+
+#[test]
+fn map_mouse_to_msg_left_down_carries_the_events_modifiers() {
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 12,
+        row: 7,
+        modifiers: KeyModifiers::CONTROL,
+    };
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Click { x: 12, y: 7, modifiers }) if modifiers == KeyModifiers::CONTROL
     ));
 }
 
@@ -2558,6 +2614,145 @@ fn resolve_mouse_msg_click_on_detail_screen_is_noop() {
     let mouse = mouse_click_at(5, 1);
 
     assert!(resolve_mouse_msg(mouse, false, &model, area).is_none());
+}
+
+// ---- ADR 0018 §4 / BDR 0010 S5-S8 — modifier-gated Detail link activation ----
+
+fn ctrl_click_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::CONTROL,
+    }
+}
+
+fn super_click_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::SUPER,
+    }
+}
+
+fn make_detail_model_with_link() -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_styled_description("PROJ-1"));
+    model.detail_links = vec!["https://example.com".to_owned()];
+    model.detail_focused_link = Some(0);
+    model
+}
+
+#[test]
+fn resolve_mouse_msg_ctrl_click_on_detail_link_token_resolves_link_clicked() {
+    let model = make_detail_model_with_link();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) =
+        find_text_position(&buf, "[https://example.com]").expect("the [url] token must render");
+
+    assert!(matches!(
+        resolve_mouse_msg(ctrl_click_at(col, row), false, &model, area),
+        Some(Msg::LinkClicked(ref href)) if href == "https://example.com"
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_super_click_on_detail_link_token_resolves_link_clicked() {
+    let model = make_detail_model_with_link();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) =
+        find_text_position(&buf, "[https://example.com]").expect("the [url] token must render");
+
+    assert!(matches!(
+        resolve_mouse_msg(super_click_at(col, row), false, &model, area),
+        Some(Msg::LinkClicked(ref href)) if href == "https://example.com"
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_plain_click_on_detail_link_token_is_still_a_noop() {
+    let model = make_detail_model_with_link();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) =
+        find_text_position(&buf, "[https://example.com]").expect("the [url] token must render");
+
+    assert!(resolve_mouse_msg(mouse_click_at(col, row), false, &model, area).is_none());
+}
+
+#[test]
+fn resolve_mouse_msg_ctrl_click_on_list_screen_behaves_like_a_plain_click() {
+    let model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert!(matches!(
+        resolve_mouse_msg(ctrl_click_at(5, 1), false, &model, area),
+        Some(Msg::CardClicked(0))
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_super_click_on_list_screen_behaves_like_a_plain_click() {
+    let model = make_list_model(&["PROJ-1", "PROJ-2"]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert!(matches!(
+        resolve_mouse_msg(super_click_at(5, 1), false, &model, area),
+        Some(Msg::CardClicked(0))
+    ));
+}
+
+// ---- BDR 0009 S6 / BDR 0010 S8 — the no-exit property extends to modifier-click variants ----
+
+#[test]
+fn modifier_click_variants_never_yield_quit_on_either_screen() {
+    let area = Rect::new(0, 0, 40, 20);
+    let modifiers_variants = [
+        KeyModifiers::NONE,
+        KeyModifiers::CONTROL,
+        KeyModifiers::SUPER,
+        KeyModifiers::CONTROL | KeyModifiers::SUPER,
+    ];
+
+    for modifiers in modifiers_variants {
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers,
+        };
+
+        let list_model = make_list_model(&["PROJ-1"]);
+        if let Some(msg) = resolve_mouse_msg(mouse, false, &list_model, area) {
+            assert!(
+                !matches!(msg, Msg::Quit),
+                "resolve_mouse_msg must never yield Quit on List (modifiers={modifiers:?})"
+            );
+            let (_, cmds) = update(list_model, msg);
+            assert!(
+                !cmds.contains(&Cmd::Quit),
+                "update must never emit Cmd::Quit for a List modifier-click (modifiers={modifiers:?})"
+            );
+        }
+
+        let mut detail_model = make_list_model(&["PROJ-1"]);
+        detail_model.screen = Screen::Detail;
+        if let Some(msg) = resolve_mouse_msg(mouse, false, &detail_model, area) {
+            assert!(
+                !matches!(msg, Msg::Quit),
+                "resolve_mouse_msg must never yield Quit on Detail (modifiers={modifiers:?})"
+            );
+            let (_, cmds) = update(detail_model, msg);
+            assert!(
+                !cmds.contains(&Cmd::Quit),
+                "update must never emit Cmd::Quit for a Detail modifier-click (modifiers={modifiers:?})"
+            );
+        }
+    }
 }
 
 // ---- issue 0033 D4 / BDR 0007 S7: footer_mode pure derivation ----

@@ -134,6 +134,10 @@ pub enum Msg {
     /// shell/view, keeping the domain core free of crossterm/ratatui (ADR
     /// 0007).
     CardClicked(usize),
+    /// A Ctrl/Super-click resolved to an inline body link's href on the
+    /// Detail screen (ADR 0018 §4, BDR 0010 S5): carries a plain `String` —
+    /// the mouse-event/geometry types stay in shell/view (ADR 0007).
+    LinkClicked(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -185,6 +189,7 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::RevalidationLoaded(rows, token) => update_revalidation_loaded(model, rows, token),
         Msg::RevalidationFailed(msg) => update_revalidation_failed(model, msg),
         Msg::CardClicked(index) => update_card_clicked(model, index),
+        Msg::LinkClicked(href) => update_link_clicked(model, href),
     }
 }
 
@@ -301,6 +306,18 @@ fn update_select_focused_link(model: Model) -> (Model, Vec<Cmd>) {
         }
         None => (model, vec![]),
     }
+}
+
+/// A Ctrl/Super-click resolved to a link's href (ADR 0018 §4, BDR 0010 S5):
+/// emits `Cmd::OpenUrl` with no state change on the Detail screen, mirroring
+/// `update_select_focused_link`'s Cmd contract; a no-op on any other screen
+/// (`resolve_click` only ever resolves this on Detail, but this stays a pure
+/// guard rather than trusting the caller).
+fn update_link_clicked(model: Model, href: String) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail {
+        return (model, vec![]);
+    }
+    (model, vec![Cmd::OpenUrl(href)])
 }
 
 fn update_back(model: Model) -> (Model, Vec<Cmd>) {
