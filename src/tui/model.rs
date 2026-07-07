@@ -87,6 +87,23 @@ pub struct Model {
     /// Submitting a search clears it, so a late revalidation result never
     /// clobbers fresher search results (S4).
     pub revalidating: bool,
+    /// The active text selection in the detail body (ADR 0019 §1), in LOGICAL
+    /// coordinates only — `(logical_line, char)` pairs resolved through
+    /// `compose_detail`'s extended metadata, never visual rows/columns, so
+    /// scrolling never moves the selection (BDR 0011 S8). Cleared on leaving
+    /// the detail screen.
+    pub selection: Option<Selection>,
+}
+
+/// An active detail-body text selection (ADR 0019 §1): `anchor` is where the
+/// unmodified left DOWN landed, `cursor` tracks the drag; `dragged`
+/// distinguishes a real drag (release copies) from a plain click (release
+/// clears, copies nothing — BDR 0011 S2/S3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Selection {
+    pub anchor: (usize, usize),
+    pub cursor: (usize, usize),
+    pub dragged: bool,
 }
 
 /// Builds the identity header text: "{email} · {instance}" from the first
@@ -138,6 +155,18 @@ pub enum Msg {
     /// Detail screen (ADR 0018 §4, BDR 0010 S5): carries a plain `String` —
     /// the mouse-event/geometry types stay in shell/view (ADR 0007).
     LinkClicked(String),
+    /// Unmodified left DOWN on the Detail body anchors a selection,
+    /// replacing any previous one (ADR 0019 §3, BDR 0011 S1): carries a
+    /// plain logical `(line, char)` — geometry stays in shell/view (ADR 0007).
+    SelStart((usize, usize)),
+    /// Left DRAG extends the active selection's cursor (BDR 0011 S1); a
+    /// no-op with no active selection.
+    SelDrag((usize, usize)),
+    /// Left RELEASE on the Detail body (BDR 0011 S2/S3): `Some(text)` after a
+    /// drag copies the text (existing `Cmd::CopyToClipboard` + "Copied ✓"
+    /// status) and keeps the highlight; `None` (a plain click) clears the
+    /// selection and copies nothing.
+    SelEnd(Option<String>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -190,6 +219,9 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::RevalidationFailed(msg) => update_revalidation_failed(model, msg),
         Msg::CardClicked(index) => update_card_clicked(model, index),
         Msg::LinkClicked(href) => update_link_clicked(model, href),
+        Msg::SelStart(pos) => update_sel_start(model, pos),
+        Msg::SelDrag(pos) => update_sel_drag(model, pos),
+        Msg::SelEnd(text) => update_sel_end(model, text),
     }
 }
 
@@ -326,9 +358,76 @@ fn update_back(model: Model) -> (Model, Vec<Cmd>) {
         detail: None,
         detail_links: vec![],
         detail_focused_link: None,
+        selection: None,
         ..model
     };
     (next, vec![])
+}
+
+/// Unmodified left DOWN anchors a fresh selection on the Detail screen,
+/// replacing any previous one (BDR 0011 S1); a no-op on other screens.
+fn update_sel_start(model: Model, pos: (usize, usize)) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail {
+        return (model, vec![]);
+    }
+    let next = Model {
+        selection: Some(Selection {
+            anchor: pos,
+            cursor: pos,
+            dragged: false,
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// A drag extends the active selection's cursor and marks it dragged (BDR
+/// 0011 S1); a no-op with no active selection or off the Detail screen.
+fn update_sel_drag(model: Model, pos: (usize, usize)) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail {
+        return (model, vec![]);
+    }
+    let Some(selection) = model.selection.clone() else {
+        return (model, vec![]);
+    };
+    let next = Model {
+        selection: Some(Selection {
+            cursor: pos,
+            dragged: true,
+            ..selection
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// Release after a drag copies the selected text and shows the existing
+/// "Copied" status, keeping the highlight (BDR 0011 S2); release without a
+/// drag (`None`) clears the selection with no `Cmd` and no navigation (S3); a
+/// no-op off the Detail screen.
+fn update_sel_end(model: Model, text: Option<String>) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail {
+        return (model, vec![]);
+    }
+    match text {
+        Some(text) => {
+            let next = Model {
+                status: Some(StatusMsg {
+                    text: t("Copied ✓"),
+                    kind: StatusKind::Info,
+                }),
+                ..model
+            };
+            (next, vec![Cmd::CopyToClipboard(text)])
+        }
+        None => {
+            let next = Model {
+                selection: None,
+                ..model
+            };
+            (next, vec![])
+        }
+    }
 }
 
 fn update_detail_loaded(model: Model, issue: Box<Issue>) -> (Model, Vec<Cmd>) {

@@ -1,6 +1,6 @@
 use super::*;
 
-use super::model::{entry_cmds, footer_mode, FooterMode, StatusKind, StatusMsg};
+use super::model::{entry_cmds, footer_mode, FooterMode, Selection, StatusKind, StatusMsg};
 use super::shell::{
     map_key_in_normal_mode, map_key_in_search_mode, map_mouse_to_msg, read_snapshot,
     resolve_mouse_msg, MouseIntent,
@@ -101,6 +101,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         identities: vec![],
         status: None,
         revalidating: false,
+        selection: None,
     }
 }
 
@@ -2553,12 +2554,12 @@ fn map_mouse_to_msg_search_active_swallows_click() {
 }
 
 #[test]
-fn map_mouse_to_msg_ignores_drag_and_non_left_buttons() {
+fn map_mouse_to_msg_ignores_non_left_button_and_moved() {
     for kind in [
-        MouseEventKind::Drag(MouseButton::Left),
         MouseEventKind::Down(MouseButton::Right),
         MouseEventKind::Down(MouseButton::Middle),
-        MouseEventKind::Up(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Right),
+        MouseEventKind::Up(MouseButton::Right),
         MouseEventKind::Moved,
     ] {
         assert!(
@@ -2566,6 +2567,56 @@ fn map_mouse_to_msg_ignores_drag_and_non_left_buttons() {
             "{kind:?} must not map to any intent"
         );
     }
+}
+
+// ---- ADR 0019 §3 / BDR 0011 S1-S4 — Drag/Release mouse mapping ----
+
+#[test]
+fn map_mouse_to_msg_left_drag_is_drag_intent_with_coordinates() {
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 9,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Drag { x: 9, y: 4, .. })
+    ));
+}
+
+#[test]
+fn map_mouse_to_msg_left_up_is_release_intent() {
+    let mouse = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 9,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(matches!(
+        map_mouse_to_msg(mouse, false),
+        Some(MouseIntent::Release {
+            modifiers: KeyModifiers::NONE
+        })
+    ));
+}
+
+#[test]
+fn map_mouse_to_msg_search_active_swallows_drag_and_release() {
+    let drag = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    let up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(map_mouse_to_msg(drag, true).is_none());
+    assert!(map_mouse_to_msg(up, true).is_none());
 }
 
 // ---- BDR 0009 S6 — no mouse event ever exits the app (property/invariant) ----
@@ -2674,14 +2725,20 @@ fn resolve_mouse_msg_super_click_on_detail_link_token_resolves_link_clicked() {
 }
 
 #[test]
-fn resolve_mouse_msg_plain_click_on_detail_link_token_is_still_a_noop() {
+fn resolve_mouse_msg_plain_click_on_detail_link_token_never_activates_the_link() {
     let model = make_detail_model_with_link();
     let area = Rect::new(0, 0, 60, 20);
     let buf = render_to_buffer(&model, 60, 20);
     let (col, row) =
         find_text_position(&buf, "[https://example.com]").expect("the [url] token must render");
 
-    assert!(resolve_mouse_msg(mouse_click_at(col, row), false, &model, area).is_none());
+    // ADR 0019 §3 (BDR 0011 S1): a plain click on the detail body now anchors
+    // a selection rather than being a pure no-op — it must still never
+    // resolve to link activation (that stays modifier-gated, BDR 0010 S5).
+    assert!(!matches!(
+        resolve_mouse_msg(mouse_click_at(col, row), false, &model, area),
+        Some(Msg::LinkClicked(_))
+    ));
 }
 
 #[test]
@@ -3059,4 +3116,337 @@ fn update_load_failed_with_reauth_message_pt_br_translates_the_guidance() {
     );
 
     set_language("en");
+}
+
+// ---- b3-app-managed-selection / ADR 0019 / BDR 0011 S1-S4 — pure Selection
+// state machine (SelStart/SelDrag/SelEnd) ----
+
+fn make_detail_model_for_selection() -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-1"));
+    model
+}
+
+#[test]
+fn update_sel_start_anchors_selection_replacing_any_previous() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (9, 9),
+        cursor: (9, 9),
+        dragged: true,
+    });
+
+    let (next, cmds) = update(model, Msg::SelStart((1, 2)));
+
+    let selection = next.selection.expect("SelStart must set a selection");
+    assert_eq!(selection.anchor, (1, 2));
+    assert_eq!(selection.cursor, (1, 2));
+    assert!(!selection.dragged, "a fresh SelStart must not be dragged");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_sel_start_on_list_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::SelStart((0, 0)));
+
+    assert!(next.selection.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_sel_drag_extends_cursor_and_marks_dragged_keeping_anchor() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 0),
+        dragged: false,
+    });
+
+    let (next, cmds) = update(model, Msg::SelDrag((2, 3)));
+
+    let selection = next.selection.expect("selection must remain active");
+    assert_eq!(selection.anchor, (0, 0), "anchor must not move on drag");
+    assert_eq!(selection.cursor, (2, 3));
+    assert!(selection.dragged);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_sel_drag_with_no_active_selection_is_noop() {
+    let model = make_detail_model_for_selection();
+    assert!(model.selection.is_none());
+
+    let (next, cmds) = update(model, Msg::SelDrag((2, 3)));
+
+    assert!(next.selection.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_sel_drag_on_list_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::SelDrag((2, 3)));
+
+    assert!(next.selection.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_sel_end_some_emits_exactly_one_copy_to_clipboard_sets_copied_status_and_keeps_selection()
+{
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 5),
+        dragged: true,
+    });
+
+    let (next, cmds) = update(model, Msg::SelEnd(Some("hello".to_owned())));
+
+    assert_eq!(cmds, vec![Cmd::CopyToClipboard("hello".to_owned())]);
+    assert_eq!(
+        next.status,
+        Some(StatusMsg {
+            text: "Copied ✓".to_owned(),
+            kind: StatusKind::Info,
+        }),
+        "SelEnd(Some) must reuse the existing 'Copied' status contract"
+    );
+    let selection = next
+        .selection
+        .expect("SelEnd(Some) must keep the highlight visible");
+    assert!(selection.dragged);
+}
+
+#[test]
+fn update_sel_end_none_clears_selection_with_no_cmd_and_no_status() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 0),
+        dragged: false,
+    });
+
+    let (next, cmds) = update(model, Msg::SelEnd(None));
+
+    assert!(
+        next.selection.is_none(),
+        "a plain click must clear the selection"
+    );
+    assert!(cmds.is_empty(), "a plain click must copy nothing");
+    assert!(
+        next.status.is_none(),
+        "a plain click must never set a status"
+    );
+    assert_eq!(
+        next.screen,
+        Screen::Detail,
+        "a plain click must never navigate"
+    );
+}
+
+#[test]
+fn update_sel_end_on_list_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::SelEnd(Some("x".to_owned())));
+
+    assert!(next.selection.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_back_clears_an_active_selection() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 3),
+        dragged: true,
+    });
+
+    let (next, _) = update(model, Msg::Back);
+
+    assert!(
+        next.selection.is_none(),
+        "Back must clear a stale selection so it never survives a screen change"
+    );
+}
+
+// ---- ADR 0019 §3-4 / BDR 0011 S1-S4 — Drag/Release mouse resolution ----
+
+fn drag_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+fn release_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn resolve_mouse_msg_plain_down_on_detail_body_anchors_selection() {
+    let model = make_detail_model_for_selection();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) = find_text_position(&buf, "Flattened description here.")
+        .expect("description text must render");
+
+    assert!(matches!(
+        resolve_mouse_msg(mouse_click_at(col, row), false, &model, area),
+        Some(Msg::SelStart(_))
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_drag_on_detail_body_resolves_sel_drag() {
+    let model = make_detail_model_for_selection();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) = find_text_position(&buf, "Flattened description here.")
+        .expect("description text must render");
+
+    assert!(matches!(
+        resolve_mouse_msg(drag_at(col, row), false, &model, area),
+        Some(Msg::SelDrag(_))
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_drag_on_list_screen_is_unmapped() {
+    let model = make_list_model(&["PROJ-1"]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert!(resolve_mouse_msg(drag_at(5, 1), false, &model, area).is_none());
+}
+
+#[test]
+fn resolve_mouse_msg_release_on_list_screen_is_unmapped() {
+    let model = make_list_model(&["PROJ-1"]);
+    let area = Rect::new(0, 0, 40, 20);
+
+    assert!(resolve_mouse_msg(release_at(5, 1), false, &model, area).is_none());
+}
+
+#[test]
+fn resolve_mouse_msg_release_after_a_drag_extracts_text() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 3),
+        dragged: true,
+    });
+    let area = Rect::new(0, 0, 60, 20);
+
+    let msg = resolve_mouse_msg(release_at(0, 0), false, &model, area);
+    assert!(
+        matches!(msg, Some(Msg::SelEnd(Some(_)))),
+        "a release after a drag must resolve to SelEnd(Some(text))"
+    );
+}
+
+#[test]
+fn resolve_mouse_msg_release_without_a_drag_resolves_sel_end_none() {
+    let mut model = make_detail_model_for_selection();
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 0),
+        dragged: false,
+    });
+    let area = Rect::new(0, 0, 60, 20);
+
+    assert!(matches!(
+        resolve_mouse_msg(release_at(0, 0), false, &model, area),
+        Some(Msg::SelEnd(None))
+    ));
+}
+
+#[test]
+fn resolve_mouse_msg_ctrl_down_on_detail_never_starts_selection_still_resolves_link() {
+    let model = make_detail_model_with_link();
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (col, row) =
+        find_text_position(&buf, "[https://example.com]").expect("the [url] token must render");
+
+    let msg = resolve_mouse_msg(ctrl_click_at(col, row), false, &model, area);
+    assert!(
+        !matches!(msg, Some(Msg::SelStart(_))),
+        "a Ctrl-held down must never anchor a selection (BDR 0011 S4)"
+    );
+    assert!(matches!(msg, Some(Msg::LinkClicked(ref href)) if href == "https://example.com"));
+}
+
+#[test]
+fn resolve_mouse_msg_modifier_drag_and_release_on_detail_are_noops() {
+    let model = make_detail_model_for_selection();
+    let area = Rect::new(0, 0, 60, 20);
+
+    let ctrl_drag = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::CONTROL,
+    };
+    let ctrl_release = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::CONTROL,
+    };
+
+    assert!(resolve_mouse_msg(ctrl_drag, false, &model, area).is_none());
+    assert!(resolve_mouse_msg(ctrl_release, false, &model, area).is_none());
+}
+
+// ---- BDR 0009 S6 / BDR 0011 — the no-exit property extends to Drag/Release ----
+
+#[test]
+fn drag_and_release_variants_never_yield_quit_on_either_screen() {
+    let area = Rect::new(0, 0, 60, 20);
+    let modifiers_variants = [
+        KeyModifiers::NONE,
+        KeyModifiers::CONTROL,
+        KeyModifiers::SUPER,
+    ];
+
+    for modifiers in modifiers_variants {
+        for kind in [
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let mouse = MouseEvent {
+                kind,
+                column: 5,
+                row: 1,
+                modifiers,
+            };
+
+            let list_model = make_list_model(&["PROJ-1"]);
+            if let Some(msg) = resolve_mouse_msg(mouse, false, &list_model, area) {
+                assert!(!matches!(msg, Msg::Quit));
+                let (_, cmds) = update(list_model, msg);
+                assert!(!cmds.contains(&Cmd::Quit));
+            }
+
+            let detail_model = make_detail_model_for_selection();
+            if let Some(msg) = resolve_mouse_msg(mouse, false, &detail_model, area) {
+                assert!(!matches!(msg, Msg::Quit));
+                let (_, cmds) = update(detail_model, msg);
+                assert!(!cmds.contains(&Cmd::Quit));
+            }
+        }
+    }
 }

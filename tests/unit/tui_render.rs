@@ -1,4 +1,4 @@
-use super::model::{header_line, FooterMode, Identity, StatusKind, StatusMsg};
+use super::model::{header_line, FooterMode, Identity, Selection, StatusKind, StatusMsg};
 use super::panel;
 use super::theme;
 use super::view;
@@ -66,6 +66,7 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         identities: vec![],
         status: None,
         revalidating: false,
+        selection: None,
     }
 }
 
@@ -120,6 +121,7 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         identities,
         status: None,
         revalidating: false,
+        selection: None,
     }
 }
 
@@ -1775,6 +1777,404 @@ fn view_detail_description_table_renders_one_line_per_row_with_bold_header() {
     assert!(
         !data_style.add_modifier.contains(Modifier::BOLD),
         "data row cells must not render bold: {data_style:?}"
+    );
+
+    set_language("en");
+}
+
+// ---- b3-app-managed-selection / ADR 0019 §2 / BDR 0011 S5-S10 — detail_pos_at
+// / detail_pos_at_clamped / selection_text geometry ----
+
+#[test]
+fn detail_pos_at_on_chrome_border_or_title_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_detail_model(vec![]);
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+
+    let (details_col, details_row) =
+        find_text_position(&buf, "Details").expect("the Details panel border/title must render");
+    assert_eq!(
+        view::detail_pos_at(&model, area, details_col, details_row),
+        None,
+        "a click on a panel border/title must resolve to no logical position (BDR 0011 S5)"
+    );
+    assert_eq!(
+        view::detail_pos_at(&model, area, 0, 0),
+        None,
+        "a click on the header row (outside the content viewport) must resolve to None"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn selection_text_over_a_word_extracts_exactly_that_word_no_chrome() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    // A description word unrelated to the issue summary/Title meta row (both
+    // of which also render "A neutral issue ..." text), so the FIRST rendered
+    // occurrence is unambiguously the Description panel's own body.
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::plain_paragraph("banana apple cherry")),
+        ..crate::test_support::issue("PROJ-95")
+    });
+    let area = Rect::new(0, 0, 100, 20);
+    let buf = render_to_buffer(&model, 100, 20);
+
+    // Select exactly the middle word "apple" by anchoring on its first column
+    // and ending at the column of the space right after it.
+    let (word_col, word_row) =
+        find_text_position(&buf, "apple").expect("the description body must render");
+    let (space_col, space_row) =
+        find_text_position(&buf, " cherry").expect("the following word must render");
+    assert_eq!(
+        word_row, space_row,
+        "both positions must be on the same visual row"
+    );
+
+    let start = view::detail_pos_at(&model, area, word_col, word_row)
+        .expect("the start of the word must resolve to a logical position");
+    let end = view::detail_pos_at(&model, area, space_col, space_row)
+        .expect("the column right after the word must resolve to a logical position");
+    assert_eq!(
+        start.0, end.0,
+        "both positions must belong to the same logical line"
+    );
+
+    model.selection = Some(Selection {
+        anchor: start,
+        cursor: end,
+        dragged: true,
+    });
+
+    assert_eq!(
+        view::selection_text(&model),
+        Some("apple".to_owned()),
+        "the extracted text must be exactly the word, with no chrome (BDR 0011 S5)"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_pos_at_both_columns_of_a_double_width_glyph_map_to_the_same_char_index() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::plain_paragraph("Z你好Q")),
+        ..crate::test_support::issue("PROJ-90")
+    });
+
+    let area = Rect::new(0, 0, 100, 20);
+    let buf = render_to_buffer(&model, 100, 20);
+    // A wide glyph's continuation cell renders a plain space in the buffer
+    // (e.g. "Z你 好 Q"), so the needle can only span up to the first wide
+    // glyph — "Z你" is still contiguous since Z (width 1) is immediately
+    // followed by 你's own cell.
+    let (col_z, row) = find_text_position(&buf, "Z你").expect("the description body must render");
+
+    let pos_z = view::detail_pos_at(&model, area, col_z, row).expect("Z's column must resolve");
+    let pos_ni_col1 =
+        view::detail_pos_at(&model, area, col_z + 1, row).expect("你's first column must resolve");
+    let pos_ni_col2 = view::detail_pos_at(&model, area, col_z + 2, row)
+        .expect("你's second (continuation) column must resolve");
+    let pos_hao =
+        view::detail_pos_at(&model, area, col_z + 3, row).expect("好's first column must resolve");
+    let pos_q = view::detail_pos_at(&model, area, col_z + 5, row).expect("Q's column must resolve");
+
+    assert_eq!(
+        pos_z.0, pos_ni_col1.0,
+        "all positions must share the same logical line"
+    );
+    assert_eq!(
+        pos_z.1 + 1,
+        pos_ni_col1.1,
+        "Z must be exactly one char before 你"
+    );
+    assert_eq!(
+        pos_ni_col1, pos_ni_col2,
+        "both display columns of a double-width glyph must map to the SAME char index, \
+         never treating a column as a char index (BDR 0011 S6)"
+    );
+    assert_eq!(
+        pos_ni_col1.1 + 1,
+        pos_hao.1,
+        "好 must be the very next char after 你, neither skipped nor duplicated"
+    );
+    assert_eq!(
+        pos_hao.1 + 1,
+        pos_q.1,
+        "Q must be the very next char after 好"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn selection_text_across_a_wrap_seam_is_contiguous_with_no_loss_or_duplication() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    // Wide enough to guarantee the leading run alone spans more than one
+    // visual row, so the trailing run's first char necessarily lands on a
+    // LATER row than the leading run's first char (a real wrap seam falls
+    // somewhere inside the leading run itself).
+    let leading = "X".repeat(60);
+    let trailing = "Y".repeat(60);
+    let body = format!("{leading}{trailing}");
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::plain_paragraph(&body)),
+        ..crate::test_support::issue("PROJ-92")
+    });
+
+    let (width, height) = (30, 40);
+    let area = Rect::new(0, 0, width, height);
+    let buf = render_to_buffer(&model, width, height);
+
+    let (x_col, x_row) =
+        find_text_position(&buf, "X").expect("the leading run's first row must render");
+    let (y_col, y_row) =
+        find_text_position(&buf, "Y").expect("the trailing run must render (possibly wrapped)");
+    assert!(
+        y_row > x_row,
+        "the single unbroken word must actually wrap across visual rows for this test to \
+         exercise S7 (a seam falling inside it); x_row={x_row}, y_row={y_row}"
+    );
+
+    let start = view::detail_pos_at(&model, area, x_col, x_row)
+        .expect("the leading run's start must resolve");
+    let end = view::detail_pos_at(&model, area, y_col, y_row)
+        .expect("the trailing run's start must resolve");
+
+    model.selection = Some(Selection {
+        anchor: start,
+        cursor: end,
+        dragged: true,
+    });
+
+    assert_eq!(
+        view::selection_text(&model),
+        Some(leading),
+        "a selection spanning a wrap seam (inside the single unbroken word) must yield the \
+         contiguous pre-wrap logical text, with nothing dropped or repeated at the seam \
+         (BDR 0011 S7)"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn selection_text_is_identical_regardless_of_the_current_scroll_offset() {
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_numbered_comments(
+        "PROJ-93",
+        30,
+        "LASTMARKER",
+    ));
+    model.selection = Some(Selection {
+        anchor: (0, 0),
+        cursor: (0, 5),
+        dragged: true,
+    });
+
+    model.detail_scroll = 0;
+    let unscrolled = view::selection_text(&model);
+
+    model.detail_scroll = 25;
+    let scrolled = view::selection_text(&model);
+
+    assert_eq!(
+        unscrolled, scrolled,
+        "scrolling must never move a selection stored in logical coordinates (BDR 0011 S8)"
+    );
+    assert!(unscrolled.is_some());
+
+    set_language("en");
+}
+
+#[test]
+fn detail_pos_at_clamped_row_above_content_clamps_to_the_first_content_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_detail_model(vec![]);
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (_, title_row) = find_text_position(&buf, "Title:").expect("the Title row must render");
+
+    let clamped = view::detail_pos_at_clamped(&model, area, 5, 0)
+        .expect("a row above the content must still clamp to a position (BDR 0011 S10)");
+    let direct = view::detail_pos_at_clamped(&model, area, 5, title_row)
+        .expect("the Title row itself must resolve");
+
+    assert_eq!(
+        clamped, direct,
+        "a coordinate above the content viewport must clamp down to the first content row"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_pos_at_clamped_row_below_content_clamps_to_the_last_content_row() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_detail_model(vec![]);
+    let area = Rect::new(0, 0, 60, 20);
+
+    let clamped_far_below = view::detail_pos_at_clamped(&model, area, 5, 9_999)
+        .expect("a row far below the content must still clamp to a position (BDR 0011 S10)");
+    let clamped_just_below_area = view::detail_pos_at_clamped(&model, area, 5, area.height - 1)
+        .expect("the footer row must still clamp to a position");
+
+    assert_eq!(
+        clamped_far_below, clamped_just_below_area,
+        "any row at or past the bottom of the viewport must clamp to the same last content row"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn detail_pos_at_clamped_column_past_line_end_clamps_to_the_full_line_length() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (_, title_row) = find_text_position(&buf, "Title:").expect("the Title row must render");
+
+    let (line, char_idx) = view::detail_pos_at_clamped(&model, area, 9_999, title_row)
+        .expect("a far-right column must still clamp to a position (BDR 0011 S10)");
+
+    model.selection = Some(Selection {
+        anchor: (line, 0),
+        cursor: (line, char_idx),
+        dragged: true,
+    });
+    let extracted = view::selection_text(&model)
+        .expect("the clamped end position must select the whole line's text");
+
+    assert_eq!(
+        extracted, "Title: A neutral issue summary",
+        "a column far past the line's end must clamp to the FULL line, never truncating \
+         or reading past it"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn selection_text_spanning_two_logical_lines_joins_with_a_newline() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::doc(vec![
+            crate::test_support::paragraph(vec![crate::test_support::text("Line one")]),
+            crate::test_support::paragraph(vec![crate::test_support::text("Line two")]),
+        ])),
+        ..crate::test_support::issue("PROJ-91")
+    });
+
+    let area = Rect::new(0, 0, 60, 20);
+    let buf = render_to_buffer(&model, 60, 20);
+    let (start_col, start_row) =
+        find_text_position(&buf, "Line one").expect("the first paragraph must render");
+    let (_, end_row) =
+        find_text_position(&buf, "Line two").expect("the second paragraph must render");
+
+    let (start_line, _) = view::detail_pos_at(&model, area, start_col, start_row)
+        .expect("the start of the first paragraph must resolve");
+    let (end_line, end_char) = view::detail_pos_at_clamped(&model, area, 9_999, end_row)
+        .expect("a far-right column on the second paragraph's row must clamp to its end");
+
+    model.selection = Some(Selection {
+        anchor: (start_line, 0),
+        cursor: (end_line, end_char),
+        dragged: true,
+    });
+
+    assert_eq!(
+        view::selection_text(&model),
+        Some("Line one\nLine two".to_owned()),
+        "a selection spanning two logical lines must join them with a newline"
+    );
+
+    set_language("en");
+}
+
+// ---- ADR 0019 §5 / BDR 0011 S1 — the REVERSED highlight over the exact
+// covered cells, patched onto (not replacing) the underlying line ----
+
+#[test]
+fn render_detail_panels_highlights_exactly_the_selected_chars_reversed() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        description: Some(crate::test_support::plain_paragraph("abcde")),
+        ..crate::test_support::issue("PROJ-94")
+    });
+
+    let area = Rect::new(0, 0, 100, 20);
+    let buf_before = render_to_buffer(&model, 100, 20);
+    let (col_a, row) =
+        find_text_position(&buf_before, "abcde").expect("the description body must render");
+
+    // Selection is a half-open [start, end) char range: anchoring on 'b' and
+    // ending at 'd' selects exactly "bc".
+    let start = view::detail_pos_at(&model, area, col_a + 1, row).expect("'b' must resolve");
+    let end = view::detail_pos_at(&model, area, col_a + 3, row).expect("'d' must resolve");
+
+    model.selection = Some(Selection {
+        anchor: start,
+        cursor: end,
+        dragged: true,
+    });
+    let buf_after = render_to_buffer(&model, 100, 20);
+
+    assert!(
+        !cell_style(&buf_after, col_a, row)
+            .add_modifier
+            .contains(Modifier::REVERSED),
+        "'a' (before the selection) must not be highlighted"
+    );
+    assert!(
+        cell_style(&buf_after, col_a + 1, row)
+            .add_modifier
+            .contains(Modifier::REVERSED),
+        "'b' must be highlighted"
+    );
+    assert!(
+        cell_style(&buf_after, col_a + 2, row)
+            .add_modifier
+            .contains(Modifier::REVERSED),
+        "'c' must be highlighted"
+    );
+    assert!(
+        !cell_style(&buf_after, col_a + 3, row)
+            .add_modifier
+            .contains(Modifier::REVERSED),
+        "'d' (past the selection's end) must not be highlighted"
+    );
+    assert!(
+        !cell_style(&buf_before, col_a + 1, row)
+            .add_modifier
+            .contains(Modifier::REVERSED),
+        "with no selection, 'b' must render with no REVERSED highlight"
     );
 
     set_language("en");

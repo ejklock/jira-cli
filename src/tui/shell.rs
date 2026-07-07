@@ -19,7 +19,9 @@ use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
 use super::model::{entry_cmds, update, Cmd, Identity, Model, Msg, Screen};
-use super::view::{detail_link_at, list_click_card, view};
+use super::view::{
+    detail_link_at, detail_pos_at, detail_pos_at_clamped, list_click_card, selection_text, view,
+};
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
 
@@ -154,6 +156,7 @@ async fn run_tui(
         next_page_token,
         detail_links: vec![],
         detail_focused_link: None,
+        selection: None,
         identities: vec![Identity {
             email: instance.email.clone(),
             instance: instance.name.clone(),
@@ -218,29 +221,38 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
 }
 
 /// The pure classification of a mouse event before area-dependent click
-/// resolution (ADR 0017 §2-3, ADR 0018 §4): navigation rides straight
-/// through as the existing `Msg`; a left-button-down candidate carries its
-/// terminal (column, row) and the event's modifier set — resolving it into a
-/// `Msg` needs the terminal area `view::list_click_card`/`view::detail_link_at`
-/// read, which this mapper does not have.
+/// resolution (ADR 0017 §2-3, ADR 0018 §4, ADR 0019 §3): navigation rides
+/// straight through as the existing `Msg`; a left-button down/drag/up
+/// candidate carries its terminal (column, row) and the event's modifier
+/// set — resolving it into a `Msg` needs a terminal-area `view` read, which
+/// this mapper does not have.
 pub(super) enum MouseIntent {
     Nav(Msg),
     Click {
         x: u16,
         y: u16,
         /// CONTROL/SUPER gates Detail-screen inline-link activation (ADR
-        /// 0018 §4, BDR 0010 S5-S8); the List screen click resolves the same
-        /// regardless of modifiers.
+        /// 0018 §4, BDR 0010 S5-S8) and, symmetrically, never starts a
+        /// selection (ADR 0019 §3, BDR 0011 S4); the List screen click
+        /// resolves the same regardless of modifiers.
+        modifiers: KeyModifiers,
+    },
+    Drag {
+        x: u16,
+        y: u16,
+        modifiers: KeyModifiers,
+    },
+    Release {
         modifiers: KeyModifiers,
     },
 }
 
-/// Maps a raw mouse event to a [`MouseIntent`] (BDR 0009 S1, S2, S7): search
-/// mode swallows every mouse event; wheel maps to the existing `Up`/`Down`
-/// navigation msgs (screen-awareness comes free from `update_up`/`update_down`);
-/// a left-button press is a click candidate carrying its coordinates and
-/// modifier set; drags, the other buttons, moves, and releases are not
-/// handled (`None`).
+/// Maps a raw mouse event to a [`MouseIntent`] (BDR 0009 S1, S2, S7, BDR 0011
+/// S1-S4): search mode swallows every mouse event; wheel maps to the
+/// existing `Up`/`Down` navigation msgs (screen-awareness comes free from
+/// `update_up`/`update_down`); a left-button down/drag/up is a candidate
+/// carrying its coordinates and modifier set; the other buttons and moves
+/// are not handled (`None`).
 pub(super) fn map_mouse_to_msg(mouse: MouseEvent, search_active: bool) -> Option<MouseIntent> {
     if search_active {
         return None;
@@ -253,13 +265,21 @@ pub(super) fn map_mouse_to_msg(mouse: MouseEvent, search_active: bool) -> Option
             y: mouse.row,
             modifiers: mouse.modifiers,
         }),
+        MouseEventKind::Drag(MouseButton::Left) => Some(MouseIntent::Drag {
+            x: mouse.column,
+            y: mouse.row,
+            modifiers: mouse.modifiers,
+        }),
+        MouseEventKind::Up(MouseButton::Left) => Some(MouseIntent::Release {
+            modifiers: mouse.modifiers,
+        }),
         _ => None,
     }
 }
 
-/// Resolves a mouse event into a `Msg` (ADR 0017 §2-4, ADR 0018 §4):
-/// navigation rides straight through; a click resolves through
-/// [`resolve_click`].
+/// Resolves a mouse event into a `Msg` (ADR 0017 §2-4, ADR 0018 §4, ADR 0019
+/// §3-4): navigation rides straight through; a click/drag/release resolves
+/// through [`resolve_click`]/[`resolve_drag`]/[`resolve_release`].
 pub(super) fn resolve_mouse_msg(
     mouse: MouseEvent,
     search_active: bool,
@@ -269,14 +289,17 @@ pub(super) fn resolve_mouse_msg(
     match map_mouse_to_msg(mouse, search_active)? {
         MouseIntent::Nav(msg) => Some(msg),
         MouseIntent::Click { x, y, modifiers } => resolve_click(model, area, x, y, modifiers),
+        MouseIntent::Drag { x, y, modifiers } => resolve_drag(model, area, x, y, modifiers),
+        MouseIntent::Release { modifiers } => resolve_release(model, modifiers),
     }
 }
 
-/// Resolves a click candidate by screen and modifier set (BDR 0010 S5-S8): on
-/// the List screen every click (plain or modifier-carrying) resolves through
-/// `view::list_click_card` unchanged (B1 semantics, S8); on the Detail screen
-/// only a CONTROL/SUPER-carrying click resolves — through `view::detail_link_at`
-/// — a plain click stays a no-op (reserved for text selection, S6).
+/// Resolves a click candidate by screen and modifier set (BDR 0010 S5-S8, BDR
+/// 0011 S1/S4): on the List screen every click (plain or modifier-carrying)
+/// resolves through `view::list_click_card` unchanged (B1 semantics, S8); on
+/// the Detail screen a CONTROL/SUPER-carrying click resolves through
+/// `view::detail_link_at` (link activation, never a selection); a plain
+/// click anchors a selection through `view::detail_pos_at` (ADR 0019 §3).
 fn resolve_click(
     model: &Model,
     area: Rect,
@@ -288,10 +311,41 @@ fn resolve_click(
         return list_click_card(model, area, y).map(Msg::CardClicked);
     }
     let link_modifier = modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER);
-    if !link_modifier {
+    if link_modifier {
+        return detail_link_at(model, area, x, y).map(Msg::LinkClicked);
+    }
+    detail_pos_at(model, area, x, y).map(Msg::SelStart)
+}
+
+/// A left DRAG on the Detail body extends the active selection (ADR 0019
+/// §3-4, BDR 0011 S1): a no-op on the List screen (B1 frozen) or with a
+/// modifier held (reserved for link activation).
+fn resolve_drag(model: &Model, area: Rect, x: u16, y: u16, modifiers: KeyModifiers) -> Option<Msg> {
+    if model.screen != Screen::Detail {
         return None;
     }
-    detail_link_at(model, area, x, y).map(Msg::LinkClicked)
+    if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) {
+        return None;
+    }
+    detail_pos_at_clamped(model, area, x, y).map(Msg::SelDrag)
+}
+
+/// A left RELEASE on the Detail body ends the selection gesture (ADR 0019
+/// §3, BDR 0011 S2/S3): after a drag it extracts the selected text via
+/// `view::selection_text` (the model's `update` copies it and shows the
+/// existing "Copied" status); a plain click (no drag) carries `None`,
+/// clearing the selection. A no-op on the List screen or with a modifier
+/// held (reserved for link activation).
+fn resolve_release(model: &Model, modifiers: KeyModifiers) -> Option<Msg> {
+    if model.screen != Screen::Detail {
+        return None;
+    }
+    if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) {
+        return None;
+    }
+    let dragged = model.selection.as_ref().is_some_and(|s| s.dragged);
+    let text = dragged.then(|| selection_text(model)).flatten();
+    Some(Msg::SelEnd(text))
 }
 
 /// Outcome of one event-loop turn: either the model to keep drawing with, or the

@@ -9,7 +9,9 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::model::{footer_mode, header_line, FooterMode, Model, Screen, StatusKind, StatusMsg};
+use super::model::{
+    footer_mode, header_line, FooterMode, Model, Screen, Selection, StatusKind, StatusMsg,
+};
 use super::panel;
 use super::theme;
 use crate::i18n::t;
@@ -445,6 +447,7 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             issue,
             model.detail_focused_link,
             model.detail_scroll,
+            model.selection.as_ref(),
         ),
     }
 }
@@ -453,16 +456,20 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
 /// as the border title, the Details/Description/Comments panels as one
 /// globally-scrolled `Paragraph`, and a `Scrollbar` when content overflows
 /// the viewport. The offset clamps to the content's last page so scrolling
-/// past the end never leaves blank overscroll.
+/// past the end never leaves blank overscroll. An active `selection` (ADR
+/// 0019 §5) is patched onto the covered spans before scrolling is applied,
+/// so the highlight scrolls with the content.
 fn render_detail_panels(
     frame: &mut Frame,
     area: Rect,
     issue: &Issue,
     focused_link: Option<usize>,
     scroll: u16,
+    selection: Option<&Selection>,
 ) {
     let inner_width = area.width.saturating_sub(DETAIL_FRAME_BORDER_COLS);
-    let lines = compose_detail(issue, focused_link, inner_width).lines;
+    let compose = compose_detail(issue, focused_link, inner_width);
+    let lines = apply_selection_highlight(compose, selection);
     let viewport_height = area.height.saturating_sub(DETAIL_FRAME_BORDER_ROWS);
     let total_lines = lines.len() as u16;
     let effective_offset = clamp_scroll_offset(scroll, total_lines, viewport_height);
@@ -517,39 +524,55 @@ fn detail_frame_title(issue: &Issue, frame_width: u16) -> String {
     panel::ellipsize_display(raw, budget)
 }
 
-/// One href-carrying cell in a composed row's cursor-hit metadata (ADR 0018
-/// §5): its display width and the href of the span it belongs to (`None` for
-/// plain body text, borders, and padding). `detail_link_at` walks a row's
-/// cells by width to find the one under the click column; the renderer never
-/// reads this.
+/// A cell's logical provenance (ADR 0019 §1): which pre-wrap logical line it
+/// came from and its char range (CHAR indices, never bytes/display columns)
+/// within that line's text. `None` on the padding/border cells `box_link_rows`
+/// inserts around content — chrome carries no logical position, so it can
+/// never be selected or copied (BDR 0011 S5).
+#[derive(Clone, Copy)]
+struct CellSpan {
+    logical_line: usize,
+    char_start: usize,
+    char_len: usize,
+}
+
+/// One rendered cell in a composed row's hit-test metadata (ADR 0018 §5, ADR
+/// 0019 §1): its display width, the href of the span it belongs to (`None`
+/// for plain body text, borders, and padding), and its logical provenance.
+/// `detail_link_at`/`detail_pos_at` walk a row's cells by width to find the
+/// one under a column; the renderer never reads this.
 #[derive(Clone)]
 struct LinkCell {
     width: u16,
     href: Option<String>,
+    span: Option<CellSpan>,
 }
 
-/// The single detail compose result (ADR 0018 §5): the ratatui `Line`s the
-/// renderer draws, and — row for row — the href hit-test metadata
-/// `detail_link_at` walks. Both come out of the same pass over the same
-/// wrapped content, so they cannot drift apart (no duplicated wrap/border
-/// math).
+/// The single detail compose result (ADR 0018 §5, ADR 0019 §1): the ratatui
+/// `Line`s the renderer draws; row for row, the hit-test metadata every
+/// pointer resolver walks; and the chrome-free pre-wrap text of each logical
+/// line, indexed by `CellSpan::logical_line`. All three come out of the same
+/// pass over the same wrapped content, so they cannot drift apart (no
+/// duplicated wrap/border math).
 struct DetailCompose {
     lines: Vec<Line<'static>>,
     link_rows: Vec<Vec<LinkCell>>,
+    logical_lines: Vec<String>,
 }
 
 /// Composes the single globally-scrolled line buffer (BDR 0007 S5) alongside
-/// its href hit-test metadata, row for row (ADR 0018 §5): the Details meta
-/// panel, the Description panel, and — when present — the Comments panel,
-/// each drawn via `panel::panel_box` at the same `width`. The Details and
-/// Comments panels carry no hrefs (empty rows); only the Description panel's
-/// inline `[url]` tokens do.
+/// its hit-test metadata, row for row (ADR 0018 §5, ADR 0019 §1): the Details
+/// meta panel, the Description panel, and — when present — the Comments
+/// panel, each drawn via `panel::panel_box` at the same `width`. Only the
+/// Description panel's inline `[url]` tokens carry an `href`; every content
+/// cell across all three panels carries logical provenance for selection.
 fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> DetailCompose {
-    let details_lines = details_panel(issue, width);
-    let details_link_rows = vec![Vec::new(); details_lines.len()];
+    let mut logical_lines = Vec::new();
+
+    let (details_lines, details_link_rows) = details_panel(issue, width, &mut logical_lines);
 
     let (description_lines, description_link_rows) =
-        description_panel_compose(issue, focused_link, width);
+        description_panel_compose(issue, focused_link, width, &mut logical_lines);
 
     let mut lines = details_lines;
     lines.push(Line::from(""));
@@ -559,43 +582,96 @@ fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> Det
     link_rows.push(Vec::new());
     link_rows.extend(description_link_rows);
 
-    if let Some(comments_lines) = comments_panel(issue, width) {
-        let comments_link_rows = vec![Vec::new(); comments_lines.len()];
+    if let Some((comments_lines, comments_link_rows)) =
+        comments_panel(issue, width, &mut logical_lines)
+    {
         lines.push(Line::from(""));
         lines.extend(comments_lines);
         link_rows.push(Vec::new());
         link_rows.extend(comments_link_rows);
     }
 
-    DetailCompose { lines, link_rows }
+    DetailCompose {
+        lines,
+        link_rows,
+        logical_lines,
+    }
+}
+
+/// Registers `text` as the next logical line and returns its index — the
+/// single seam every panel uses so `logical_lines` and each `SpanRun`'s
+/// `logical_line` index can never drift apart (ADR 0019 §1).
+fn register_logical_line(logical_lines: &mut Vec<String>, text: String) -> usize {
+    let idx = logical_lines.len();
+    logical_lines.push(text);
+    idx
 }
 
 /// The Details panel (BDR 0007 S5): a 2-column meta table — Title, Key,
-/// Status, Type, Assignee, and Due (omitted when absent/unparseable).
-fn details_panel(issue: &Issue, width: u16) -> Vec<Line<'static>> {
-    panel::panel_box(&t("Details"), details_meta_rows(issue, width), width)
+/// Status, Type, Assignee, and Due (omitted when absent/unparseable). Also
+/// produces the panel's hit-test metadata (ADR 0019 §1) so its rows are
+/// selectable and copyable like every other panel.
+fn details_panel(
+    issue: &Issue,
+    width: u16,
+    logical_lines: &mut Vec<String>,
+) -> (Vec<Line<'static>>, Vec<Vec<LinkCell>>) {
+    let inner_width = panel::inner_content_width(width);
+    let rows = details_meta_run_lines(issue, inner_width, logical_lines);
+    let wrapped = wrap_run_lines_to_width(rows, inner_width);
+    let lines = panel::panel_box(&t("Details"), run_lines_to_lines(&wrapped), width);
+    let content_link_rows: Vec<Vec<LinkCell>> =
+        wrapped.iter().map(run_line_to_link_cells).collect();
+    let link_rows = box_link_rows(content_link_rows);
+    (lines, link_rows)
 }
 
-fn details_meta_rows(issue: &Issue, width: u16) -> Vec<Line<'static>> {
-    let inner_width = panel::inner_content_width(width);
+fn details_meta_run_lines(
+    issue: &Issue,
+    inner_width: u16,
+    logical_lines: &mut Vec<String>,
+) -> Vec<RunLine> {
     let mut rows = vec![
-        meta_row(&t("Title"), &issue.summary, inner_width),
-        meta_row(&t("Key"), &issue.key, inner_width),
-        meta_row(&t("Status"), &status_text(issue), inner_width),
-        meta_row(&t("Type"), &issue.issue_type, inner_width),
-        meta_row(&t("Assignee"), &assignee_text(issue), inner_width),
+        meta_run_line(&t("Title"), &issue.summary, inner_width, logical_lines),
+        meta_run_line(&t("Key"), &issue.key, inner_width, logical_lines),
+        meta_run_line(
+            &t("Status"),
+            &status_text(issue),
+            inner_width,
+            logical_lines,
+        ),
+        meta_run_line(&t("Type"), &issue.issue_type, inner_width, logical_lines),
+        meta_run_line(
+            &t("Assignee"),
+            &assignee_text(issue),
+            inner_width,
+            logical_lines,
+        ),
     ];
     if let Some(due) = due_relative_text(issue) {
-        rows.push(meta_row(&t("Due"), &due, inner_width));
+        rows.push(meta_run_line(&t("Due"), &due, inner_width, logical_lines));
     }
     rows
 }
 
-fn meta_row(label: &str, value: &str, inner_width: u16) -> Line<'static> {
+fn meta_run_line(
+    label: &str,
+    value: &str,
+    inner_width: u16,
+    logical_lines: &mut Vec<String>,
+) -> RunLine {
     let prefix = format!("{label}: ");
     let budget = inner_width.saturating_sub(UnicodeWidthStr::width(prefix.as_str()) as u16);
     let value = panel::ellipsize_display(value, budget);
-    Line::from(format!("{prefix}{value}"))
+    let text = format!("{prefix}{value}");
+    let logical_line = register_logical_line(logical_lines, text.clone());
+    vec![SpanRun {
+        text,
+        style: Style::default(),
+        href: None,
+        logical_line,
+        char_start: 0,
+    }]
 }
 
 fn status_text(issue: &Issue) -> String {
@@ -622,16 +698,20 @@ fn due_relative_text(issue: &Issue) -> Option<String> {
     relative_due(duedate, today_days_now())
 }
 
-/// One rendered text run's ratatui style alongside its href (`None` off the
-/// visible `[url]` token) — the shared unit `wrap_run_line_to_width` carries
-/// through wrapping, so the renderer's `Line`s and `detail_link_at`'s
-/// hit-test cells walk the identical width-driven wrap decision (ADR 0018
-/// §5, single geometry source).
+/// One rendered text run's ratatui style, its href (`None` off the visible
+/// `[url]` token), and its logical provenance (ADR 0019 §1: which pre-wrap
+/// logical line it came from and its CHAR offset within that line's text) —
+/// the shared unit `wrap_run_line_to_width` carries through wrapping, so the
+/// renderer's `Line`s, `detail_link_at`'s hit-test cells, and every selection
+/// resolver walk the identical width-driven wrap decision (ADR 0018 §5, ADR
+/// 0019 §2, single geometry source).
 #[derive(Clone)]
 struct SpanRun {
     text: String,
     style: Style,
     href: Option<String>,
+    logical_line: usize,
+    char_start: usize,
 }
 
 /// A wrapped/unwrapped line of [`SpanRun`]s — the run-carrying counterpart of
@@ -653,14 +733,31 @@ fn run_lines_to_lines(run_lines: &[RunLine]) -> Vec<Line<'static>> {
 
 /// Lifts an already-built ratatui `Line` (no href) into a [`RunLine`], so
 /// plain content (e.g. a comment's header line) can be wrapped through the
-/// same run-based pipeline as href-carrying ADF content.
-fn line_to_run_line(line: &Line<'static>) -> RunLine {
+/// same run-based pipeline as href-carrying ADF content. Registers the
+/// line's full text as one logical line (ADR 0019 §1), with each span's char
+/// offset accumulated across the line's spans.
+fn line_to_run_line(line: &Line<'static>, logical_lines: &mut Vec<String>) -> RunLine {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let logical_line = register_logical_line(logical_lines, text);
+    let mut char_start = 0usize;
     line.spans
         .iter()
-        .map(|span| SpanRun {
-            text: span.content.to_string(),
-            style: span.style,
-            href: None,
+        .map(|span| {
+            let text = span.content.to_string();
+            let char_len = text.chars().count();
+            let run = SpanRun {
+                text,
+                style: span.style,
+                href: None,
+                logical_line,
+                char_start,
+            };
+            char_start += char_len;
+            run
         })
         .collect()
 }
@@ -677,6 +774,11 @@ fn run_line_to_link_cells(run_line: &RunLine) -> Vec<LinkCell> {
         .map(|run| LinkCell {
             width: UnicodeWidthStr::width(run.text.as_str()) as u16,
             href: run.href.clone(),
+            span: Some(CellSpan {
+                logical_line: run.logical_line,
+                char_start: run.char_start,
+                char_len: run.text.chars().count(),
+            }),
         })
         .collect()
 }
@@ -694,6 +796,7 @@ fn box_link_rows(content_rows: Vec<Vec<LinkCell>>) -> Vec<Vec<LinkCell>> {
         boxed_row.push(LinkCell {
             width: PANEL_CONTENT_LEFT_OFFSET,
             href: None,
+            span: None,
         });
         boxed_row.extend(row);
         rows.push(boxed_row);
@@ -711,6 +814,7 @@ fn description_panel_compose(
     issue: &Issue,
     focused_link: Option<usize>,
     width: u16,
+    logical_lines: &mut Vec<String>,
 ) -> (Vec<Line<'static>>, Vec<Vec<LinkCell>>) {
     let description = issue
         .description
@@ -718,7 +822,7 @@ fn description_panel_compose(
         .map(adf_to_rich)
         .unwrap_or_default();
     let inner_width = panel::inner_content_width(width);
-    let styled = description_lines_to_runs(&description, focused_link);
+    let styled = description_lines_to_runs(&description, focused_link, logical_lines);
     let wrapped = wrap_run_lines_to_width(styled, inner_width);
 
     let lines = panel::panel_box(&t("Description"), run_lines_to_lines(&wrapped), width);
@@ -732,43 +836,64 @@ fn description_panel_compose(
 /// The Comments panel (BDR 0007 S5): titled `Comments (N)`, its body made of
 /// nested per-comment cards (empty label, author `[created]` header line +
 /// styled body). `None` when the issue has no comments, so `view_detail`
-/// renders no Comments panel at all. Comment bodies carry no href hit-test
-/// metadata (out of BDR 0010's scope — only the Description panel's tokens
-/// are click-activated this slice); a modifier-click over one safely
-/// resolves to `None`.
-fn comments_panel(issue: &Issue, width: u16) -> Option<Vec<Line<'static>>> {
+/// renders no Comments panel at all. Comment bodies carry logical provenance
+/// for selection (ADR 0019 §1) but no href hit-test metadata (out of BDR
+/// 0010's scope — only the Description panel's tokens are click-activated
+/// this slice); a modifier-click over one safely resolves to `None`.
+fn comments_panel(
+    issue: &Issue,
+    width: u16,
+    logical_lines: &mut Vec<String>,
+) -> Option<(Vec<Line<'static>>, Vec<Vec<LinkCell>>)> {
     if issue.comments.is_empty() {
         return None;
     }
     let inner_width = panel::inner_content_width(width);
     let mut body = Vec::new();
+    let mut body_link_rows = Vec::new();
     for (i, comment) in issue.comments.iter().enumerate() {
         if i > 0 {
             body.push(Line::from(""));
+            body_link_rows.push(Vec::new());
         }
-        body.extend(comment_card(comment, inner_width));
+        let (card_lines, card_link_rows) = comment_card(comment, inner_width, logical_lines);
+        body.extend(card_lines);
+        body_link_rows.extend(card_link_rows);
     }
     let label = format!("{} ({})", t("Comments"), issue.comments.len());
-    Some(panel::panel_box(&label, body, width))
+    let lines = panel::panel_box(&label, body, width);
+    let link_rows = box_link_rows(body_link_rows);
+    Some((lines, link_rows))
 }
 
 /// One nested comment card: an unlabeled `panel::panel_box` whose body is the
 /// `[author] created` header line followed by the styled, width-wrapped ADF
-/// body.
-fn comment_card(comment: &IssueComment, width: u16) -> Vec<Line<'static>> {
+/// body, plus its own hit-test metadata (ADR 0019 §1) — comment href capture
+/// stays off (`capture_href: false`), matching the existing no-activation
+/// contract.
+fn comment_card(
+    comment: &IssueComment,
+    width: u16,
+    logical_lines: &mut Vec<String>,
+) -> (Vec<Line<'static>>, Vec<Vec<LinkCell>>) {
     let inner_width = panel::inner_content_width(width);
-    let mut body = vec![line_to_run_line(&comment_header_line(comment))];
+    let header_run_line = line_to_run_line(&comment_header_line(comment), logical_lines);
+    let mut body = vec![header_run_line];
 
     let mut link_occurrence = 0usize;
     let rich_body = adf_to_rich(&comment.body);
     body.extend(
         rich_body
             .iter()
-            .map(|line| rich_line_to_runs(line, None, &mut link_occurrence)),
+            .map(|line| rich_line_to_runs(line, None, &mut link_occurrence, logical_lines, false)),
     );
 
     let wrapped = wrap_run_lines_to_width(body, inner_width);
-    panel::panel_box("", run_lines_to_lines(&wrapped), width)
+    let lines = panel::panel_box("", run_lines_to_lines(&wrapped), width);
+    let content_link_rows: Vec<Vec<LinkCell>> =
+        wrapped.iter().map(run_line_to_link_cells).collect();
+    let link_rows = box_link_rows(content_link_rows);
+    (lines, link_rows)
 }
 
 fn comment_header_line(comment: &IssueComment) -> Line<'static> {
@@ -801,6 +926,10 @@ fn wrap_run_line_to_width(line: &RunLine, width: u16) -> Vec<RunLine> {
 
     for run in line {
         let mut remaining: &str = run.text.as_str();
+        // A fragment after a wrap seam continues the SAME logical line at the
+        // accumulated char offset (ADR 0019 §1) — `run_char_offset` tracks how
+        // many of `run`'s own chars have already been placed into prior chunks.
+        let mut run_char_offset = 0usize;
         while !remaining.is_empty() {
             if current_width >= width {
                 result.push(std::mem::take(&mut current));
@@ -811,11 +940,15 @@ fn wrap_run_line_to_width(line: &RunLine, width: u16) -> Vec<RunLine> {
                 break;
             }
             current_width += UnicodeWidthStr::width(chunk);
+            let chunk_chars = chunk.chars().count();
             current.push(SpanRun {
                 text: chunk.to_owned(),
                 style: run.style,
                 href: run.href.clone(),
+                logical_line: run.logical_line,
+                char_start: run.char_start + run_char_offset,
             });
+            run_char_offset += chunk_chars;
             remaining = rest;
         }
     }
@@ -854,31 +987,57 @@ fn rich_style_to_ratatui(style: &RichStyle) -> Style {
 
 /// Maps the description's rich lines to run-lines (style + href), reversing
 /// the style of the inline link whose render-order occurrence matches
-/// `focused_link`.
+/// `focused_link`. Each rich line registers as one logical line (ADR 0019
+/// §1).
 fn description_lines_to_runs(
     description: &[RichLine],
     focused_link: Option<usize>,
+    logical_lines: &mut Vec<String>,
 ) -> Vec<RunLine> {
     let mut link_occurrence = 0usize;
     description
         .iter()
-        .map(|line| rich_line_to_runs(line, focused_link, &mut link_occurrence))
+        .map(|line| {
+            rich_line_to_runs(
+                line,
+                focused_link,
+                &mut link_occurrence,
+                logical_lines,
+                true,
+            )
+        })
         .collect()
 }
 
+/// Lifts one rich line into a [`RunLine`], registering its full plain text as
+/// one logical line (ADR 0019 §1) and accumulating each span's char offset
+/// within it. `capture_href` gates whether a span's link mark becomes a
+/// clickable `href` — `false` for comment bodies (out of BDR 0010's scope),
+/// `true` for the Description panel.
 fn rich_line_to_runs(
     line: &RichLine,
     focused_link: Option<usize>,
     link_occurrence: &mut usize,
+    logical_lines: &mut Vec<String>,
+    capture_href: bool,
 ) -> RunLine {
+    let text: String = line.iter().map(|span| span.text.as_str()).collect();
+    let logical_line = register_logical_line(logical_lines, text);
+    let mut char_start = 0usize;
     line.iter()
         .map(|span| {
             let style = span_style(span, focused_link, link_occurrence);
-            SpanRun {
+            let href = capture_href.then(|| span.style.link.clone()).flatten();
+            let char_len = span.text.chars().count();
+            let run = SpanRun {
                 text: span.text.clone(),
                 style,
-                href: span.style.link.clone(),
-            }
+                href,
+                logical_line,
+                char_start,
+            };
+            char_start += char_len;
+            run
         })
         .collect()
 }
@@ -897,15 +1056,20 @@ fn span_style(span: &RichSpan, focused_link: Option<usize>, link_occurrence: &mu
     }
 }
 
-/// Resolves a modifier-click at absolute terminal `(x, y)` within the Detail
-/// screen's full frame `area` to the href of the span under the cursor (ADR
-/// 0018 §5, BDR 0010 S5/S7/S8): recomputes `compose_detail`'s own
-/// wrap/scroll/panel-chrome pipeline — the exact one `render_detail_panels`
-/// draws — so the hit test can never drift from what is on screen. `None`
-/// when there is no loaded issue, the coordinate falls outside the content
-/// viewport, lands on chrome (borders/padding/blank rows), or the span under
-/// the cursor carries no href.
-pub(super) fn detail_link_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<String> {
+/// The composed detail metadata plus the exact viewport geometry every
+/// pointer resolver needs (ADR 0018 §5, ADR 0019 §2): computed once so
+/// `detail_link_at`, `detail_pos_at`, and `detail_pos_at_clamped` can never
+/// drift from what `render_detail_panels` draws, or from each other. `None`
+/// when there is no loaded issue.
+struct DetailGeometry {
+    compose: DetailCompose,
+    content_top: u16,
+    content_left: u16,
+    viewport_height: u16,
+    offset: u16,
+}
+
+fn detail_geometry(model: &Model, area: Rect) -> Option<DetailGeometry> {
     let issue = model.detail.as_ref()?;
     let has_status_row = model.status.is_some();
     let content_area = detail_layout_chunks(area, has_status_row)[1];
@@ -917,19 +1081,42 @@ pub(super) fn detail_link_at(model: &Model, area: Rect, x: u16, y: u16) -> Optio
     let total_lines = compose.lines.len() as u16;
     let offset = clamp_scroll_offset(model.detail_scroll, total_lines, viewport_height);
 
-    let content_top = content_area.y + 1;
-    let content_left = content_area.x + 1;
-    if y < content_top || x < content_left {
-        return None;
-    }
-    let row_in_viewport = y - content_top;
-    if row_in_viewport >= viewport_height {
-        return None;
-    }
+    Some(DetailGeometry {
+        compose,
+        content_top: content_area.y + 1,
+        content_left: content_area.x + 1,
+        viewport_height,
+        offset,
+    })
+}
 
-    let row_index = (offset + row_in_viewport) as usize;
-    let col = x - content_left;
-    let row = compose.link_rows.get(row_index)?;
+/// Resolves an absolute terminal `(x, y)` within the Detail viewport to its
+/// composed row index and column, exactly as drawn (ADR 0018 §5, ADR 0019
+/// §2). `None` outside the content viewport or with no loaded issue.
+fn detail_row_col(geo: &DetailGeometry, x: u16, y: u16) -> Option<(usize, u16)> {
+    if y < geo.content_top || x < geo.content_left {
+        return None;
+    }
+    let row_in_viewport = y - geo.content_top;
+    if row_in_viewport >= geo.viewport_height {
+        return None;
+    }
+    let row_index = (geo.offset + row_in_viewport) as usize;
+    Some((row_index, x - geo.content_left))
+}
+
+/// Resolves a modifier-click at absolute terminal `(x, y)` within the Detail
+/// screen's full frame `area` to the href of the span under the cursor (ADR
+/// 0018 §5, BDR 0010 S5/S7/S8): recomputes `compose_detail`'s own
+/// wrap/scroll/panel-chrome pipeline — the exact one `render_detail_panels`
+/// draws — so the hit test can never drift from what is on screen. `None`
+/// when there is no loaded issue, the coordinate falls outside the content
+/// viewport, lands on chrome (borders/padding/blank rows), or the span under
+/// the cursor carries no href.
+pub(super) fn detail_link_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<String> {
+    let geo = detail_geometry(model, area)?;
+    let (row_index, col) = detail_row_col(&geo, x, y)?;
+    let row = geo.compose.link_rows.get(row_index)?;
     cell_at_column(row, col)
 }
 
@@ -946,4 +1133,349 @@ fn cell_at_column(row: &[LinkCell], col: u16) -> Option<String> {
         used += cell.width;
     }
     None
+}
+
+/// Maps a viewport cell to its logical `(line, char)` position (ADR 0019
+/// §2): the same row/col resolution `detail_link_at` uses, then a
+/// display-width walk — first across the row's cells to find the one under
+/// `col`, then within that cell's fragment across its chars — so a display
+/// column is never mistaken for a char index (BDR 0011 S6). `None` off the
+/// content viewport or on a chrome cell/row (no [`CellSpan`]).
+pub(super) fn detail_pos_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<(usize, usize)> {
+    let geo = detail_geometry(model, area)?;
+    let (row_index, col) = detail_row_col(&geo, x, y)?;
+    let row = geo.compose.link_rows.get(row_index)?;
+    cell_span_at_column(row, &geo.compose.logical_lines, col)
+}
+
+/// Walks a composed row's cells by display width (mirrors `cell_at_column`),
+/// then within the hit cell walks its chars by display width to the exact
+/// logical position (ADR 0019 §2, BDR 0011 S6). `None` past the row's
+/// content or on a chrome cell (no [`CellSpan`]).
+fn cell_span_at_column(
+    row: &[LinkCell],
+    logical_lines: &[String],
+    col: u16,
+) -> Option<(usize, usize)> {
+    let mut used = 0u16;
+    for cell in row {
+        if col < used + cell.width {
+            let span = cell.span?;
+            let within_col = col - used;
+            let ch = char_offset_within_span(logical_lines, span, within_col);
+            return Some((span.logical_line, span.char_start + ch));
+        }
+        used += cell.width;
+    }
+    None
+}
+
+/// The fragment text `span` denotes in `logical_lines` (ADR 0019 §1): a
+/// contiguous char slice (never bytes) — the same text a rendered cell
+/// carries, reconstructed from the pre-wrap logical line so it's the single
+/// source both the highlight and every pointer resolver's column walk read.
+fn span_fragment(logical_lines: &[String], span: CellSpan) -> String {
+    logical_lines[span.logical_line]
+        .chars()
+        .skip(span.char_start)
+        .take(span.char_len)
+        .collect()
+}
+
+/// Walks `span`'s fragment by unicode display width to the char index at
+/// display column `within_col` (BDR 0011 S6): a display column is never
+/// treated as a char index.
+fn char_offset_within_span(logical_lines: &[String], span: CellSpan, within_col: u16) -> usize {
+    let fragment = span_fragment(logical_lines, span);
+    let (prefix, _) = panel::split_at_width(&fragment, within_col);
+    prefix.chars().count()
+}
+
+/// The inverse walk: the display column at which `char_count` of `span`'s
+/// chars have been consumed — lets the highlight convert a char range back
+/// to columns without a second geometry pass.
+fn column_offset_within_span(logical_lines: &[String], span: CellSpan, char_count: usize) -> u16 {
+    let fragment = span_fragment(logical_lines, span);
+    let prefix: String = fragment.chars().take(char_count).collect();
+    UnicodeWidthStr::width(prefix.as_str()) as u16
+}
+
+/// Maps a drag coordinate to a logical `(line, char)` position, clamped (ADR
+/// 0019 §2, BDR 0011 S10): a column past a line's content clamps to that
+/// line's char count; a row above/below the content clamps to the first/last
+/// metadata-bearing visual row. `None` only when the detail has no content.
+pub(super) fn detail_pos_at_clamped(
+    model: &Model,
+    area: Rect,
+    x: u16,
+    y: u16,
+) -> Option<(usize, usize)> {
+    let geo = detail_geometry(model, area)?;
+    let row_index = clamp_row_index(&geo, y)?;
+    let row = geo.compose.link_rows.get(row_index)?;
+    let col = x.saturating_sub(geo.content_left);
+    Some(pos_in_row_clamped(row, &geo.compose.logical_lines, col))
+}
+
+/// Clamps the raw row index for `y` into the range of rows that actually
+/// carry selectable content (BDR 0011 S10); `None` when the detail has no
+/// content-bearing row at all.
+fn clamp_row_index(geo: &DetailGeometry, y: u16) -> Option<usize> {
+    let (first, last) = content_row_bounds(&geo.compose.link_rows)?;
+    let row_in_viewport = y
+        .saturating_sub(geo.content_top)
+        .min(geo.viewport_height.saturating_sub(1));
+    let raw = (geo.offset + row_in_viewport) as usize;
+    Some(raw.clamp(first, last))
+}
+
+/// The first and last row indices in `link_rows` carrying at least one
+/// content cell (a [`CellSpan`]); `None` when the detail has no content.
+fn content_row_bounds(link_rows: &[Vec<LinkCell>]) -> Option<(usize, usize)> {
+    let mut indices = link_rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.iter().any(|cell| cell.span.is_some()))
+        .map(|(i, _)| i);
+    let first = indices.next()?;
+    let last = indices.next_back().unwrap_or(first);
+    Some((first, last))
+}
+
+/// Resolves a column within a content-bearing `row`, clamping an off-cell
+/// column to the nearest valid logical position (BDR 0011 S10): before the
+/// row's first content cell clamps to that line's start; past the last
+/// clamps to that line's end (its full char count).
+fn pos_in_row_clamped(row: &[LinkCell], logical_lines: &[String], col: u16) -> (usize, usize) {
+    if let Some(pos) = cell_span_at_column(row, logical_lines, col) {
+        return pos;
+    }
+    let mut used = 0u16;
+    let mut first: Option<(u16, CellSpan)> = None;
+    let mut last: Option<CellSpan> = None;
+    for cell in row {
+        if let Some(span) = cell.span {
+            first.get_or_insert((used, span));
+            last = Some(span);
+        }
+        used += cell.width;
+    }
+    match (first, last) {
+        (Some((first_col, first_span)), Some(_)) if col < first_col => {
+            (first_span.logical_line, first_span.char_start)
+        }
+        (_, Some(last_span)) => {
+            let line_len = logical_lines[last_span.logical_line].chars().count();
+            (last_span.logical_line, line_len)
+        }
+        _ => (0, 0),
+    }
+}
+
+/// Normalizes an anchor/cursor pair to reading order (line-major, then char)
+/// so a backward or upward drag selects the identical span as a forward one
+/// (BDR 0011 S1). Tuple ordering is exactly line-major-then-char.
+fn normalize_selection(
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+) -> ((usize, usize), (usize, usize)) {
+    if anchor <= cursor {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    }
+}
+
+/// The width used to recompose `compose_detail` purely for text extraction
+/// (`selection_text`): logical line TEXT is registered before wrapping and is
+/// width-independent, so any sufficiently large width reproduces the exact
+/// same `logical_lines` the on-screen compose used (the one narrow exception
+/// — a Details meta value long enough to ellipsize at the real viewport width
+/// — is not exercised by any selectable content in practice).
+const DETAIL_TEXT_EXTRACTION_WIDTH: u16 = u16::MAX;
+
+/// Extracts the selected span's text (ADR 0019 §1): normalizes `(anchor,
+/// cursor)` to reading order, slices `compose_detail`'s chrome-free
+/// `logical_lines` by char index (UTF-8-safe `chars().skip/take`, never
+/// bytes), and joins multi-line spans with `\n`. `None` with no selection, no
+/// loaded issue, or an empty span.
+pub(super) fn selection_text(model: &Model) -> Option<String> {
+    let issue = model.detail.as_ref()?;
+    let selection = model.selection.as_ref()?;
+    let (start, end) = normalize_selection(selection.anchor, selection.cursor);
+    let compose = compose_detail(
+        issue,
+        model.detail_focused_link,
+        DETAIL_TEXT_EXTRACTION_WIDTH,
+    );
+    let text = extract_selection_text(&compose.logical_lines, start, end);
+    (!text.is_empty()).then_some(text)
+}
+
+/// Slices `line`'s chars in `[start, end)` (UTF-8-safe, clamped to the
+/// line's own length); `""` when `line` is absent (out-of-range index).
+fn slice_line_chars(line: Option<&String>, start: usize, end: usize) -> String {
+    line.map(|text| {
+        text.chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Joins the selected span's text across `logical_lines`, `\n`-separated
+/// (BDR 0011 S7: a selection across a wrap seam yields the contiguous
+/// logical text — since both fragments read the SAME logical line, nothing
+/// is dropped or repeated).
+fn extract_selection_text(
+    logical_lines: &[String],
+    start: (usize, usize),
+    end: (usize, usize),
+) -> String {
+    let (start_line, start_char) = start;
+    let (end_line, end_char) = end;
+    if start_line == end_line {
+        return slice_line_chars(logical_lines.get(start_line), start_char, end_char);
+    }
+    let mut parts = vec![slice_line_chars(
+        logical_lines.get(start_line),
+        start_char,
+        usize::MAX,
+    )];
+    for line_idx in (start_line + 1)..end_line {
+        parts.push(logical_lines.get(line_idx).cloned().unwrap_or_default());
+    }
+    parts.push(slice_line_chars(logical_lines.get(end_line), 0, end_char));
+    parts.join("\n")
+}
+
+/// Patches `theme::selection_highlight()` onto the spans covered by an
+/// active `selection` (ADR 0019 §5), reading the SAME cell metadata
+/// `detail_pos_at` walks — no second geometry computation. Returns
+/// `compose.lines` unchanged with no active selection.
+fn apply_selection_highlight(
+    compose: DetailCompose,
+    selection: Option<&Selection>,
+) -> Vec<Line<'static>> {
+    let DetailCompose {
+        lines,
+        link_rows,
+        logical_lines,
+    } = compose;
+    let Some(selection) = selection else {
+        return lines;
+    };
+    let (start, end) = normalize_selection(selection.anchor, selection.cursor);
+    lines
+        .into_iter()
+        .zip(link_rows.iter())
+        .map(
+            |(line, row)| match selection_highlight_columns(row, &logical_lines, start, end) {
+                Some((from, to)) => apply_span_highlight(&line, from, to),
+                None => line,
+            },
+        )
+        .collect()
+}
+
+/// The display-column range within `row` covered by the normalized selection
+/// `[start, end)` (ADR 0019 §5): reads the same cell metadata `detail_pos_at`
+/// walks. `None` when none of the row's cells fall inside the selection.
+fn selection_highlight_columns(
+    row: &[LinkCell],
+    logical_lines: &[String],
+    start: (usize, usize),
+    end: (usize, usize),
+) -> Option<(u16, u16)> {
+    let mut used = 0u16;
+    let mut covered: Option<(u16, u16)> = None;
+
+    for cell in row {
+        if let Some(span) = cell.span {
+            if let Some((from, to)) = cell_selection_overlap(span, start, end) {
+                let col_from =
+                    used + column_offset_within_span(logical_lines, span, from - span.char_start);
+                let col_to =
+                    used + column_offset_within_span(logical_lines, span, to - span.char_start);
+                covered = Some(match covered {
+                    Some((c_from, c_to)) => (c_from.min(col_from), c_to.max(col_to)),
+                    None => (col_from, col_to),
+                });
+            }
+        }
+        used += cell.width;
+    }
+    covered
+}
+
+/// The char sub-range of `span` selected by the normalized `[start, end)`
+/// span (BDR 0011 S1/S7): `None` when `span`'s logical line falls outside
+/// `[start_line, end_line]` or the intersection is empty.
+fn cell_selection_overlap(
+    span: CellSpan,
+    (start_line, start_char): (usize, usize),
+    (end_line, end_char): (usize, usize),
+) -> Option<(usize, usize)> {
+    if span.logical_line < start_line || span.logical_line > end_line {
+        return None;
+    }
+    let cell_end = span.char_start + span.char_len;
+    let lower = if span.logical_line == start_line {
+        start_char
+    } else {
+        0
+    };
+    let upper = if span.logical_line == end_line {
+        end_char
+    } else {
+        cell_end
+    };
+    let from = span.char_start.max(lower);
+    let to = cell_end.min(upper);
+    (from < to).then_some((from, to))
+}
+
+/// Splits `line`'s spans at the exact display-column boundaries `[start_col,
+/// end_col)` and patches `theme::selection_highlight()` onto the covered
+/// portion (ADR 0019 §5, BDR 0011 S1): partial cell coverage splits a span at
+/// the exact char boundary using the same width walk `detail_pos_at` uses
+/// (via `panel::split_at_width`), so highlight and extraction never drift.
+fn apply_span_highlight(line: &Line<'static>, start_col: u16, end_col: u16) -> Line<'static> {
+    let highlight = theme::selection_highlight();
+    let mut spans = Vec::with_capacity(line.spans.len() + 2);
+    let mut used = 0u16;
+
+    for span in &line.spans {
+        let text = span.content.as_ref();
+        let width = UnicodeWidthStr::width(text) as u16;
+        let span_start = used;
+        let span_end = used + width;
+        used = span_end;
+
+        if span_end <= start_col || span_start >= end_col {
+            spans.push(span.clone());
+            continue;
+        }
+
+        let before_cols = start_col.saturating_sub(span_start);
+        let highlighted_end_cols = end_col.saturating_sub(span_start);
+
+        let (before, rest) = panel::split_at_width(text, before_cols);
+        let (highlighted, after) = panel::split_at_width(rest, highlighted_end_cols - before_cols);
+
+        if !before.is_empty() {
+            spans.push(Span::styled(before.to_owned(), span.style));
+        }
+        if !highlighted.is_empty() {
+            spans.push(Span::styled(
+                highlighted.to_owned(),
+                span.style.patch(highlight),
+            ));
+        }
+        if !after.is_empty() {
+            spans.push(Span::styled(after.to_owned(), span.style));
+        }
+    }
+    Line::from(spans)
 }

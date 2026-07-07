@@ -94,3 +94,10 @@ pub fn status_error() -> Style {
         .bg(Color::Rgb(38, 52, 74))
         .add_modifier(Modifier::BOLD)
 }
+
+/// The active text-selection highlight in the detail body (ADR 0019 §5): a
+/// REVERSED-class style so the covered span renders visibly regardless of
+/// its own fg/bg, patched onto (not replacing) the span's existing style.
+pub fn selection_highlight() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
+}
