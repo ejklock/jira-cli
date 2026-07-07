@@ -28,3 +28,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0020](/adr/0020-issue-attachments-detail-panel.md) | Issue attachments — curated model field, agent_json array, inline Attachments panel | Accepted |
 | [0021](/adr/0021-projects-axis-browse.md) | Projects axis in the browse TUI — 'p' opens Projects; a project drills into its issues | Accepted |
 | [0022](/adr/0022-comment-write-seam.md) | Comment write seam — gouqi write verbs behind JiraClient, plain-text→ADF builder, author identity | Accepted |
+| [0023](/adr/0023-non-tty-comment-command.md) | Non-interactive `comment` command — -m/stdin body, --json write result, structural identity | Accepted |

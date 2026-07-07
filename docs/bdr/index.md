@@ -19,3 +19,4 @@ Append-only: supersede or amend.
 | [0011](/bdr/0011-detail-text-selection-behaviors.md) | detail text selection — drag highlights, release copies logical text, plain click clears | Accepted |
 | [0012](/bdr/0012-attachments-behaviors.md) | attachments — agent_json array + inline detail panel (link rows, footnote, no clipping) | Accepted |
 | [0013](/bdr/0013-projects-axis-behaviors.md) | projects axis — 'p' lists projects, Enter drills into the project's issues, back pops home | Accepted |
+| [0014](/bdr/0014-non-interactive-comment-behaviors.md) | `jira comment` — non-interactive post from -m/stdin with a --json write result | Accepted |
