@@ -17,7 +17,8 @@ mod test_support;
 use clap::{CommandFactory, Parser};
 use cli::{bare_no_command_action, BareNoCommandAction, Cli, Command};
 use commands::{
-    pick_instance, setup_add, setup_list, setup_remove, setup_test, GetOpts, SetupAddFields,
+    pick_instance, setup_add, setup_list, setup_remove, setup_test, CommentBody, GetOpts,
+    SetupAddFields,
 };
 use std::io::IsTerminal;
 use std::process;
@@ -92,6 +93,7 @@ async fn dispatch(command: Command) -> i32 {
         Command::Mine(args) => dispatch_mine(args).await,
         Command::Search(args) => dispatch_search(args).await,
         Command::Browse(args) => dispatch_browse(args).await,
+        Command::Comment(args) => dispatch_comment(args).await,
     }
 }
 
@@ -353,6 +355,41 @@ async fn dispatch_search(args: cli::SearchArgs) -> i32 {
         &mut std::io::stderr(),
     )
     .await
+}
+
+async fn dispatch_comment(args: cli::CommentArgs) -> i32 {
+    let ResolvedInstance { store: _, instance } = match resolve_single_instance(None) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let branch = current_git_branch();
+    let body = resolve_comment_body_source(args.message);
+    commands::comment_core(
+        args.issue_key.as_deref(),
+        branch.as_deref(),
+        body,
+        &instance,
+        args.json,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
+/// `-m` wins; otherwise read stdin to EOF only when it is not a TTY (ADR 0023
+/// §2) — an interactive invocation without `-m` must fail fast rather than
+/// block waiting for input the user never intended to pipe.
+fn resolve_comment_body_source(message: Option<String>) -> CommentBody {
+    if let Some(m) = message {
+        return CommentBody::Flag(m);
+    }
+    if std::io::stdin().is_terminal() {
+        return CommentBody::None;
+    }
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).ok();
+    CommentBody::Piped(buf)
 }
 
 async fn dispatch_browse(args: cli::BrowseArgs) -> i32 {

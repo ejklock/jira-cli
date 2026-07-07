@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub const KNOWN_COMMANDS: [&str; 5] = ["setup", "get", "current", "mine", "browse"];
+pub const KNOWN_COMMANDS: [&str; 6] = ["setup", "get", "current", "mine", "browse", "comment"];
 
 /// Fetch Jira issues from one or more configured instances.
 #[derive(Parser, Debug)]
@@ -27,6 +27,8 @@ pub enum Command {
     Search(SearchArgs),
     /// Open the interactive TUI browser.
     Browse(BrowseArgs),
+    /// Post a comment to an issue (non-interactive, one-shot).
+    Comment(CommentArgs),
 }
 
 /// Wrapper that holds the setup subcommand.
@@ -138,6 +140,18 @@ pub struct BrowseArgs {
     /// Limit to this instance.
     #[arg(long)]
     pub instance: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CommentArgs {
+    /// Issue key (e.g. PROJ-123). Resolved from the current git branch when omitted.
+    pub issue_key: Option<String>,
+    /// Comment body text. Falls back to piped stdin (multi-line, verbatim) when omitted.
+    #[arg(short = 'm', long = "message")]
+    pub message: Option<String>,
+    /// Print curated minified JSON write result for agent/LLM consumption.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Mirror of Python `_normalize_argv`.

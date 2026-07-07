@@ -2424,3 +2424,484 @@ async fn search_core_401_prints_reauth_message_and_exits_nonzero() {
     );
     server.verify().await;
 }
+
+// ---- comment_core integration tests (BDR 0014) ----
+
+fn build_comment_response(id: &str) -> serde_json::Value {
+    serde_json::json!({ "id": id })
+}
+
+async fn mount_comment_endpoint(server: &MockServer, key: &str, response: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path(format!("/rest/api/3/issue/{key}/comment")))
+        .respond_with(response)
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+async fn received_body_text(server: &MockServer) -> String {
+    let reqs = server.received_requests().await.unwrap_or_default();
+    assert_eq!(reqs.len(), 1, "expected exactly 1 request; got {reqs:?}");
+    String::from_utf8(reqs[0].body.clone()).expect("request body must be valid utf8")
+}
+
+/// Scenario 1: flag body + explicit key -> add_comment called once with the
+/// key and verbatim body, confirmation on stdout, exit 0.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn comment_core_flag_body_explicit_key_posts_and_confirms() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    mount_comment_endpoint(
+        &server,
+        "PROJ-42",
+        ResponseTemplate::new(201).set_body_json(build_comment_response("500")),
+    )
+    .await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("Deploy em homolog.".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 0, "exit 0 on success; stderr: {}", output_str(&err));
+    let text = output_str(&out);
+    assert!(
+        text.contains("PROJ-42"),
+        "confirmation must name the issue key; got: {text}"
+    );
+
+    let body_text = received_body_text(&server).await;
+    assert!(
+        body_text.contains("Deploy em homolog."),
+        "posted body must carry the flag text verbatim; got: {body_text}"
+    );
+
+    server.verify().await;
+}
+
+/// Scenario 2: piped multi-line body is passed verbatim (incl. the newline,
+/// rendered as ADF hardBreak), exit 0.
+#[tokio::test]
+async fn comment_core_piped_multiline_body_passed_verbatim() {
+    let server = MockServer::start().await;
+    mount_comment_endpoint(
+        &server,
+        "PROJ-42",
+        ResponseTemplate::new(201).set_body_json(build_comment_response("501")),
+    )
+    .await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Piped("Linha 1\nLinha 2".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 0, "exit 0 on success; stderr: {}", output_str(&err));
+
+    let body_text = received_body_text(&server).await;
+    assert!(
+        body_text.contains("Linha 1") && body_text.contains("Linha 2"),
+        "both lines must reach the server verbatim; got: {body_text}"
+    );
+    assert!(
+        body_text.contains("hardBreak"),
+        "the newline must be preserved as an ADF hardBreak; got: {body_text}"
+    );
+
+    server.verify().await;
+}
+
+/// Scenario 3: --json success is exactly one minified line with ok:true,
+/// comment_id and issue_key, and nothing else on stdout.
+#[tokio::test]
+async fn comment_core_json_flag_emits_single_minified_success_line() {
+    let server = MockServer::start().await;
+    mount_comment_endpoint(
+        &server,
+        "PROJ-42",
+        ResponseTemplate::new(201).set_body_json(build_comment_response("777")),
+    )
+    .await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("ok".to_string()),
+        &inst,
+        true,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 0, "exit 0; stderr: {}", output_str(&err));
+    let text = output_str(&out).trim().to_owned();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "json output must be exactly 1 line: {text:?}"
+    );
+    let obj: serde_json::Value = serde_json::from_str(lines[0]).expect("must be valid JSON");
+    assert_eq!(obj["ok"], true, "ok must be true on success");
+    assert_eq!(obj["comment_id"], "777", "comment_id must equal server id");
+    assert_eq!(obj["issue_key"], "PROJ-42", "issue_key must equal the key");
+
+    server.verify().await;
+}
+
+/// Scenario 4: CommentBody::None -> exit 2, 'no comment body', add_comment NOT called.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn comment_core_no_body_exits_2_and_makes_zero_requests() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    // No mock mounted for the comment endpoint — any POST would panic.
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::None,
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 2, "no body must exit 2");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains("no comment body"),
+        "must report no comment body; got: {err_text}"
+    );
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0, "no body must make zero HTTP requests");
+}
+
+/// Edge case: a piped body that is empty after trimming is also a usage
+/// error, not an empty write.
+#[tokio::test]
+async fn comment_core_blank_piped_body_exits_2_and_makes_zero_requests() {
+    let server = MockServer::start().await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Piped("   \n  ".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 2, "blank piped body must exit 2");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(
+        requests.len(),
+        0,
+        "blank piped body must make zero HTTP requests"
+    );
+}
+
+/// Scenario 5: with no explicit key, the branch's key reaches the mock (the
+/// same extraction `current_core` uses).
+#[tokio::test]
+async fn comment_core_branch_resolved_key_reaches_add_comment() {
+    let server = MockServer::start().await;
+    mount_comment_endpoint(
+        &server,
+        "PROJ-77",
+        ResponseTemplate::new(201).set_body_json(build_comment_response("42")),
+    )
+    .await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        None,
+        Some("feature/PROJ-77-thing"),
+        CommentBody::Flag("hi".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(
+        code,
+        0,
+        "branch-resolved key must succeed; stderr: {}",
+        output_str(&err)
+    );
+    server.verify().await;
+}
+
+/// Scenario 6: no explicit key and a branch with no resolvable key -> exit 2,
+/// zero requests.
+#[tokio::test]
+async fn comment_core_no_resolvable_key_exits_2_with_zero_requests() {
+    let server = MockServer::start().await;
+    // No mock mounted — any POST would panic.
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        None,
+        Some("main"),
+        CommentBody::Flag("hi".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 2, "no resolvable key must exit 2");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(
+        requests.len(),
+        0,
+        "no resolvable key must make zero HTTP requests"
+    );
+}
+
+/// Scenario 6 (no-repo variant): no explicit key and no branch at all (not in
+/// a git repo) -> exit 2, zero requests.
+#[tokio::test]
+async fn comment_core_no_branch_at_all_exits_2_with_zero_requests() {
+    let server = MockServer::start().await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        None,
+        None,
+        CommentBody::Flag("hi".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 2, "no branch at all must exit 2");
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0, "must make zero HTTP requests");
+}
+
+/// Scenario 8 (Other error): a non-401 HTTP failure exits 1, no success line,
+/// no false ok.
+#[tokio::test]
+async fn comment_core_other_error_exits_1_with_no_success_line() {
+    let server = MockServer::start().await;
+    mount_comment_endpoint(&server, "PROJ-42", ResponseTemplate::new(500)).await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("text".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 1, "server error must exit 1");
+    let out_text = output_str(&out);
+    assert!(
+        out_text.is_empty(),
+        "no success line must be printed on error; got: {out_text}"
+    );
+    server.verify().await;
+}
+
+/// Scenario 8 (Other error, --json): the same failure emits a single
+/// {"ok":false,"error":...} line, never a false success.
+#[tokio::test]
+async fn comment_core_other_error_json_emits_ok_false() {
+    let server = MockServer::start().await;
+    mount_comment_endpoint(&server, "PROJ-42", ResponseTemplate::new(500)).await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("text".to_string()),
+        &inst,
+        true,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 1, "server error must exit 1");
+    let text = output_str(&out).trim().to_owned();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "json error output must be exactly 1 line: {text:?}"
+    );
+    let obj: serde_json::Value = serde_json::from_str(lines[0]).expect("must be valid JSON");
+    assert_eq!(obj["ok"], false, "ok must be false on failure");
+    assert!(obj.get("error").is_some(), "must carry an error field");
+    server.verify().await;
+}
+
+/// Scenario 7 (401): the same re-auth message the E2 tests assert appears,
+/// non-zero exit, no success line.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn comment_core_401_prints_reauth_message_and_exits_nonzero() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let server = MockServer::start().await;
+    mount_comment_endpoint(&server, "PROJ-42", ResponseTemplate::new(401)).await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("text".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_ne!(code, 0, "401 must exit non-zero");
+    let err_text = output_str(&err);
+    assert!(
+        err_text.contains(EXPECTED_REAUTH_EN),
+        "stderr must contain the exact re-auth guidance; got: {err_text}"
+    );
+    assert!(
+        output_str(&out).is_empty(),
+        "no success line must be printed on 401; got: {}",
+        output_str(&out)
+    );
+    server.verify().await;
+}
+
+/// pt-BR: the confirmation and 'no comment body' usage strings render
+/// translated (existing i18n test discipline, lock held across the `.await`s).
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn comment_core_pt_br_renders_translated_confirmation_and_usage_error() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    let server = MockServer::start().await;
+    mount_comment_endpoint(
+        &server,
+        "PROJ-42",
+        ResponseTemplate::new(201).set_body_json(build_comment_response("900")),
+    )
+    .await;
+
+    let inst = server_instance(&server, "work");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+
+    let code = comment_core(
+        Some("PROJ-42"),
+        None,
+        CommentBody::Flag("ok".to_string()),
+        &inst,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .await;
+
+    assert_eq!(code, 0, "exit 0; stderr: {}", output_str(&err));
+    let text = output_str(&out);
+    assert!(
+        text.contains("Comentário adicionado a PROJ-42."),
+        "confirmation must render in pt_BR; got: {text}"
+    );
+
+    let mut out2 = Vec::new();
+    let mut err2 = Vec::new();
+    let code2 = comment_core(
+        Some("PROJ-1"),
+        None,
+        CommentBody::None,
+        &inst,
+        false,
+        &mut out2,
+        &mut err2,
+    )
+    .await;
+
+    set_language("en");
+    assert_eq!(code2, 2, "no body must still exit 2 in pt_BR");
+    let err_text2 = output_str(&err2);
+    assert!(
+        err_text2.contains("corpo do comentário ausente"),
+        "usage error must render in pt_BR; got: {err_text2}"
+    );
+
+    server.verify().await;
+}

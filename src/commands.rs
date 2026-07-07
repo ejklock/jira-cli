@@ -1,6 +1,8 @@
-use crate::agent_json::{issue_to_minified_json, mine_list_to_minified_json};
+use crate::agent_json::{
+    comment_result_err, comment_result_ok, issue_to_minified_json, mine_list_to_minified_json,
+};
 use crate::cli::extract_issue_key;
-use crate::client::{ClientError, GouqiJiraClient, JiraClient};
+use crate::client::{ClientError, ClientResult, GouqiJiraClient, JiraClient};
 use crate::i18n::SUPPORTED;
 use crate::i18n::{t, tf};
 use crate::render::{render_issue_human, render_issue_table};
@@ -679,6 +681,130 @@ pub async fn search_core(
             }
             1
         }
+    }
+}
+
+const NO_ISSUE_KEY_MSG: &str =
+    "Error: no issue key. Provide ISSUE_KEY, or run from a branch containing one.";
+
+/// Body source resolved by the dispatcher before calling into `comment_core`
+/// (ADR 0023 §2): `-m` wins, otherwise piped stdin text, otherwise nothing —
+/// kept as data so the core stays testable without a real terminal.
+pub enum CommentBody {
+    Flag(String),
+    Piped(String),
+    None,
+}
+
+/// One-shot, non-interactive comment post (BDR 0014). Resolves the issue key
+/// (explicit arg, else the branch's key via the same extraction `current`
+/// uses) and the body (`CommentBody`), then posts through the C1 write seam
+/// (`client.add_comment`). Never a false success: any error path returns
+/// non-zero with no confirmation line.
+pub async fn comment_core(
+    issue_key: Option<&str>,
+    branch: Option<&str>,
+    body: CommentBody,
+    instance: &Instance,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let key = match resolve_comment_key(issue_key, branch) {
+        Some(k) => k,
+        None => return report_comment_usage_error(json, &t(NO_ISSUE_KEY_MSG), out, err),
+    };
+
+    let comment_body = match resolve_comment_body(body) {
+        Some(b) => b,
+        None => return report_comment_usage_error(json, &t("no comment body"), out, err),
+    };
+
+    let client = match GouqiJiraClient::new(instance) {
+        Ok(c) => c,
+        Err(e) => {
+            writeln!(err, "Error building client: {e}").ok();
+            return 1;
+        }
+    };
+
+    let result = client.add_comment(&key, &comment_body).await;
+    handle_add_comment_result(result, &key, json, out, err)
+}
+
+/// Explicit `issue_key` wins; otherwise fall back to the branch's key via the
+/// same extraction `current_core` uses — never a second implementation.
+fn resolve_comment_key(issue_key: Option<&str>, branch: Option<&str>) -> Option<String> {
+    issue_key
+        .map(str::to_owned)
+        .or_else(|| branch.and_then(extract_issue_key))
+}
+
+/// An empty body (from either channel) is a usage error, not an empty write.
+fn resolve_comment_body(body: CommentBody) -> Option<String> {
+    let text = match body {
+        CommentBody::Flag(s) | CommentBody::Piped(s) => s,
+        CommentBody::None => return None,
+    };
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn report_comment_usage_error(
+    json: bool,
+    message: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    if json {
+        writeln!(out, "{}", comment_result_err(message)).ok();
+    } else {
+        writeln!(err, "{message}").ok();
+    }
+    2
+}
+
+fn handle_add_comment_result(
+    result: ClientResult<crate::models::CommentWriteResult>,
+    key: &str,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    match result {
+        Ok(r) => {
+            report_comment_success(json, &r.id, key, out);
+            0
+        }
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(err, "{}", reauth_message(&instance)).ok();
+            1
+        }
+        Err(ClientError::Other(e)) => {
+            report_comment_failure(json, key, &e.to_string(), out, err);
+            1
+        }
+    }
+}
+
+fn report_comment_success(json: bool, comment_id: &str, key: &str, out: &mut dyn Write) {
+    if json {
+        writeln!(out, "{}", comment_result_ok(comment_id, key)).ok();
+    } else {
+        writeln!(out, "{}", tf("Comment added to {key}.", &[("key", key)])).ok();
+    }
+}
+
+fn report_comment_failure(
+    json: bool,
+    key: &str,
+    message: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) {
+    if json {
+        writeln!(out, "{}", comment_result_err(message)).ok();
+    } else {
+        writeln!(err, "Error posting comment to '{key}': {message}").ok();
     }
 }
 

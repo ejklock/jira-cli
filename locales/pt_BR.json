@@ -172,5 +172,7 @@
   "Copied ✓": "Copiado ✓",
   "↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit": "↑/↓ j/k rolar  Tab próximo link  Enter abrir  Esc/b voltar  q sair",
   "Authentication failed for {instance}: your API token was rejected. Run `jira setup add` to re-authenticate.": "Falha de autenticação em {instance}: seu API token foi rejeitado. Rode `jira setup add` para se autenticar novamente.",
-  "refreshing…": "atualizando…"
+  "refreshing…": "atualizando…",
+  "Comment added to {key}.": "Comentário adicionado a {key}.",
+  "Error: no issue key. Provide ISSUE_KEY, or run from a branch containing one.": "Erro: nenhuma chave de issue informada. Informe ISSUE_KEY ou execute a partir de uma branch que contenha uma."
 }

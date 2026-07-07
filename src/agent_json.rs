@@ -123,6 +123,27 @@ pub fn mine_list_to_minified_json(jql: &str, rows: &[IssueRow]) -> String {
     serde_json::to_string(&obj).expect("mine_list_object is always serialisable")
 }
 
+/// Build the curated agent write-result contract for `comment --json`
+/// (ADR 0023 §3): exactly one minified success line carrying the
+/// server-assigned `comment_id` and the issue key it was posted to.
+pub fn comment_result_ok(comment_id: &str, issue_key: &str) -> String {
+    let obj = json!({
+        "ok": true,
+        "comment_id": comment_id,
+        "issue_key": issue_key,
+    });
+    serde_json::to_string(&obj).expect("comment result object is always serialisable")
+}
+
+/// Failure counterpart of `comment_result_ok` — never a false success.
+pub fn comment_result_err(error: &str) -> String {
+    let obj = json!({
+        "ok": false,
+        "error": error,
+    });
+    serde_json::to_string(&obj).expect("comment result object is always serialisable")
+}
+
 fn shape_comment(comment: &IssueComment) -> Value {
     let body = adf_to_plain_text(&comment.body);
     json!({
