@@ -996,3 +996,163 @@ async fn search_page_maps_none_token_on_last_page() {
     assert!(result.is_last_page);
     server.verify().await;
 }
+
+/// AC1: list_projects issues GET /project/search with maxResults=100 and
+/// maps `values[]` to `ProjectRow{key, name}`, preserving order.
+#[tokio::test]
+async fn list_projects_issues_max_results_param_and_maps_values_in_order() {
+    let server = MockServer::start().await;
+    let payload = serde_json::json!({
+        "values": [
+            { "key": "PROJ", "name": "Project One" },
+            { "key": "OTHER", "name": "Project Two" }
+        ]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .and(query_param("maxResults", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await.unwrap();
+
+    assert_eq!(
+        result,
+        vec![
+            crate::test_support::project_row("PROJ", "Project One"),
+            crate::test_support::project_row("OTHER", "Project Two"),
+        ]
+    );
+    server.verify().await;
+}
+
+/// AC2: an entry missing `key` or `name` is skipped, while valid entries survive.
+#[tokio::test]
+async fn list_projects_skips_entries_missing_key_or_name() {
+    let server = MockServer::start().await;
+    let payload = serde_json::json!({
+        "values": [
+            { "key": "PROJ", "name": "Project One" },
+            { "name": "Missing Key" },
+            { "key": "NONAME" },
+            { "key": "OTHER", "name": "Project Two" }
+        ]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await.unwrap();
+
+    assert_eq!(
+        result,
+        vec![
+            crate::test_support::project_row("PROJ", "Project One"),
+            crate::test_support::project_row("OTHER", "Project Two"),
+        ],
+        "entries missing key or name must be skipped, not error or panic"
+    );
+    server.verify().await;
+}
+
+/// AC2: `values` absent or `null` yields an empty vec, never an error.
+#[tokio::test]
+async fn list_projects_absent_or_null_values_yields_empty_vec() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await.unwrap();
+
+    assert_eq!(result, Vec::new(), "absent values must map to an empty vec");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn list_projects_null_values_yields_empty_vec() {
+    let server = MockServer::start().await;
+    let payload = serde_json::json!({ "values": null });
+
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await.unwrap();
+
+    assert_eq!(result, Vec::new(), "null values must map to an empty vec");
+    server.verify().await;
+}
+
+/// AC3: a 401 on project/search must map to the same typed `ClientError::Unauthorized`
+/// the other client calls produce, carrying this client's instance name.
+#[tokio::test]
+async fn list_projects_401_maps_to_typed_unauthorized_with_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => {
+            assert_eq!(instance, "test-instance");
+        }
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC3: a 5xx on project/search maps to the standard `ClientError::Other` variant,
+/// not Unauthorized. A real server error commonly returns a non-JSON body (a
+/// proxy error page, not an API payload); `serde_json::Value` parsing of that
+/// body is what surfaces the error here — the same implicit mechanism
+/// `get_issue`/`search`'s 500 tests rely on for their typed response bodies.
+#[tokio::test]
+async fn list_projects_500_does_not_map_to_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/project/search"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_projects().await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 500, got: {other:?}"),
+    }
+    server.verify().await;
+}

@@ -1,4 +1,4 @@
-use crate::models::{Attachment, Issue, IssueAssignee, IssueComment};
+use crate::models::{Attachment, Issue, IssueAssignee, IssueComment, ProjectRow};
 
 // --- ADF fixture builders (shared by render.rs and tui.rs ADF/description/comment tests) ---
 //
@@ -130,6 +130,13 @@ pub(crate) fn comment(
         body: body.to_owned(),
         created: created.map(str::to_owned),
         updated: updated.map(str::to_owned),
+    }
+}
+
+pub(crate) fn project_row(key: &str, name: &str) -> ProjectRow {
+    ProjectRow {
+        key: key.to_owned(),
+        name: name.to_owned(),
     }
 }
 

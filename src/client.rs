@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::models::{
-    Attachment, Issue, IssueAssignee, IssueComment, IssueRow, Myself, SearchResult,
+    Attachment, Issue, IssueAssignee, IssueComment, IssueRow, Myself, ProjectRow, SearchResult,
 };
 use crate::store::instances::Instance;
 use anyhow::{anyhow, Result};
@@ -46,6 +46,7 @@ pub trait JiraClient: Send + Sync {
         page_token: &str,
     ) -> ClientResult<SearchResult>;
     async fn myself(&self) -> ClientResult<Myself>;
+    async fn list_projects(&self) -> ClientResult<Vec<ProjectRow>>;
 }
 
 /// The single place where a `gouqi::async::Jira` is constructed.
@@ -149,6 +150,15 @@ impl JiraClient for GouqiJiraClient {
             account_id,
             display_name: raw.display_name,
         })
+    }
+
+    async fn list_projects(&self) -> ClientResult<Vec<ProjectRow>> {
+        let raw: serde_json::Value = self
+            .jira
+            .get_versioned("api", Some("3"), "/project/search?maxResults=100")
+            .await
+            .map_err(|e| self.classify_error(e, |e| anyhow!("list_projects(): {e}")))?;
+        Ok(extract_project_rows(&raw))
     }
 }
 
@@ -292,6 +302,27 @@ fn parse_attachment_entry(entry: &serde_json::Value) -> Option<Attachment> {
         mime_type,
         size,
     })
+}
+
+/// Extract `values[]` from a raw `/project/search` response body into curated
+/// `ProjectRow`s, mirroring `extract_attachments`'s raw-field-access pattern.
+/// Absent, `null`, or non-array `values` yields an empty vec; each array entry
+/// is parsed by `parse_project_entry`, which skips (never errors on) an entry
+/// missing its required `key`/`name`.
+fn extract_project_rows(raw: &serde_json::Value) -> Vec<ProjectRow> {
+    raw.get("values")
+        .and_then(|v| v.as_array())
+        .map(|entries| entries.iter().filter_map(parse_project_entry).collect())
+        .unwrap_or_default()
+}
+
+/// Parse a single raw `/project/search` `values[]` entry into a curated
+/// `ProjectRow`. `key` and `name` are both required — the entry is skipped
+/// (returns `None`) when either is missing or not a string.
+fn parse_project_entry(entry: &serde_json::Value) -> Option<ProjectRow> {
+    let key = entry.get("key")?.as_str()?.to_string();
+    let name = entry.get("name")?.as_str()?.to_string();
+    Some(ProjectRow { key, name })
 }
 
 fn map_comments(raw: &gouqi::Issue) -> Vec<IssueComment> {

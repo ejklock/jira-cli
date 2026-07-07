@@ -87,6 +87,14 @@ pub struct IssueRow {
     pub project: Option<String>,
 }
 
+/// A curated project row (ADR 0021 / BDR 0013): the key and name surfaced by
+/// the Projects screen and used to build a project-scoped JQL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRow {
+    pub key: String,
+    pub name: String,
+}
+
 /// The result of a JQL search — a page of issue rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchResult {
