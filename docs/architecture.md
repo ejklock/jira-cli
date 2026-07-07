@@ -111,6 +111,24 @@ color from the shared `relative_due` delta); the footer is a single mode-aware
 on the next key event. ADF `table` nodes render one line per row through the
 single `render` mapper (CLI and TUI identical).
 
+The Group-B interaction layer builds on one invariant: **`compose_detail` is
+the single geometry pass** for the detail screen. Its per-visual-row cell
+metadata carries both `href` and logical provenance `(logical_line,
+char_start, char_len)`, so modifier-click link activation
+([ADR 0018](/adr/0018-inline-body-links-modifier-click.md)), app-managed text
+selection in logical coordinates
+([ADR 0019](/adr/0019-app-managed-text-selection.md)), and the Attachments
+panel's clickable rows ([ADR 0020](/adr/0020-issue-attachments-detail-panel.md))
+all resolve through the same metadata — no second wrap/border/scroll math
+anywhere. Mouse capture is always-on
+([ADR 0017](/adr/0017-mouse-support-browse-tui.md)); the shell maps raw mouse
+events to plain-data `Msg`s via pure `view` resolvers. The Projects axis
+([ADR 0021](/adr/0021-projects-axis-browse.md)) adds `Screen::Projects` plus a
+`ListOrigin` provenance field instead of a pushdown stack — `p` lists
+projects (`JiraClient::list_projects`), Enter swaps the list JQL to the
+project and reuses the entire list machinery; back pops
+Detail → project list → Projects → mine (single-source `MINE_JQL`).
+
 **Boundaries / fitness:**
 
 - **`client` (the gouqi-backed `JiraClient` impl) is the only outbound-network

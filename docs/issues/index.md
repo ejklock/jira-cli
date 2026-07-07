@@ -50,7 +50,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | done | — |
 | [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | done | 0041 |
 | [0043](/issues/0043-b5a-projects-client-seam.md) | B5a | projects client seam: ProjectRow model + JiraClient::list_projects | done | — |
-| [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | open | 0043 |
+| [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | done | 0043 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -104,7 +104,7 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   **E3** = [0036](/issues/0036-e3-swr-first-paint-browse-entry.md)
   ([ADR 0016](/adr/0016-swr-first-paint-browse-entry.md),
   [BDR 0008](/bdr/0008-browse-entry-swr-behaviors.md)) **done**.
-- **Group B — interaction parity** (PRD 0003 R-B1..R-B5), sliced B1→B5:
+- **Group B — interaction parity** (PRD 0003 R-B1..R-B5), sliced B1→B5: **done.**
   **B1** = [0037](/issues/0037-b1-mouse-foundations.md) mouse foundations
   ([ADR 0017](/adr/0017-mouse-support-browse-tui.md),
   [BDR 0009](/bdr/0009-browse-mouse-interactions.md)) **done**;
@@ -125,7 +125,7 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   **B5** Projects→Issues axis ([ADR 0021](/adr/0021-projects-axis-browse.md),
   [BDR 0013](/bdr/0013-projects-axis-behaviors.md)), sliced
   [0043](/issues/0043-b5a-projects-client-seam.md) (client seam) +
-  [0044](/issues/0044-b5b-projects-screen-tui.md) (TUI screen) *in progress*.
+  [0044](/issues/0044-b5b-projects-screen-tui.md) (TUI screen) **done**.
 - **Group C — comment writes** ([ADR 0015](/adr/0015-comment-write-enablement.md)):
   compose modal + POST, edit/delete own + confirm modal, non-TTY `jira comment`. *To be sliced.*
 
