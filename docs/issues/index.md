@@ -49,7 +49,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0040](/issues/0040-b3-app-managed-selection.md) | B3 | app-managed text selection in the detail (drag highlight + copy on release) | done | 0037, 0039 |
 | [0041](/issues/0041-b4a-attachments-model-client-agent-json.md) | B4a | attachments on the model + client parse + agent_json array | done | — |
 | [0042](/issues/0042-b4b-attachments-tui-panel.md) | B4b | Attachments panel in the browse detail (inline, link rows, footnote) | done | 0041 |
-| [0043](/issues/0043-b5a-projects-client-seam.md) | B5a | projects client seam: ProjectRow model + JiraClient::list_projects | open | — |
+| [0043](/issues/0043-b5a-projects-client-seam.md) | B5a | projects client seam: ProjectRow model + JiraClient::list_projects | done | — |
 | [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | open | 0043 |
 
 ## Phase 2 — browse TUI (delivered)
