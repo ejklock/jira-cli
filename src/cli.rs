@@ -227,6 +227,26 @@ pub fn browse_tty_action(is_tty: bool) -> BrowseAction {
     }
 }
 
+/// Interactive-vs-agent routing surface for TTY-default read commands (ADR
+/// 0025, BDR 0016): `Interactive` opens the seeded browse TUI; `Agent` prints
+/// the existing human/agent_json output unchanged.
+#[derive(Debug, PartialEq)]
+pub enum Surface {
+    Interactive,
+    Agent,
+}
+
+/// Pure routing: a full TTY session (stdout AND stdin) without `--json` gets
+/// the interactive surface; `--json` or a non-TTY end always gets the agent
+/// surface (BDR 0016 S1/S3/S4).
+pub fn command_surface(is_tty: bool, json: bool) -> Surface {
+    if is_tty && !json {
+        Surface::Interactive
+    } else {
+        Surface::Agent
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/unit/cli.rs"]
 mod tests;

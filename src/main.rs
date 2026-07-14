@@ -15,10 +15,13 @@ mod tui;
 mod test_support;
 
 use clap::{CommandFactory, Parser};
-use cli::{bare_no_command_action, BareNoCommandAction, Cli, Command};
+use cli::{
+    bare_no_command_action, command_surface, extract_issue_key, BareNoCommandAction, Cli, Command,
+    Surface,
+};
 use commands::{
-    pick_instance, setup_add, setup_list, setup_remove, setup_test, CommentBody, GetOpts,
-    SetupAddFields,
+    parse_issue_ref, pick_instance, setup_add, setup_list, setup_remove, setup_test, CommentBody,
+    GetOpts, SetupAddFields,
 };
 use std::io::IsTerminal;
 use std::process;
@@ -280,6 +283,13 @@ fn stdin_is_tty() -> bool {
 }
 
 async fn dispatch_get(args: cli::GetArgs) -> i32 {
+    let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+    if command_surface(is_tty, args.display.json) == Surface::Interactive {
+        if let Some(key) = parse_issue_ref(&args.ref_) {
+            return dispatch_get_interactive(args.display.instance.as_deref(), key).await;
+        }
+    }
+
     let ResolvedInstance { store, instance } =
         match resolve_single_instance(args.display.instance.as_deref()) {
             Ok(r) => r,
@@ -301,8 +311,44 @@ async fn dispatch_get(args: cli::GetArgs) -> i32 {
     .await
 }
 
+/// Interactive surface for `get <ref>` (ADR 0025, BDR 0016 S7): resolves the
+/// instance the same way `browse` does, then opens the TUI seeded directly
+/// on the resolved issue's detail. Reached only when `ref_` parses to a
+/// valid issue key or browse URL — an unparseable ref falls through to
+/// `get_core` for its existing "not a valid issue key" error (exit 2),
+/// unchanged.
+async fn dispatch_get_interactive(instance_filter: Option<&str>, key: String) -> i32 {
+    let ResolvedInstance { store, instance } = match resolve_single_instance(instance_filter) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let cache = store::cache::TaskCache::new(store.conn());
+    let is_tty = std::io::stdout().is_terminal();
+    tui::browse_seeded(
+        &instance,
+        &cache,
+        is_tty,
+        tui::TuiSeed::Detail(key),
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
+/// Interactive surface for `current` (ADR 0025, BDR 0016 S9): resolves the
+/// issue key from the git branch with the same `extract_issue_key` seam
+/// `current_core` uses, so interactive and agent mode never diverge on which
+/// issue they open, then reuses `dispatch_get_interactive`'s Detail seed
+/// (S3). No resolvable branch key falls through to `current_core` in both
+/// modes, unchanged.
 async fn dispatch_current(args: cli::DisplayArgs) -> i32 {
     let branch = current_git_branch();
+    let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+    if command_surface(is_tty, args.json) == Surface::Interactive {
+        if let Some(key) = branch.as_deref().and_then(extract_issue_key) {
+            return dispatch_get_interactive(args.instance.as_deref(), key).await;
+        }
+    }
+
     let ResolvedInstance { store, instance } =
         match resolve_single_instance(args.instance.as_deref()) {
             Ok(r) => r,
@@ -325,6 +371,11 @@ async fn dispatch_current(args: cli::DisplayArgs) -> i32 {
 }
 
 async fn dispatch_mine(args: cli::MineArgs) -> i32 {
+    let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+    if command_surface(is_tty, args.json) == Surface::Interactive {
+        return dispatch_mine_interactive(args.instance.as_deref()).await;
+    }
+
     let store = match open_store() {
         Some(s) => s,
         None => return 1,
@@ -341,7 +392,35 @@ async fn dispatch_mine(args: cli::MineArgs) -> i32 {
     .await
 }
 
+/// Interactive surface for `mine`/bare `jira` (ADR 0025, BDR 0016 S1/S2):
+/// resolves the instance the same way `browse` does, then opens the TUI
+/// seeded on the mine list.
+async fn dispatch_mine_interactive(instance_filter: Option<&str>) -> i32 {
+    let ResolvedInstance { store, instance } = match resolve_single_instance(instance_filter) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let cache = store::cache::TaskCache::new(store.conn());
+    let is_tty = std::io::stdout().is_terminal();
+    tui::browse_seeded(
+        &instance,
+        &cache,
+        is_tty,
+        tui::TuiSeed::Mine,
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
 async fn dispatch_search(args: cli::SearchArgs) -> i32 {
+    let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
+    let trimmed_jql = args.jql.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if command_surface(is_tty, args.json) == Surface::Interactive {
+        if let Some(jql) = trimmed_jql {
+            return dispatch_search_interactive(args.instance.as_deref(), jql).await;
+        }
+    }
+
     let ResolvedInstance { store: _, instance } =
         match resolve_single_instance(args.instance.as_deref()) {
             Ok(r) => r,
@@ -352,6 +431,28 @@ async fn dispatch_search(args: cli::SearchArgs) -> i32 {
         &instance,
         args.json,
         &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
+/// Interactive surface for `search <jql>` (ADR 0025, BDR 0016 S5): resolves
+/// the instance the same way `browse` does, then opens the TUI seeded on
+/// that JQL's result list. Reached only when `jql` is present and non-blank
+/// — a blank/missing JQL falls through to `search_core` for its existing
+/// "search requires a JQL query" error (exit 2), unchanged.
+async fn dispatch_search_interactive(instance_filter: Option<&str>, jql: &str) -> i32 {
+    let ResolvedInstance { store, instance } = match resolve_single_instance(instance_filter) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let cache = store::cache::TaskCache::new(store.conn());
+    let is_tty = std::io::stdout().is_terminal();
+    tui::browse_seeded(
+        &instance,
+        &cache,
+        is_tty,
+        tui::TuiSeed::Search(jql.to_owned()),
         &mut std::io::stderr(),
     )
     .await

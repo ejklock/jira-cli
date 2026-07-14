@@ -21,3 +21,4 @@ Append-only: supersede or amend.
 | [0013](/bdr/0013-projects-axis-behaviors.md) | projects axis — 'p' lists projects, Enter drills into the project's issues, back pops home | Accepted |
 | [0014](/bdr/0014-non-interactive-comment-behaviors.md) | `jira comment` — non-interactive post from -m/stdin with a --json write result | Accepted |
 | [0015](/bdr/0015-comment-compose-behaviors.md) | comment compose — 'c' opens a centered modal, Ctrl+S posts, server-truth reload, lossless failure | Accepted |
+| [0016](/bdr/0016-interactive-default-read-commands.md) | read commands interactive-by-default — TTY opens the browse TUI (list/detail seed), agent mode prints | Accepted |

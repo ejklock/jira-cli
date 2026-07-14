@@ -1222,6 +1222,74 @@ async fn current_core_not_in_git_repo_exits_2_with_zero_requests() {
     );
 }
 
+/// BDR 0016 S9: `current_core` in agent mode is byte-identical to `get_core`
+/// called directly with the key `current_core` extracts from the branch —
+/// the invariant `dispatch_current`'s interactive routing relies on to seed
+/// `browse_seeded(TuiSeed::Detail(key))` with the SAME key agent mode would
+/// have fetched, so the two modes never diverge on which issue they open.
+#[tokio::test]
+async fn current_core_agent_mode_output_matches_get_core_with_extracted_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_issue_payload()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_dir, store) = make_store();
+    let inst = server_instance(&server, "work");
+    let cache = TaskCache::new(store.conn());
+
+    let mut current_out = Vec::new();
+    let mut current_err = Vec::new();
+    let current_code = current_core(
+        Some("feature/PROJ-123-add-login"),
+        &inst,
+        &cache,
+        GetOpts {
+            json: true,
+            no_comments: false,
+            refresh: false,
+        },
+        &mut current_out,
+        &mut current_err,
+    )
+    .await;
+
+    let mut get_out = Vec::new();
+    let mut get_err = Vec::new();
+    let get_code = get_core(
+        "PROJ-123",
+        &inst,
+        &cache,
+        GetOpts {
+            json: true,
+            no_comments: false,
+            refresh: false,
+        },
+        &mut get_out,
+        &mut get_err,
+    )
+    .await;
+
+    assert_eq!(
+        current_code, get_code,
+        "current_core and get_core(extracted key) must exit identically"
+    );
+    assert_eq!(
+        output_str(&current_out),
+        output_str(&get_out),
+        "current_core output must be byte-identical to get_core with the branch-extracted key"
+    );
+    assert!(
+        output_str(&current_err).is_empty() && output_str(&get_err).is_empty(),
+        "neither call should write to stderr on success"
+    );
+
+    server.verify().await;
+}
+
 /// BDR 0003 Scenario 4: miss then hit — first get makes 1 request and writes cache;
 /// second offline get makes 0 requests.
 #[tokio::test]

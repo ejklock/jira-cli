@@ -30,3 +30,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0022](/adr/0022-comment-write-seam.md) | Comment write seam — gouqi write verbs behind JiraClient, plain-text→ADF builder, author identity | Accepted |
 | [0023](/adr/0023-non-tty-comment-command.md) | Non-interactive `comment` command — -m/stdin body, --json write result, structural identity | Accepted |
 | [0024](/adr/0024-modal-overlay-compose.md) | Reusable centered modal overlay + comment compose (modal-first); server-truth refresh | Accepted |
+| [0025](/adr/0025-tty-interactive-default-read-commands.md) | TTY = interactive-by-default for read commands (mine/bare/search/get/current → browse TUI; agent mode prints) | Accepted |

@@ -55,6 +55,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0046](/issues/0046-c2-non-tty-comment-command.md) | C2 | non-interactive `jira comment` (-m/stdin body, --json write result) | done | 0045 |
 | [0047](/issues/0047-c3a-modal-primitive.md) | C3a | reusable modal overlay primitive (modal_area + render_modal) | todo | — |
 | [0048](/issues/0048-c3b-compose-post-refresh.md) | C3b | comment compose modal: 'c' opens, Ctrl+S posts, server-truth refresh | todo | 0045, 0047 |
+| [0049](/issues/0049-e1b-list-commands-tui-default.md) | E1b | list read commands open the browse TUI in a terminal (mine, bare, search) | done | — |
+| [0050](/issues/0050-e1b-detail-commands-tui-default.md) | E1b | single-issue read commands open the detail TUI in a terminal (get, current) | done | 0049 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -102,8 +104,16 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [BDR 0007](/bdr/0007-tui-visual-design-behaviors.md)): slices D1–D5 = issues
   [0030](/issues/0030-d1-theme-header-footer.md)–[0034](/issues/0034-d5-adf-table-rendering.md). **done**
   Known hardening follow-up: a tableHeader-cell-with-marks mutation test (D5 review observation).
-- **Group E — behavior parity** (PRD 0003 R-E1..R-E3): **done.** **E1** (bare TTY →
-  `mine`) required no work — already implemented and tested (`bare_no_command_action`);
+- **Group E — behavior parity** (PRD 0003 R-E1..R-E3): **done**, including the E1
+  correction. **E1** (bare TTY → `mine`) routed to `mine` but stopped
+  at the printed table; the fork opens the TUI. The TTY/agent duality is
+  formalized and applied to all read commands in **E1b**
+  ([ADR 0025](/adr/0025-tty-interactive-default-read-commands.md),
+  [BDR 0016](/bdr/0016-interactive-default-read-commands.md), issues
+  [0049](/issues/0049-e1b-list-commands-tui-default.md) +
+  [0050](/issues/0050-e1b-detail-commands-tui-default.md)) — **done**
+  (mine/bare/search/get/current all open the browse TUI seeded to the right
+  screen in an interactive terminal; agent mode prints byte-unchanged);
   **E2** = [0035](/issues/0035-e2-401-reauth-messaging.md) **done**;
   **E3** = [0036](/issues/0036-e3-swr-first-paint-browse-entry.md)
   ([ADR 0016](/adr/0016-swr-first-paint-browse-entry.md),

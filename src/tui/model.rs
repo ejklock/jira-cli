@@ -10,12 +10,14 @@ pub enum Screen {
     Detail,
 }
 
-/// The active list's provenance (ADR 0021 §3, BDR 0013): the mine list, or a
+/// The active list's provenance (ADR 0021 §3, BDR 0013; `Search` added by
+/// ADR 0025/BDR 0016 §S2): the mine list, an ad hoc JQL search seed, or a
 /// specific project's issues (`Project(key)`) drilled into from the Projects
 /// screen. Determines what a Back from the List screen restores.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListOrigin {
     Mine,
+    Search,
     Project(String),
 }
 
@@ -473,13 +475,16 @@ fn update_link_clicked(model: Model, href: String) -> (Model, Vec<Cmd>) {
     (model, vec![Cmd::OpenUrl(href)])
 }
 
-/// Back pops the axis by `(screen, list_origin)` (ADR 0021 §5, BDR 0013 S4):
-/// Detail always returns to the list it came from (unchanged); a
-/// `Project`-origin list returns to Projects (rows retained, no refetch); a
-/// `Mine`-origin list is a no-op (today's behavior); Projects with a
-/// `Project` origin restores the mine list (reloaded); Projects with the
-/// `Mine` origin goes straight back to the list with its rows intact (no
-/// refetch — nothing was ever replaced).
+/// Back pops the axis by `(screen, list_origin)` (ADR 0021 §5, BDR 0013 S4;
+/// `Search` added by ADR 0025/BDR 0016 §S2): Detail returns to the list it
+/// came from, or exits the TUI for a seeded top-level detail (ADR 0025 §3,
+/// BDR 0016 S7 — see `back_from_detail`); a `Project`-origin list returns to
+/// Projects (rows retained, no refetch); a `Mine`- or `Search`-origin list
+/// is a no-op (today's behavior — there is no screen behind a top-level
+/// list); Projects with a `Project` origin restores the mine list
+/// (reloaded); Projects with the `Mine`/`Search` origin goes straight back
+/// to the list with its rows intact (no refetch — nothing was ever
+/// replaced).
 fn update_back(model: Model) -> (Model, Vec<Cmd>) {
     match model.screen {
         Screen::Detail => back_from_detail(model),
@@ -488,7 +493,19 @@ fn update_back(model: Model) -> (Model, Vec<Cmd>) {
     }
 }
 
+/// A seeded top-level detail (ADR 0025 §3, `TuiSeed::Detail`) is the only
+/// path that leaves `jql` empty (`seeded_model` sets `jql: String::new()`
+/// for it); every drilled-in detail carries a non-empty Mine/Search/Project
+/// jql from the list it came from. Unlike `rows.is_empty()`, this signal is
+/// revalidation-immune: `update_revalidation_loaded` can legitimately swap a
+/// drilled-in detail's underlying list down to zero rows (an empty
+/// revalidation result) while the screen is still `Detail`, but it never
+/// touches `jql` — so an empty-rows check would misfire `Cmd::Quit` on a
+/// drilled-in detail that should instead return to its list.
 fn back_from_detail(model: Model) -> (Model, Vec<Cmd>) {
+    if model.jql.is_empty() {
+        return (model, vec![Cmd::Quit]);
+    }
     let next = Model {
         screen: Screen::List,
         detail: None,
@@ -509,14 +526,14 @@ fn back_from_list(model: Model) -> (Model, Vec<Cmd>) {
             };
             (next, vec![])
         }
-        ListOrigin::Mine => (model, vec![]),
+        ListOrigin::Mine | ListOrigin::Search => (model, vec![]),
     }
 }
 
 fn back_from_projects(model: Model) -> (Model, Vec<Cmd>) {
     match model.list_origin {
         ListOrigin::Project(_) => restore_mine_list(model),
-        ListOrigin::Mine => {
+        ListOrigin::Mine | ListOrigin::Search => {
             let next = Model {
                 screen: Screen::List,
                 ..model
@@ -896,3 +913,7 @@ fn update_revalidation_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
     };
     (next, vec![])
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/tui/model.rs"]
+mod tests;

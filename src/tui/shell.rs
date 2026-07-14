@@ -34,15 +34,39 @@ const TASK_LIST_MAX_AGE_SECS: i64 = 7 * 24 * 60 * 60;
 /// load-more pages are never snapshotted.
 const LIST_SCOPE: &str = "mine";
 
-/// Entry point for `jira browse`.
-///
-/// Checks the TTY guard, then fetches the mine list and enters the raw-mode async
-/// event loop. Returns 0 on clean quit (`q` or Ctrl+C) and 1 on the non-TTY guard
-/// path or fetch error.
+/// The initial screen the interactive TUI opens on (ADR 0025, BDR 0016). S1
+/// constructs `Mine`; S2 adds `Search`; S3 adds `Detail(key)` — a direct
+/// seed onto that issue's detail, with no list behind it.
+pub enum TuiSeed {
+    Mine,
+    Search(String),
+    Detail(String),
+}
+
+/// Entry point for `jira browse`; delegates to [`browse_seeded`] with
+/// `TuiSeed::Mine` (BDR 0016 S1/S2 parity — no observable change from before
+/// `browse_seeded` existed).
 pub async fn browse(
     instance: &Instance,
     cache: &TaskCache<'_>,
     is_tty: bool,
+    stderr: &mut impl Write,
+) -> i32 {
+    browse_seeded(instance, cache, is_tty, TuiSeed::Mine, stderr).await
+}
+
+/// Seeded entry point for the interactive TUI (ADR 0025, BDR 0016): routes
+/// through the same TTY guard `browse` always has (TtyError preserved), then
+/// opens the TUI on `seed`. `TuiSeed::Mine` reuses `fetch_and_run`'s
+/// entry-SWR snapshot path unchanged; `TuiSeed::Search` fetches the JQL list
+/// and seeds the TUI directly with no snapshot (ADR 0016 §4, mine scope
+/// only); `TuiSeed::Detail(key)` resolves that issue cache-or-fetch and seeds
+/// the TUI directly on its detail (ADR 0025 §3, BDR 0016 S7).
+pub async fn browse_seeded(
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    is_tty: bool,
+    seed: TuiSeed,
     stderr: &mut impl Write,
 ) -> i32 {
     use crate::cli::{browse_tty_action, BrowseAction};
@@ -52,7 +76,11 @@ pub async fn browse(
             writeln!(stderr, "{}", t(TTY_ERROR_KEY)).ok();
             1
         }
-        BrowseAction::RunTui => fetch_and_run(instance, cache, stderr).await,
+        BrowseAction::RunTui => match seed {
+            TuiSeed::Mine => fetch_and_run(instance, cache, stderr).await,
+            TuiSeed::Search(jql) => fetch_and_run_search(&jql, instance, cache, stderr).await,
+            TuiSeed::Detail(key) => fetch_and_run_detail(&key, instance, cache, stderr).await,
+        },
     }
 }
 
@@ -65,7 +93,7 @@ pub(crate) async fn fetch_and_run(
     stderr: &mut impl Write,
 ) -> i32 {
     if let Some(rows) = read_snapshot(cache, instance) {
-        return run_tui(rows, None, instance, cache, true).await;
+        return run_tui(rows, None, instance, cache, true, &TuiSeed::Mine, None).await;
     }
 
     let client = match GouqiJiraClient::new(instance) {
@@ -91,8 +119,96 @@ pub(crate) async fn fetch_and_run(
         instance,
         cache,
         false,
+        &TuiSeed::Mine,
+        None,
     )
     .await
+}
+
+/// `TuiSeed::Search(jql)`'s fetch (ADR 0025 §3, BDR 0016 S5): fetches the
+/// JQL list via the same [`run_search`] seam the in-TUI search box uses, then
+/// seeds the TUI directly. No snapshot is written — the entry-SWR snapshot
+/// is mine-scope only (ADR 0016 §4).
+async fn fetch_and_run_search(
+    jql: &str,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    stderr: &mut impl Write,
+) -> i32 {
+    let result = match run_search(instance, jql).await {
+        Ok(result) => result,
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(stderr, "{}", reauth_message(&instance)).ok();
+            return 1;
+        }
+        Err(e) => {
+            writeln!(stderr, "Error running search: {e}").ok();
+            return 1;
+        }
+    };
+
+    run_tui(
+        result.issues,
+        result.next_page_token,
+        instance,
+        cache,
+        false,
+        &TuiSeed::Search(jql.to_owned()),
+        None,
+    )
+    .await
+}
+
+/// `TuiSeed::Detail(key)`'s fetch (ADR 0025 §3, BDR 0016 S7): resolves the
+/// issue via the same cache-or-fetch seam `dispatch_load_detail` uses inside
+/// a running TUI, then seeds the TUI directly on `Screen::Detail`. Rows stay
+/// empty — there is no list behind this detail, which is exactly what lets
+/// `back_from_detail` (ADR 0025 §3) tell it apart from a drilled-in detail.
+async fn fetch_and_run_detail(
+    key: &str,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+    stderr: &mut impl Write,
+) -> i32 {
+    let issue = match resolve_detail_issue(key, instance, cache).await {
+        Ok(issue) => issue,
+        Err(ClientError::Unauthorized { instance }) => {
+            writeln!(stderr, "{}", reauth_message(&instance)).ok();
+            return 1;
+        }
+        Err(e) => {
+            writeln!(stderr, "Error fetching issue: {e}").ok();
+            return 1;
+        }
+    };
+
+    run_tui(
+        vec![],
+        None,
+        instance,
+        cache,
+        false,
+        &TuiSeed::Detail(key.to_owned()),
+        Some(issue),
+    )
+    .await
+}
+
+/// Cache-or-fetch seam for a single issue, shared in spirit with
+/// `dispatch_load_detail`'s in-TUI path: a cache hit serves synchronously; a
+/// miss fetches over the network and warms the cache on success.
+async fn resolve_detail_issue(
+    key: &str,
+    instance: &Instance,
+    cache: &TaskCache<'_>,
+) -> Result<Issue, ClientError> {
+    let issue_cache = IssueCache::new(cache.conn());
+    if let Ok(Some(cached)) = issue_cache.read(&instance.name, key) {
+        return Ok(cached.issue);
+    }
+    let issue = fetch_issue(instance, key).await?;
+    cache_detail(cache, &instance.name, &issue);
+    Ok(issue)
 }
 
 /// Reads the warm task-list snapshot for `instance` (ADR 0016 §1, mine scope
@@ -124,6 +240,8 @@ async fn run_tui(
     instance: &Instance,
     cache: &TaskCache<'_>,
     revalidating: bool,
+    seed: &TuiSeed,
+    detail: Option<Issue>,
 ) -> i32 {
     let mut stdout = io::stdout();
     if enable_raw_mode().is_err() {
@@ -144,16 +262,48 @@ async fn run_tui(
         }
     };
 
-    let model = Model {
+    let model = seeded_model(rows, next_page_token, instance, revalidating, seed);
+    let model = seed_detail(model, detail);
+    let exit_code = event_loop(&mut terminal, model, instance, cache).await;
+
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    );
+    let _ = disable_raw_mode();
+    exit_code
+}
+
+/// Builds the initial `Model` for `seed` (ADR 0025, BDR 0016): `TuiSeed::Mine`
+/// matches `browse`'s pre-existing entry exactly (`Screen::List`,
+/// `ListOrigin::Mine`, the mine JQL); `TuiSeed::Search(jql)` seeds the same
+/// `Screen::List` with that JQL and `ListOrigin::Search`; `TuiSeed::Detail`
+/// seeds `Screen::Detail` directly, with no JQL/list-origin to restore on
+/// Back (empty rows — `back_from_detail` reads that as top-level). The
+/// fetched issue itself is applied afterwards by [`seed_detail`].
+fn seeded_model(
+    rows: Vec<IssueRow>,
+    next_page_token: Option<String>,
+    instance: &Instance,
+    revalidating: bool,
+    seed: &TuiSeed,
+) -> Model {
+    let (screen, jql, list_origin) = match seed {
+        TuiSeed::Mine => (Screen::List, MINE_JQL.to_owned(), ListOrigin::Mine),
+        TuiSeed::Search(jql) => (Screen::List, jql.clone(), ListOrigin::Search),
+        TuiSeed::Detail(_) => (Screen::Detail, String::new(), ListOrigin::Mine),
+    };
+    Model {
         rows,
         selected: 0,
-        screen: Screen::List,
+        screen,
         detail: None,
         detail_scroll: 0,
         search: None,
         error: None,
         base_url: instance.base_url.clone(),
-        jql: MINE_JQL.to_owned(),
+        jql,
         next_page_token,
         detail_links: vec![],
         detail_focused_link: None,
@@ -164,19 +314,21 @@ async fn run_tui(
         }],
         status: None,
         revalidating,
-        list_origin: ListOrigin::Mine,
+        list_origin,
         projects: vec![],
         projects_selected: 0,
-    };
-    let exit_code = event_loop(&mut terminal, model, instance, cache).await;
+    }
+}
 
-    let _ = execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    );
-    let _ = disable_raw_mode();
-    exit_code
+/// Applies a fetched `TuiSeed::Detail` issue to `model` through the same
+/// `Msg::DetailLoaded` reducer the in-TUI fetch path uses (ADR 0025 §3), so
+/// `detail_links`/`detail_focused_link` are derived identically either way.
+/// A no-op for `Mine`/`Search` (`detail` is `None`).
+fn seed_detail(model: Model, detail: Option<Issue>) -> Model {
+    match detail {
+        Some(issue) => update(model, Msg::DetailLoaded(Box::new(issue))).0,
+        None => model,
+    }
 }
 
 fn map_key_to_msg(key_code: KeyCode, modifiers: KeyModifiers, search_active: bool) -> Option<Msg> {
@@ -677,3 +829,7 @@ fn copy_to_clipboard(key: &str) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/tui/shell.rs"]
+mod tests;

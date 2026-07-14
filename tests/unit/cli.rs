@@ -283,3 +283,25 @@ fn bare_no_command_action_non_tty_yields_help_exit2() {
         BareNoCommandAction::HelpExit2
     );
 }
+
+// ---- command_surface truth table (ADR 0025, BDR 0016 S1/S3/S4) ----
+
+#[test]
+fn command_surface_tty_without_json_is_interactive() {
+    assert_eq!(command_surface(true, false), Surface::Interactive);
+}
+
+#[test]
+fn command_surface_tty_with_json_is_agent() {
+    assert_eq!(command_surface(true, true), Surface::Agent);
+}
+
+#[test]
+fn command_surface_non_tty_without_json_is_agent() {
+    assert_eq!(command_surface(false, false), Surface::Agent);
+}
+
+#[test]
+fn command_surface_non_tty_with_json_is_agent() {
+    assert_eq!(command_surface(false, true), Surface::Agent);
+}

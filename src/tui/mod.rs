@@ -8,7 +8,7 @@ mod view;
 // so a plain `cargo build` sees them as unused.
 #[allow(unused_imports)]
 pub use model::{update, Cmd, Model, Msg, Screen};
-pub use shell::browse;
+pub use shell::{browse, browse_seeded, TuiSeed};
 #[allow(unused_imports)]
 pub use view::{view, view_detail};
 
