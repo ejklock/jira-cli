@@ -772,9 +772,10 @@ fn register_logical_line(logical_lines: &mut Vec<String>, text: String) -> usize
 }
 
 /// The Details panel (BDR 0007 S5): a 2-column meta table — Title, Key,
-/// Status, Type, Assignee, and Due (omitted when absent/unparseable). Also
-/// produces the panel's hit-test metadata (ADR 0019 §1) so its rows are
-/// selectable and copyable like every other panel.
+/// Status, Type, Assignee, Created, Updated, and Due (each of the latter
+/// three omitted when absent/unparseable). Also produces the panel's
+/// hit-test metadata (ADR 0019 §1) so its rows are selectable and copyable
+/// like every other panel.
 fn details_panel(
     issue: &Issue,
     width: u16,
@@ -812,6 +813,22 @@ fn details_meta_run_lines(
             logical_lines,
         ),
     ];
+    if let Some(created) = &issue.created {
+        rows.push(meta_run_line(
+            &t("Created"),
+            created,
+            inner_width,
+            logical_lines,
+        ));
+    }
+    if let Some(updated) = &issue.updated {
+        rows.push(meta_run_line(
+            &t("Updated"),
+            updated,
+            inner_width,
+            logical_lines,
+        ));
+    }
     if let Some(due) = due_relative_text(issue) {
         rows.push(meta_run_line(&t("Due"), &due, inner_width, logical_lines));
     }

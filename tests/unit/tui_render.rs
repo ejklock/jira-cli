@@ -1222,6 +1222,64 @@ fn view_detail_renders_three_panels_with_details_meta_rows() {
     set_language("en");
 }
 
+// ---- add-updated-created-tui-detail: Details panel's Created/Updated rows
+// mirror the CLI get output (render_issue_human) — conditional-push, so the
+// row only appears when the field is Some ----
+
+#[test]
+fn view_detail_details_panel_renders_created_and_updated_rows_when_present() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        created: Some("2026-01-01T00:00:00.000+0000".to_owned()),
+        updated: Some("2026-01-05T00:00:00.000+0000".to_owned()),
+        ..crate::test_support::issue("PROJ-70")
+    });
+
+    let buf = render_to_buffer(&model, 100, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        text.contains("Created: 2026-01-01T00:00:00.000+0000"),
+        "the Details panel's Created row must show the raw timestamp; got: {text}"
+    );
+    assert!(
+        text.contains("Updated: 2026-01-05T00:00:00.000+0000"),
+        "the Details panel's Updated row must show the raw timestamp; got: {text}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_details_panel_omits_created_and_updated_rows_when_absent() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(crate::models::Issue {
+        created: None,
+        updated: None,
+        ..crate::test_support::issue("PROJ-71")
+    });
+
+    let buf = render_to_buffer(&model, 100, 40);
+    let text = buffer_text(&buf);
+
+    assert!(
+        !text.contains("Created:"),
+        "no Created row must render when issue.created is None; got: {text}"
+    );
+    assert!(
+        !text.contains("Updated:"),
+        "no Updated row must render when issue.updated is None; got: {text}"
+    );
+
+    set_language("en");
+}
+
 // ---- ADR 0018 / BDR 0010 S1, S4: inline '[url]' link token in the Description panel ----
 
 fn make_issue_with_inline_link(key: &str) -> crate::models::Issue {
@@ -1380,7 +1438,11 @@ fn detail_link_at_finds_the_token_at_its_scrolled_row() {
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_inline_link_and_comments("PROJ-82", 20));
 
-    let (width, height) = (100, 15);
+    // height=17: the Details panel now carries Created/Updated rows in
+    // addition to the pre-existing Title/Key/Status/Type/Assignee rows, so
+    // the viewport must be tall enough for the description token to still
+    // render unscrolled.
+    let (width, height) = (100, 17);
     let area = Rect::new(0, 0, width, height);
 
     let buf_unscrolled = render_to_buffer(&model, width, height);
@@ -1800,7 +1862,9 @@ fn view_detail_attachments_panel_adds_lines_that_push_content_past_the_viewport(
         None,
     )];
 
-    let (width, height) = (100, 40);
+    // height bumped from 40 to 42: the Details panel now carries two more
+    // rows (Created/Updated), which grows the baseline by exactly that much.
+    let (width, height) = (100, 42);
     let mut model_without = make_detail_model(vec![]);
     model_without.detail = Some(base_issue);
     let mut model_with = make_detail_model(vec![]);
