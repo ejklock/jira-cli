@@ -2,7 +2,9 @@ use clap::{Args, Parser, Subcommand};
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub const KNOWN_COMMANDS: [&str; 6] = ["setup", "get", "current", "mine", "browse", "comment"];
+pub const KNOWN_COMMANDS: [&str; 8] = [
+    "setup", "get", "current", "mine", "list", "search", "browse", "comment",
+];
 
 /// Fetch Jira issues from one or more configured instances.
 #[derive(Parser, Debug)]

@@ -1,4 +1,5 @@
 use super::*;
+use clap::CommandFactory;
 
 fn s(v: &str) -> String {
     v.to_owned()
@@ -251,6 +252,41 @@ fn parse_list_alias_for_mine() {
 fn parse_search_no_flags() {
     let cli = parse(&["search"]).unwrap();
     assert!(matches!(cli.command, Some(Command::Search(_))));
+}
+
+#[test]
+fn search_with_jql_passes_through_unchanged() {
+    let input = argv(&["search", "project = FOO"]);
+    let result = normalize_argv(&input, None);
+    assert_eq!(result, input, "search must not be prefixed with 'get'");
+}
+
+#[test]
+fn list_alias_passes_through_unchanged() {
+    let input = argv(&["list"]);
+    let result = normalize_argv(&input, None);
+    assert_eq!(
+        result, input,
+        "list (mine alias) must not be prefixed with 'get'"
+    );
+}
+
+#[test]
+fn known_commands_cover_every_subcommand_name_and_alias() {
+    for sub in Cli::command().get_subcommands() {
+        assert!(
+            KNOWN_COMMANDS.contains(&sub.get_name()),
+            "subcommand '{}' is missing from KNOWN_COMMANDS",
+            sub.get_name()
+        );
+        for alias in sub.get_all_aliases() {
+            assert!(
+                KNOWN_COMMANDS.contains(&alias),
+                "alias '{alias}' of subcommand '{}' is missing from KNOWN_COMMANDS",
+                sub.get_name()
+            );
+        }
+    }
 }
 
 #[test]
