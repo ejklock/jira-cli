@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use crate::client::{ClientError, GouqiJiraClient, JiraClient};
 use crate::commands::{reauth_message, DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow, ProjectRow, SearchResult};
+use crate::models::{Issue, IssueRow, Myself, ProjectRow, SearchResult};
 use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
@@ -318,6 +318,8 @@ fn seeded_model(
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -375,6 +377,9 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         'p' => Some(Msg::OpenProjects),
         'c' if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
         'c' => Some(Msg::OpenCompose),
+        ']' => Some(Msg::FocusNextComment),
+        '[' => Some(Msg::FocusPrevComment),
+        'e' => Some(Msg::EditFocusedComment),
         _ => None,
     }
 }
@@ -686,6 +691,18 @@ fn dispatch_cmd(
             spawn_load_detail(key, instance.clone(), tx.clone());
             model
         }
+        Cmd::LoadMyself => {
+            spawn_load_myself(instance.clone(), tx.clone());
+            model
+        }
+        Cmd::EditComment {
+            key,
+            comment_id,
+            body,
+        } => {
+            spawn_edit_comment(key, comment_id, body, instance.clone(), tx.clone());
+            model
+        }
     }
 }
 
@@ -816,6 +833,59 @@ pub(crate) async fn submit_comment(
     let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.add_comment(key, body).await?;
     Ok(())
+}
+
+/// Spawns the comment-compose edit-submit effect (ADR 0026 §3, BDR 0017 S4-S5):
+/// PUTs `body` onto `comment_id` on `key` via the `update_comment` seam and
+/// replies the SAME `Msg::CommentMutationOk`/`Msg::CommentMutationErr`
+/// `spawn_submit_comment` uses, mirroring its 401 -> re-auth guidance mapping.
+fn spawn_edit_comment(
+    key: String,
+    comment_id: String,
+    body: String,
+    instance: Instance,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    tokio::spawn(async move {
+        let msg = match edit_comment(&instance, &key, &comment_id, &body).await {
+            Ok(()) => Msg::CommentMutationOk,
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::CommentMutationErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::CommentMutationErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn edit_comment(
+    instance: &Instance,
+    key: &str,
+    comment_id: &str,
+    body: &str,
+) -> Result<(), ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.update_comment(key, comment_id, body).await?;
+    Ok(())
+}
+
+/// Spawns the one-shot authenticated-identity fetch (ADR 0026 §2, BDR 0017
+/// S2), dispatched once by `entry_cmds` at browse startup: on success replies
+/// `Msg::MyselfLoaded(account_id)`; on failure (offline, auth error) sends
+/// nothing at all — `current_account_id` safely stays `None` (safe
+/// degradation, never panics or blocks), mirroring `spawn_submit_comment`'s
+/// spawn shape.
+fn spawn_load_myself(instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        if let Ok(myself) = fetch_myself(&instance).await {
+            let _ = tx.send(Msg::MyselfLoaded(myself.account_id));
+        }
+    });
+}
+
+pub(crate) async fn fetch_myself(instance: &Instance) -> Result<Myself, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.myself().await
 }
 
 /// Spawns the load-more page fetch effect (ADR 0009); the result is sent back

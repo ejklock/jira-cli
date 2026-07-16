@@ -1,8 +1,8 @@
 use super::*;
 
 use super::model::{
-    entry_cmds, footer_mode, Compose, ComposeStatus, FooterMode, ListOrigin, Selection, StatusKind,
-    StatusMsg,
+    entry_cmds, footer_mode, Compose, ComposeStatus, ComposeTarget, FooterMode, ListOrigin,
+    Selection, StatusKind, StatusMsg,
 };
 use super::shell::{
     handle_reply, map_key_in_compose_mode, map_key_in_normal_mode, map_key_in_search_mode,
@@ -99,6 +99,8 @@ fn make_list_model(keys: &[&str]) -> Model {
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -611,19 +613,22 @@ fn read_snapshot_returns_none_when_no_row_exists() {
 // ---- S1: entry_cmds — the pure warm/cold seam ----
 
 #[test]
-fn entry_cmds_warm_yields_exactly_one_revalidate_list() {
+fn entry_cmds_warm_yields_load_myself_then_revalidate_list() {
     let mut model = make_list_model(&["PROJ-1"]);
     model.revalidating = true;
 
-    assert_eq!(entry_cmds(&model), vec![Cmd::RevalidateList]);
+    assert_eq!(
+        entry_cmds(&model),
+        vec![Cmd::LoadMyself, Cmd::RevalidateList]
+    );
 }
 
 #[test]
-fn entry_cmds_cold_yields_no_cmds() {
+fn entry_cmds_cold_yields_exactly_one_load_myself() {
     let model = make_list_model(&["PROJ-1"]);
     assert!(!model.revalidating);
 
-    assert!(entry_cmds(&model).is_empty());
+    assert_eq!(entry_cmds(&model), vec![Cmd::LoadMyself]);
 }
 
 // ---- S2: RevalidationLoaded swaps rows, clamps selection, restores token ----
@@ -4074,6 +4079,20 @@ fn make_composing_detail_model(buffer: &str) -> Model {
     model.compose = Some(Compose {
         buffer: buffer.to_owned(),
         status: ComposeStatus::Idle,
+        target: ComposeTarget::New,
+    });
+    model
+}
+
+fn make_editing_detail_model(buffer: &str, comment_id: &str) -> Model {
+    let mut model = make_compose_detail_model();
+    model.detail_scroll = 2;
+    model.compose = Some(Compose {
+        buffer: buffer.to_owned(),
+        status: ComposeStatus::Idle,
+        target: ComposeTarget::Edit {
+            comment_id: comment_id.to_owned(),
+        },
     });
     model
 }
@@ -4238,6 +4257,7 @@ fn comment_mutation_ok_closes_compose_and_emits_exactly_one_cache_busting_refres
     model.compose = Some(Compose {
         buffer: "hi".to_owned(),
         status: ComposeStatus::Submitting,
+        target: ComposeTarget::New,
     });
 
     let (next, cmds) = update(model, Msg::CommentMutationOk);
@@ -4258,6 +4278,7 @@ fn comment_mutation_ok_with_no_loaded_issue_emits_no_refresh() {
     model.compose = Some(Compose {
         buffer: "hi".to_owned(),
         status: ComposeStatus::Submitting,
+        target: ComposeTarget::New,
     });
 
     let (next, cmds) = update(model, Msg::CommentMutationOk);
@@ -4274,6 +4295,7 @@ fn comment_mutation_err_preserves_buffer_sets_error_and_emits_no_refresh() {
     model.compose = Some(Compose {
         buffer: "hi".to_owned(),
         status: ComposeStatus::Submitting,
+        target: ComposeTarget::New,
     });
 
     let (next, cmds) = update(model, Msg::CommentMutationErr("boom".to_owned()));
@@ -4452,4 +4474,458 @@ fn map_key_in_compose_mode_plain_char_appends() {
 #[test]
 fn map_key_in_compose_mode_tab_is_unmapped() {
     assert!(map_key_in_compose_mode(KeyCode::Tab, KeyModifiers::NONE).is_none());
+}
+
+// ---- c4a1-comment-focus-ownership / ADR 0026 §1-§2, BDR 0017 S1-S2, S9 ----
+
+fn make_three_comments() -> Vec<crate::models::IssueComment> {
+    vec![
+        comment(None, Some("Alice"), "First.", Some("2026-01-01"), None),
+        comment(None, Some("Bob"), "Second.", Some("2026-01-02"), None),
+        comment(None, Some("Carol"), "Third.", Some("2026-01-03"), None),
+    ]
+}
+
+fn make_comment_detail_model(comments: Vec<crate::models::IssueComment>) -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue_with_comments("PROJ-1", comments));
+    model
+}
+
+// ---- S1: focus arithmetic — ']' from None -> 0, clamps at len-1; '[' clamps
+// at 0; an empty thread stays None; leaving Detail resets focus ----
+
+#[test]
+fn focus_next_comment_from_none_focuses_the_first_comment() {
+    let model = make_comment_detail_model(make_three_comments());
+
+    let (next, cmds) = update(model, Msg::FocusNextComment);
+
+    assert_eq!(next.detail_focused_comment, Some(0));
+    assert!(cmds.is_empty(), "a focus move must emit no Cmd");
+}
+
+#[test]
+fn focus_next_comment_repeated_clamps_at_the_last_index() {
+    let mut model = make_comment_detail_model(make_three_comments());
+    model.detail_focused_comment = Some(2);
+
+    let (next, cmds) = update(model, Msg::FocusNextComment);
+
+    assert_eq!(
+        next.detail_focused_comment,
+        Some(2),
+        "']' past the last comment must clamp, never wrap"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_next_comment_advances_by_one() {
+    let mut model = make_comment_detail_model(make_three_comments());
+    model.detail_focused_comment = Some(0);
+
+    let (next, cmds) = update(model, Msg::FocusNextComment);
+
+    assert_eq!(next.detail_focused_comment, Some(1));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_prev_comment_from_none_focuses_the_last_comment() {
+    let model = make_comment_detail_model(make_three_comments());
+
+    let (next, cmds) = update(model, Msg::FocusPrevComment);
+
+    assert_eq!(next.detail_focused_comment, Some(2));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_prev_comment_repeated_clamps_at_zero() {
+    let mut model = make_comment_detail_model(make_three_comments());
+    model.detail_focused_comment = Some(0);
+
+    let (next, cmds) = update(model, Msg::FocusPrevComment);
+
+    assert_eq!(
+        next.detail_focused_comment,
+        Some(0),
+        "'[' before the first comment must clamp, never wrap"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_next_comment_on_empty_thread_stays_none() {
+    let model = make_comment_detail_model(vec![]);
+
+    let (next, cmds) = update(model, Msg::FocusNextComment);
+
+    assert_eq!(
+        next.detail_focused_comment, None,
+        "an empty thread must leave focus None"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_prev_comment_on_empty_thread_stays_none() {
+    let model = make_comment_detail_model(vec![]);
+
+    let (next, cmds) = update(model, Msg::FocusPrevComment);
+
+    assert_eq!(next.detail_focused_comment, None);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn focus_next_comment_on_list_screen_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.detail_focused_comment = Some(0);
+
+    let (next, cmds) = update(model, Msg::FocusNextComment);
+
+    assert_eq!(
+        next.detail_focused_comment,
+        Some(0),
+        "FocusNextComment off the Detail screen must not change focus"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_back_from_detail_resets_focused_comment_to_none() {
+    let mut model = make_comment_detail_model(make_three_comments());
+    model.detail_focused_comment = Some(1);
+
+    let (next, cmds) = update(model, Msg::Back);
+
+    assert_eq!(
+        next.detail_focused_comment, None,
+        "leaving the Detail screen must reset comment focus"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn update_detail_loaded_leaves_comment_focus_none() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+
+    let issue = make_issue_with_comments("PROJ-1", make_three_comments());
+    let (next, _) = update(model, Msg::DetailLoaded(Box::new(issue)));
+
+    assert_eq!(
+        next.detail_focused_comment, None,
+        "loading a fresh detail must start with no comment focused"
+    );
+}
+
+// ---- S9: focus Msgs do not leak past an open compose ----
+
+#[test]
+fn focus_next_and_prev_comment_are_inert_while_composing() {
+    fn assert_inert(msg: Msg) {
+        let mut model = make_composing_detail_model("draft");
+        model.detail = Some(make_issue_with_comments("PROJ-1", make_three_comments()));
+        model.detail_focused_comment = Some(1);
+
+        let (next, cmds) = update(model, msg);
+
+        assert_eq!(
+            next.detail_focused_comment,
+            Some(1),
+            "a focus Msg must not change focus while composing"
+        );
+        assert!(next.compose.is_some(), "the compose must remain open");
+        assert!(cmds.is_empty());
+    }
+
+    assert_inert(Msg::FocusNextComment);
+    assert_inert(Msg::FocusPrevComment);
+}
+
+// ---- S2: ownership from a one-shot myself fetch ----
+
+#[test]
+fn myself_loaded_sets_current_account_id() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::MyselfLoaded("acct-A".to_owned()));
+
+    assert_eq!(next.current_account_id.as_deref(), Some("acct-A"));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn is_own_comment_true_when_author_matches_current_account_id() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.current_account_id = Some("acct-A".to_owned());
+    let own = crate::models::IssueComment {
+        author_account_id: Some("acct-A".to_owned()),
+        ..comment(None, Some("Alice"), "hi", None, None)
+    };
+
+    assert!(model.is_own_comment(&own));
+}
+
+#[test]
+fn is_own_comment_false_when_author_does_not_match() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.current_account_id = Some("acct-A".to_owned());
+    let not_own = crate::models::IssueComment {
+        author_account_id: Some("acct-B".to_owned()),
+        ..comment(None, Some("Bob"), "hi", None, None)
+    };
+
+    assert!(!model.is_own_comment(&not_own));
+}
+
+#[test]
+fn is_own_comment_false_when_current_account_id_is_none() {
+    let model = make_list_model(&["PROJ-1"]);
+    let comment_by_a = crate::models::IssueComment {
+        author_account_id: Some("acct-A".to_owned()),
+        ..comment(None, Some("Alice"), "hi", None, None)
+    };
+
+    assert!(!model.is_own_comment(&comment_by_a));
+}
+
+#[test]
+fn is_own_comment_false_when_comment_has_no_author_account_id() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.current_account_id = Some("acct-A".to_owned());
+    let unattributed = comment(None, Some("Alice"), "hi", None, None);
+
+    assert!(!model.is_own_comment(&unattributed));
+}
+
+// ---- c4a2-comment-edit / ADR 0026 §3, BDR 0017 S3-S6 — 'e' opens the
+// compose in edit mode for a focused OWN comment; non-own/no-focus gating;
+// Ctrl+S branches on the compose target; Ok/Err reuse the C3b arms verbatim
+// for the edit path ----
+
+const OWNER_ACCOUNT_ID: &str = "acct-A";
+
+fn own_comment_with_id(id: &str, body: &str) -> crate::models::IssueComment {
+    crate::models::IssueComment {
+        author_account_id: Some(OWNER_ACCOUNT_ID.to_owned()),
+        ..comment(Some(id), Some("Alice"), body, None, None)
+    }
+}
+
+fn comment_detail_model_with_focus(
+    comments: Vec<crate::models::IssueComment>,
+    focus: Option<usize>,
+) -> Model {
+    let mut model = make_comment_detail_model(comments);
+    model.current_account_id = Some(OWNER_ACCOUNT_ID.to_owned());
+    model.detail_focused_comment = focus;
+    model
+}
+
+#[test]
+fn edit_focused_comment_on_own_comment_opens_edit_compose_prefilled_with_body_and_title() {
+    let own = own_comment_with_id("10001", "hello world");
+    let model = comment_detail_model_with_focus(vec![own], Some(0));
+
+    let (next, cmds) = update(model, Msg::EditFocusedComment);
+
+    let compose = next
+        .compose
+        .expect("'e' on an own comment with an id must open the compose");
+    assert_eq!(
+        compose.target,
+        ComposeTarget::Edit {
+            comment_id: "10001".to_owned()
+        },
+        "the compose target must carry the focused comment's id"
+    );
+    assert_eq!(
+        compose.buffer, "hello world",
+        "the buffer must equal adf_to_plain_text(comment.body)"
+    );
+    assert_eq!(compose.status, ComposeStatus::Idle);
+    assert_eq!(
+        compose.target.title_key(),
+        "Edit comment",
+        "the title-key helper must resolve to Edit comment"
+    );
+    assert!(cmds.is_empty(), "opening the edit compose must emit no Cmd");
+}
+
+#[test]
+fn edit_focused_comment_on_non_own_comment_sets_hint_and_opens_no_compose() {
+    let not_own = crate::models::IssueComment {
+        author_account_id: Some("acct-B".to_owned()),
+        ..comment(Some("10002"), Some("Bob"), "hi", None, None)
+    };
+    let model = comment_detail_model_with_focus(vec![not_own], Some(0));
+
+    let (next, cmds) = update(model, Msg::EditFocusedComment);
+
+    assert!(
+        next.compose.is_none(),
+        "'e' on a non-own comment must open no compose"
+    );
+    let status = next
+        .status
+        .expect("'e' on a non-own comment must set a status hint");
+    assert_eq!(status.kind, StatusKind::Info);
+    assert!(!status.text.is_empty(), "the hint text must not be empty");
+    assert!(cmds.is_empty(), "'e' on a non-own comment must emit no Cmd");
+}
+
+#[test]
+fn edit_focused_comment_with_no_focus_is_noop() {
+    let own = own_comment_with_id("10001", "hello");
+    let model = comment_detail_model_with_focus(vec![own], None);
+
+    let (next, cmds) = update(model, Msg::EditFocusedComment);
+
+    assert!(
+        next.compose.is_none(),
+        "no focused comment must open no compose"
+    );
+    assert!(
+        next.status.is_none(),
+        "no focused comment must change no status"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn edit_focused_comment_on_own_comment_with_no_id_is_noop() {
+    let own_no_id = crate::models::IssueComment {
+        author_account_id: Some(OWNER_ACCOUNT_ID.to_owned()),
+        ..comment(None, Some("Alice"), "hello", None, None)
+    };
+    let model = comment_detail_model_with_focus(vec![own_no_id], Some(0));
+
+    let (next, cmds) = update(model, Msg::EditFocusedComment);
+
+    assert!(
+        next.compose.is_none(),
+        "an own comment with no id must open no compose"
+    );
+    assert!(next.status.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn submit_compose_edit_target_emits_exactly_one_edit_comment_and_sets_submitting() {
+    let model = make_editing_detail_model("updated text", "10001");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::EditComment {
+            key: "PROJ-1".to_owned(),
+            comment_id: "10001".to_owned(),
+            body: "updated text".to_owned(),
+        }],
+        "a non-empty Edit-target buffer must emit exactly one EditComment"
+    );
+    let compose = next
+        .compose
+        .expect("the compose must stay open while submitting");
+    assert_eq!(compose.status, ComposeStatus::Submitting);
+    assert_eq!(compose.buffer, "updated text");
+}
+
+#[test]
+fn submit_compose_edit_target_with_empty_buffer_emits_no_cmd() {
+    let model = make_editing_detail_model("   \n  ", "10001");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert!(
+        cmds.is_empty(),
+        "an empty/whitespace Edit buffer must never submit"
+    );
+    assert_eq!(next.compose.unwrap().status, ComposeStatus::Idle);
+}
+
+#[test]
+fn submit_compose_new_target_still_emits_submit_comment_not_edit_comment() {
+    let model = make_composing_detail_model("hi");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::SubmitComment {
+            key: "PROJ-1".to_owned(),
+            body: "hi".to_owned(),
+        }],
+        "a New-target compose must still emit SubmitComment (regression guard)"
+    );
+    assert_eq!(next.compose.unwrap().status, ComposeStatus::Submitting);
+}
+
+#[test]
+fn comment_mutation_ok_after_edit_closes_compose_and_emits_one_refresh() {
+    let mut model = make_editing_detail_model("updated", "10001");
+    model.compose = Some(Compose {
+        status: ComposeStatus::Submitting,
+        ..model.compose.unwrap()
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(
+        next.compose.is_none(),
+        "an edit success must close the compose"
+    );
+    assert_eq!(
+        cmds,
+        vec![Cmd::RefreshDetail("PROJ-1".to_owned())],
+        "an edit success must emit exactly one cache-busting refresh, no local mutation"
+    );
+}
+
+#[test]
+fn edit_focused_comment_is_inert_while_composing() {
+    let mut model = make_composing_detail_model("draft");
+    model.detail = Some(make_issue_with_comments(
+        "PROJ-1",
+        vec![own_comment_with_id("10001", "hello")],
+    ));
+    model.current_account_id = Some(OWNER_ACCOUNT_ID.to_owned());
+    model.detail_focused_comment = Some(0);
+
+    let (next, cmds) = update(model, Msg::EditFocusedComment);
+
+    assert_eq!(
+        next.compose.unwrap().buffer,
+        "draft",
+        "EditFocusedComment must not replace the open compose while composing"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn comment_mutation_err_after_edit_preserves_buffer_and_sets_reauth_error() {
+    let mut model = make_editing_detail_model("updated", "10001");
+    model.compose = Some(Compose {
+        status: ComposeStatus::Submitting,
+        ..model.compose.unwrap()
+    });
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr(guidance.clone()));
+
+    let compose = next
+        .compose
+        .expect("an edit failure must keep the compose open");
+    assert_eq!(compose.buffer, "updated", "the draft must be preserved");
+    assert_eq!(compose.status, ComposeStatus::Error(guidance));
+    assert!(
+        cmds.is_empty(),
+        "an edit failure must emit zero refresh Cmds"
+    );
 }

@@ -602,6 +602,7 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             chunks[1],
             issue,
             model.detail_focused_link,
+            model.detail_focused_comment,
             model.detail_scroll,
             model.selection.as_ref(),
         ),
@@ -613,14 +614,16 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
 }
 
 /// Renders the comment compose over the detail through the C3a modal
-/// primitive (ADR 0024 §3, BDR 0015 S5): every user-facing string routes
-/// through `t()`, the buffer becomes the modal's body split on `\n` (Enter's
+/// primitive (ADR 0024 §3, ADR 0026 §3, BDR 0015 S5, BDR 0017 S3): every
+/// user-facing string routes through `t()`, the title comes from the
+/// compose's `target` (`ComposeTarget::title_key`, "New comment" vs "Edit
+/// comment"), the buffer becomes the modal's body split on `\n` (Enter's
 /// newline, S1), and the status line reflects `ComposeStatus`. Only ever
 /// called from `view_detail` with `model.compose` set, so it never renders
 /// on List/Projects.
 fn render_compose_modal(frame: &mut Frame, area: Rect, compose: &Compose) {
     let content = modal::ModalContent {
-        title: t("New comment"),
+        title: t(compose.target.title_key()),
         body: compose_body_lines(&compose.buffer),
         hint: Some(t("Ctrl+S send · Esc cancel")),
         status: compose_status_text(&compose.status),
@@ -656,11 +659,12 @@ fn render_detail_panels(
     area: Rect,
     issue: &Issue,
     focused_link: Option<usize>,
+    focused_comment: Option<usize>,
     scroll: u16,
     selection: Option<&Selection>,
 ) {
     let inner_width = area.width.saturating_sub(DETAIL_FRAME_BORDER_COLS);
-    let compose = compose_detail(issue, focused_link, inner_width);
+    let compose = compose_detail(issue, focused_link, focused_comment, inner_width);
     let lines = apply_selection_highlight(compose, selection);
     let viewport_height = area.height.saturating_sub(DETAIL_FRAME_BORDER_ROWS);
     let total_lines = lines.len() as u16;
@@ -759,7 +763,12 @@ struct DetailCompose {
 /// The Description panel's inline `[url]` tokens and the Attachments panel's
 /// `[n] ↗ filename` rows carry an `href` (ADR 0020); every content cell
 /// across all panels carries logical provenance for selection.
-fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> DetailCompose {
+fn compose_detail(
+    issue: &Issue,
+    focused_link: Option<usize>,
+    focused_comment: Option<usize>,
+    width: u16,
+) -> DetailCompose {
     let mut logical_lines = Vec::new();
 
     let (details_lines, details_link_rows) = details_panel(issue, width, &mut logical_lines);
@@ -776,7 +785,7 @@ fn compose_detail(issue: &Issue, focused_link: Option<usize>, width: u16) -> Det
     link_rows.extend(description_link_rows);
 
     if let Some((comments_lines, comments_link_rows)) =
-        comments_panel(issue, width, &mut logical_lines)
+        comments_panel(issue, width, focused_comment, &mut logical_lines)
     {
         lines.push(Line::from(""));
         lines.extend(comments_lines);
@@ -1058,10 +1067,14 @@ fn description_panel_compose(
 /// renders no Comments panel at all. Comment bodies carry logical provenance
 /// for selection (ADR 0019 §1) but no href hit-test metadata (out of BDR
 /// 0010's scope — only the Description panel's tokens are click-activated
-/// this slice); a modifier-click over one safely resolves to `None`.
+/// this slice); a modifier-click over one safely resolves to `None`. The
+/// comment at `focused_comment`'s index renders with the focused-comment
+/// highlight (ADR 0026 §1, BDR 0017 S1), mirroring the focused-link
+/// highlight.
 fn comments_panel(
     issue: &Issue,
     width: u16,
+    focused_comment: Option<usize>,
     logical_lines: &mut Vec<String>,
 ) -> Option<(Vec<Line<'static>>, Vec<Vec<LinkCell>>)> {
     if issue.comments.is_empty() {
@@ -1075,7 +1088,9 @@ fn comments_panel(
             body.push(Line::from(""));
             body_link_rows.push(Vec::new());
         }
-        let (card_lines, card_link_rows) = comment_card(comment, inner_width, logical_lines);
+        let is_focused = focused_comment == Some(i);
+        let (card_lines, card_link_rows) =
+            comment_card(comment, inner_width, is_focused, logical_lines);
         body.extend(card_lines);
         body_link_rows.extend(card_link_rows);
     }
@@ -1089,10 +1104,13 @@ fn comments_panel(
 /// `[author] created` header line followed by the styled, width-wrapped ADF
 /// body, plus its own hit-test metadata (ADR 0019 §1) — comment href capture
 /// stays off (`capture_href: false`), matching the existing no-activation
-/// contract.
+/// contract. `is_focused` patches the focused-comment highlight (ADR 0026 §1,
+/// BDR 0017 S1) onto every rendered cell of the card, mirroring
+/// `theme::selection_highlight()`'s REVERSED treatment of a focused link.
 fn comment_card(
     comment: &IssueComment,
     width: u16,
+    is_focused: bool,
     logical_lines: &mut Vec<String>,
 ) -> (Vec<Line<'static>>, Vec<Vec<LinkCell>>) {
     let inner_width = panel::inner_content_width(width);
@@ -1109,10 +1127,32 @@ fn comment_card(
 
     let wrapped = wrap_run_lines_to_width(body, inner_width);
     let lines = panel::panel_box("", run_lines_to_lines(&wrapped), width);
+    let lines = if is_focused {
+        highlight_lines(lines)
+    } else {
+        lines
+    };
     let content_link_rows: Vec<Vec<LinkCell>> =
         wrapped.iter().map(run_line_to_link_cells).collect();
     let link_rows = box_link_rows(content_link_rows);
     (lines, link_rows)
+}
+
+/// Patches `theme::selection_highlight()` (the same REVERSED-class style the
+/// focused inline link uses) onto every span of every line, so a focused
+/// comment card renders visibly regardless of its own fg/bg/border style.
+fn highlight_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines.into_iter().map(highlight_line).collect()
+}
+
+fn highlight_line(line: Line<'static>) -> Line<'static> {
+    let highlight = theme::selection_highlight();
+    Line::from(
+        line.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.patch(highlight)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn comment_header_line(comment: &IssueComment) -> Line<'static> {
@@ -1376,7 +1416,12 @@ fn detail_geometry(model: &Model, area: Rect) -> Option<DetailGeometry> {
     let content_area = detail_layout_chunks(area, has_status_row)[1];
 
     let inner_width = content_area.width.saturating_sub(DETAIL_FRAME_BORDER_COLS);
-    let compose = compose_detail(issue, model.detail_focused_link, inner_width);
+    let compose = compose_detail(
+        issue,
+        model.detail_focused_link,
+        model.detail_focused_comment,
+        inner_width,
+    );
 
     let viewport_height = content_area.height.saturating_sub(DETAIL_FRAME_BORDER_ROWS);
     let total_lines = compose.lines.len() as u16;
@@ -1607,6 +1652,7 @@ pub(super) fn selection_text(model: &Model) -> Option<String> {
     let compose = compose_detail(
         issue,
         model.detail_focused_link,
+        model.detail_focused_comment,
         DETAIL_TEXT_EXTRACTION_WIDTH,
     );
     let text = extract_selection_text(&compose.logical_lines, start, end);

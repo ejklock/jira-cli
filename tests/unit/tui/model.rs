@@ -47,6 +47,8 @@ fn make_list_model(keys: &[&str], list_origin: ListOrigin, jql: &str) -> Model {
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -72,6 +74,8 @@ fn make_detail_model(rows: Vec<IssueRow>, list_origin: ListOrigin, jql: &str) ->
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -97,6 +101,8 @@ fn make_projects_model(projects: Vec<ProjectRow>, list_origin: ListOrigin, jql: 
         projects,
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 

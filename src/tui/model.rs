@@ -1,7 +1,7 @@
 use crate::commands::MINE_JQL;
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow, ProjectRow};
-use crate::render::adf_to_rich;
+use crate::models::{Issue, IssueComment, IssueRow, ProjectRow};
+use crate::render::{adf_to_plain_text, adf_to_rich};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
@@ -128,16 +128,73 @@ pub struct Model {
     /// `Screen::Detail` shows its modal over the dimmed thread. `None` on
     /// every other screen and whenever no compose is open.
     pub compose: Option<Compose>,
+    /// Index into the loaded issue's `comments` currently focused (ADR 0026
+    /// §1, BDR 0017 S1) — a distinct axis from `detail_focused_link`, moved
+    /// by `]`/`[`, clamped at the ends, `None` when the thread is empty or no
+    /// comment has been focused yet. Reset to `None` on entering or leaving
+    /// the Detail screen, mirroring `detail_focused_link`.
+    pub detail_focused_comment: Option<usize>,
+    /// The authenticated user's Cloud account id (ADR 0026 §2, BDR 0017 S2),
+    /// set once from a one-shot `myself` fetch dispatched at browse startup.
+    /// `None` until the fetch lands, and stays `None` on failure — safe
+    /// degradation, since `is_own_comment` treats an unknown identity as
+    /// owning nothing. Read only by `is_own_comment` until C4a.2 wires the
+    /// edit-ownership gate — `#[allow(dead_code)]` mirrors
+    /// `theme::column_header`'s bridge-to-a-later-slice pattern.
+    #[allow(dead_code)]
+    pub current_account_id: Option<String>,
 }
 
-/// The comment compose's draft state (ADR 0024 §3): `buffer` is the
-/// multi-line text built by typing (Enter inserts `\n`, never submits, BDR
-/// 0015 S1); `status` tracks the in-box submit feedback. Leaves room for a
-/// future edit variant (C4) without implementing one.
+impl Model {
+    /// Whether `comment` was authored by the current authenticated user (ADR
+    /// 0026 §2, BDR 0017 S2): `true` iff `comment.author_account_id` equals
+    /// `Some(current_account_id)`. A `None` `current_account_id` (the
+    /// `myself` fetch hasn't landed, or failed) means nothing is own. Gains
+    /// its first production caller in C4a.2's edit-ownership gate; unused
+    /// outside tests until then.
+    #[allow(dead_code)]
+    pub fn is_own_comment(&self, comment: &IssueComment) -> bool {
+        self.current_account_id
+            .as_deref()
+            .is_some_and(|me| comment.author_account_id.as_deref() == Some(me))
+    }
+}
+
+/// The comment compose's draft state (ADR 0024 §3, ADR 0026 §3): `buffer` is
+/// the multi-line text built by typing (Enter inserts `\n`, never submits,
+/// BDR 0015 S1); `status` tracks the in-box submit feedback; `target`
+/// discriminates a brand-new comment from an edit of an existing one (BDR
+/// 0017 S3-S4) and drives both the submit `Cmd` and the modal title.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compose {
     pub buffer: String,
     pub status: ComposeStatus,
+    pub target: ComposeTarget,
+}
+
+/// What a compose submit does (ADR 0026 §3, BDR 0017 S3-S4): `New` posts a
+/// brand-new comment (`Cmd::SubmitComment`, the C3b path, unchanged);
+/// `Edit` updates the identified existing comment (`Cmd::EditComment`).
+/// `Default`s to `New` so every pre-C4 compose-open path is unaffected.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ComposeTarget {
+    #[default]
+    New,
+    Edit {
+        comment_id: String,
+    },
+}
+
+impl ComposeTarget {
+    /// The modal title's locale key (ADR 0026 §3, BDR 0017 S3): "New comment"
+    /// for a fresh post, "Edit comment" while editing. Pure — `view.rs` runs
+    /// it through `t()`.
+    pub fn title_key(&self) -> &'static str {
+        match self {
+            ComposeTarget::New => "New comment",
+            ComposeTarget::Edit { .. } => "Edit comment",
+        }
+    }
 }
 
 /// The compose's in-box status line (ADR 0024 §4-5, BDR 0015 S2/S4):
@@ -266,6 +323,21 @@ pub enum Msg {
     /// preserved, the compose shows the localized reason (a 401 reuses the
     /// E2 re-auth message), and no refresh happens.
     CommentMutationErr(String),
+    /// `]` advances the focused comment (ADR 0026 §1, BDR 0017 S1): a no-op
+    /// off `Screen::Detail`, with no loaded issue, or an empty thread.
+    FocusNextComment,
+    /// `[` retreats the focused comment (ADR 0026 §1, BDR 0017 S1): mirrors
+    /// `FocusNextComment`'s guard, clamping at the first comment.
+    FocusPrevComment,
+    /// The one-shot `myself` fetch landed (ADR 0026 §2, BDR 0017 S2): stores
+    /// the authenticated user's account id `is_own_comment` compares against.
+    MyselfLoaded(String),
+    /// `e` on the Detail screen (ADR 0026 §3, BDR 0017 S3, S6): a focused
+    /// comment that `is_own_comment` AND has an id opens the compose in edit
+    /// mode, pre-filled from the comment body; a focused comment that is not
+    /// own sets the localized "not your comment" status with no compose; no
+    /// focused comment (or an own comment with no id) is a no-op.
+    EditFocusedComment,
 }
 
 #[derive(Debug, PartialEq)]
@@ -294,17 +366,32 @@ pub enum Cmd {
     /// `Cmd::LoadDetail`'s own fetch effect and single-flight discipline (one
     /// spawn, one reply), never a second fetch mechanism.
     RefreshDetail(String),
+    /// The one-shot authenticated-identity fetch (ADR 0026 §2, BDR 0017 S2),
+    /// dispatched by `entry_cmds` once at browse startup: replies
+    /// `Msg::MyselfLoaded` on success; sends nothing on failure, so
+    /// `current_account_id` safely stays `None`.
+    LoadMyself,
+    /// The comment compose's edit-submit effect (ADR 0026 §3, BDR 0017 S4):
+    /// PUTs `body` onto `comment_id` on `key` via the `update_comment` seam.
+    /// The shell replies the SAME `Msg::CommentMutationOk`/`Err` `SubmitComment`
+    /// uses — no new mutation-result arm exists for edit.
+    EditComment {
+        key: String,
+        comment_id: String,
+        body: String,
+    },
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
-/// S1 seam): a warm entry (`revalidating: true`) kicks off exactly one
-/// background revalidation; a cold entry emits nothing.
+/// S1 seam; `Cmd::LoadMyself` added by ADR 0026 §2): every entry dispatches
+/// exactly one `Cmd::LoadMyself`; a warm entry (`revalidating: true`) also
+/// kicks off exactly one background revalidation.
 pub fn entry_cmds(model: &Model) -> Vec<Cmd> {
+    let mut cmds = vec![Cmd::LoadMyself];
     if model.revalidating {
-        vec![Cmd::RevalidateList]
-    } else {
-        vec![]
+        cmds.push(Cmd::RevalidateList);
     }
+    cmds
 }
 
 /// Pure state transition — no I/O, no terminal, no clock.
@@ -351,6 +438,10 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::CancelCompose => update_cancel_compose(model),
         Msg::CommentMutationOk => update_comment_mutation_ok(model),
         Msg::CommentMutationErr(reason) => update_comment_mutation_err(model, reason),
+        Msg::FocusNextComment => update_focus_next_comment(model),
+        Msg::FocusPrevComment => update_focus_prev_comment(model),
+        Msg::MyselfLoaded(account_id) => update_myself_loaded(model, account_id),
+        Msg::EditFocusedComment => update_edit_focused_comment(model),
     }
 }
 
@@ -382,6 +473,7 @@ fn is_reply_msg(msg: &Msg) -> bool {
             | Msg::ProjectsFailed(_)
             | Msg::CommentMutationOk
             | Msg::CommentMutationErr(_)
+            | Msg::MyselfLoaded(_)
     )
 }
 
@@ -607,6 +699,7 @@ fn back_from_detail(model: Model) -> (Model, Vec<Cmd>) {
         detail: None,
         detail_links: vec![],
         detail_focused_link: None,
+        detail_focused_comment: None,
         selection: None,
         ..model
     };
@@ -733,6 +826,7 @@ fn update_detail_loaded(model: Model, issue: Box<Issue>) -> (Model, Vec<Cmd>) {
         detail_scroll: 0,
         detail_links,
         detail_focused_link,
+        detail_focused_comment: None,
         ..model
     };
     (next, vec![])
@@ -1022,6 +1116,7 @@ fn update_open_compose(model: Model) -> (Model, Vec<Cmd>) {
         compose: Some(Compose {
             buffer: String::new(),
             status: ComposeStatus::Idle,
+            target: ComposeTarget::New,
         }),
         ..model
     };
@@ -1060,12 +1155,13 @@ fn update_compose_buffer(model: Model, edit: impl FnOnce(&mut String)) -> (Model
     (next, vec![])
 }
 
-/// Ctrl+S submits the open compose (BDR 0015 S2, S7): a non-empty (trimmed)
-/// buffer emits exactly one `Cmd::SubmitComment` for the Detail screen's
-/// loaded issue and sets `Submitting`; an empty/whitespace buffer is a no-op
-/// and the modal stays open unchanged. A no-op with no compose open or no
-/// loaded issue — defense in depth, since the compose only ever opens with
-/// one (mirrors `update_card_clicked`'s guard style).
+/// Ctrl+S submits the open compose (BDR 0015 S2, S7; BDR 0017 S4): a
+/// non-empty (trimmed) buffer emits exactly one submit `Cmd` for the Detail
+/// screen's loaded issue and sets `Submitting` — `SubmitComment` for a `New`
+/// target (unchanged), `EditComment` for an `Edit` target; an empty/whitespace
+/// buffer is a no-op and the modal stays open unchanged. A no-op with no
+/// compose open or no loaded issue — defense in depth, since the compose only
+/// ever opens with one (mirrors `update_card_clicked`'s guard style).
 fn update_submit_compose(model: Model) -> (Model, Vec<Cmd>) {
     let Some(compose) = model.compose.clone() else {
         return (model, vec![]);
@@ -1078,6 +1174,7 @@ fn update_submit_compose(model: Model) -> (Model, Vec<Cmd>) {
     };
     let key = issue.key.clone();
     let body = compose.buffer.clone();
+    let cmd = submit_compose_cmd(&compose.target, key, body);
     let next = Model {
         compose: Some(Compose {
             status: ComposeStatus::Submitting,
@@ -1085,7 +1182,22 @@ fn update_submit_compose(model: Model) -> (Model, Vec<Cmd>) {
         }),
         ..model
     };
-    (next, vec![Cmd::SubmitComment { key, body }])
+    (next, vec![cmd])
+}
+
+/// The submit `Cmd` a compose's `target` emits (BDR 0017 S4): `New` posts a
+/// brand-new comment, `Edit` PUTs onto the identified comment. The single
+/// seam `update_submit_compose` routes through, so the two write paths can
+/// never drift on how `key`/`body` are carried.
+fn submit_compose_cmd(target: &ComposeTarget, key: String, body: String) -> Cmd {
+    match target {
+        ComposeTarget::New => Cmd::SubmitComment { key, body },
+        ComposeTarget::Edit { comment_id } => Cmd::EditComment {
+            key,
+            comment_id: comment_id.clone(),
+            body,
+        },
+    }
 }
 
 /// Esc discards the open compose with no write and no refresh, leaving the
@@ -1131,6 +1243,121 @@ fn update_comment_mutation_err(model: Model, reason: String) -> (Model, Vec<Cmd>
         ..model
     };
     (next, vec![])
+}
+
+/// `]` advances the focused comment (ADR 0026 §1, BDR 0017 S1): an unset
+/// focus starts at the first comment, clamping at the last; a no-op with no
+/// comments to focus (`focused_comment_len`'s guard).
+fn update_focus_next_comment(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(len) = focused_comment_len(&model) else {
+        return (model, vec![]);
+    };
+    let next_index = model
+        .detail_focused_comment
+        .map_or(0, |i| (i + 1).min(len - 1));
+    (
+        Model {
+            detail_focused_comment: Some(next_index),
+            ..model
+        },
+        vec![],
+    )
+}
+
+/// `[` retreats the focused comment (ADR 0026 §1, BDR 0017 S1): an unset
+/// focus starts at the last comment, clamping at the first; a no-op with no
+/// comments to focus (`focused_comment_len`'s guard).
+fn update_focus_prev_comment(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(len) = focused_comment_len(&model) else {
+        return (model, vec![]);
+    };
+    let next_index = model
+        .detail_focused_comment
+        .map_or(len - 1, |i| i.saturating_sub(1));
+    (
+        Model {
+            detail_focused_comment: Some(next_index),
+            ..model
+        },
+        vec![],
+    )
+}
+
+/// The focused-comment axis's length guard (ADR 0026 §1, BDR 0017 S1): `Some`
+/// only on `Screen::Detail` with a loaded issue whose comment thread is
+/// non-empty — the shared precondition `update_focus_next_comment` and
+/// `update_focus_prev_comment` both require before moving the index.
+fn focused_comment_len(model: &Model) -> Option<usize> {
+    if model.screen != Screen::Detail {
+        return None;
+    }
+    let issue = model.detail.as_ref()?;
+    (!issue.comments.is_empty()).then_some(issue.comments.len())
+}
+
+/// The one-shot `myself` fetch landed (ADR 0026 §2, BDR 0017 S2): stores the
+/// authenticated user's account id `is_own_comment` compares against. Emits
+/// no `Cmd`.
+fn update_myself_loaded(model: Model, account_id: String) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        current_account_id: Some(account_id),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// `e` opens the compose in edit mode for the focused OWN comment (ADR 0026
+/// §3, BDR 0017 S3, S6): no focused comment is a no-op; a focused comment
+/// that is not `is_own_comment` sets the localized "not your comment" status
+/// and opens no compose; an own comment with no `id` (never happens for a
+/// server-returned comment, guarded defensively) is also a no-op; otherwise
+/// the compose opens with `target: Edit{comment_id}`, `buffer` pre-filled via
+/// `adf_to_plain_text`, and `status: Idle`.
+fn update_edit_focused_comment(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(comment) = focused_comment(&model) else {
+        return (model, vec![]);
+    };
+    if !model.is_own_comment(comment) {
+        return (set_not_your_comment_status(model), vec![]);
+    }
+    let Some(comment_id) = comment.id.clone() else {
+        return (model, vec![]);
+    };
+    let buffer = adf_to_plain_text(&comment.body);
+    let next = Model {
+        compose: Some(Compose {
+            buffer,
+            status: ComposeStatus::Idle,
+            target: ComposeTarget::Edit { comment_id },
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// The currently focused comment on the Detail screen, or `None` when off
+/// Detail, with no loaded issue, or with no focus set — the shared
+/// precondition `update_edit_focused_comment` (and a future delete/reply)
+/// reads before acting on "the focused comment".
+fn focused_comment(model: &Model) -> Option<&IssueComment> {
+    if model.screen != Screen::Detail {
+        return None;
+    }
+    let issue = model.detail.as_ref()?;
+    let index = model.detail_focused_comment?;
+    issue.comments.get(index)
+}
+
+/// Sets the localized "not your comment" transient status (ADR 0026 §3, BDR
+/// 0017 S6), reusing the existing status row rather than a bespoke seam.
+fn set_not_your_comment_status(model: Model) -> Model {
+    Model {
+        status: Some(StatusMsg {
+            text: t("Not your comment"),
+            kind: StatusKind::Info,
+        }),
+        ..model
+    }
 }
 
 #[cfg(test)]

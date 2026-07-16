@@ -149,6 +149,7 @@
   "Copiado ✓": "Copiado ✓",
   "New comment": "Novo comentário",
   "Edit comment": "Editar comentário",
+  "Not your comment": "Este comentário não é seu",
   "no comment body": "corpo do comentário ausente",
   "Comment posted (comment_id={comment_id}, task {project_id}/{task_id}).": "Comentário publicado (comment_id={comment_id}, tarefa {project_id}/{task_id}).",
   "Error: no task ref given and not in a git repository or HEAD is detached.": "Erro: nenhuma referência de tarefa informada e não está em um repositório git ou HEAD está desanexado.",

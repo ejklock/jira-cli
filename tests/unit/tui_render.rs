@@ -1,6 +1,6 @@
 use super::model::{
-    header_line, Compose, ComposeStatus, FooterMode, Identity, ListOrigin, Selection, StatusKind,
-    StatusMsg,
+    header_line, Compose, ComposeStatus, ComposeTarget, FooterMode, Identity, ListOrigin,
+    Selection, StatusKind, StatusMsg,
 };
 use super::panel;
 use super::theme;
@@ -74,6 +74,8 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -133,6 +135,8 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         projects: vec![],
         projects_selected: 0,
         compose: None,
+        detail_focused_comment: None,
+        current_account_id: None,
     }
 }
 
@@ -1221,6 +1225,88 @@ fn view_detail_renders_three_panels_with_details_meta_rows() {
         text.contains("Second comment."),
         "the second comment's body must appear; got: {text}"
     );
+
+    set_language("en");
+}
+
+// ---- c4a1-comment-focus-ownership / ADR 0026 §1, BDR 0017 S1: view()
+// highlights the focused comment like a focused link ----
+
+fn make_issue_with_three_named_comments(key: &str) -> crate::models::Issue {
+    crate::models::Issue {
+        comments: vec![
+            crate::test_support::comment(
+                None,
+                Some("Alice"),
+                "Alpha body.",
+                Some("2026-01-01"),
+                None,
+            ),
+            crate::test_support::comment(None, Some("Bob"), "Beta body.", Some("2026-01-02"), None),
+            crate::test_support::comment(
+                None,
+                Some("Carol"),
+                "Gamma body.",
+                Some("2026-01-03"),
+                None,
+            ),
+        ],
+        ..crate::test_support::issue(key)
+    }
+}
+
+#[test]
+fn view_detail_highlights_only_the_focused_comment() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_three_named_comments("PROJ-80"));
+    model.detail_focused_comment = Some(1);
+
+    let buf = render_to_buffer(&model, 100, 40);
+
+    let focused_style =
+        style_at_text(&buf, "Beta body.").expect("the focused comment body must appear");
+    let first_style =
+        style_at_text(&buf, "Alpha body.").expect("the first comment body must appear");
+    let third_style =
+        style_at_text(&buf, "Gamma body.").expect("the third comment body must appear");
+
+    assert!(
+        focused_style.add_modifier.contains(Modifier::REVERSED),
+        "the focused (second) comment must carry Modifier::REVERSED: {focused_style:?}"
+    );
+    assert!(
+        !first_style.add_modifier.contains(Modifier::REVERSED),
+        "the first (unfocused) comment must not carry Modifier::REVERSED: {first_style:?}"
+    );
+    assert!(
+        !third_style.add_modifier.contains(Modifier::REVERSED),
+        "the third (unfocused) comment must not carry Modifier::REVERSED: {third_style:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_with_no_comment_focused_highlights_no_comment() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail = Some(make_issue_with_three_named_comments("PROJ-81"));
+    model.detail_focused_comment = None;
+
+    let buf = render_to_buffer(&model, 100, 40);
+
+    for needle in ["Alpha body.", "Beta body.", "Gamma body."] {
+        let style = style_at_text(&buf, needle).expect("each comment body must appear");
+        assert!(
+            !style.add_modifier.contains(Modifier::REVERSED),
+            "no comment must carry Modifier::REVERSED when nothing is focused: {style:?}"
+        );
+    }
 
     set_language("en");
 }
@@ -2807,6 +2893,7 @@ fn make_composing_detail_model(buffer: &str, status: ComposeStatus) -> Model {
     model.compose = Some(Compose {
         buffer: buffer.to_owned(),
         status,
+        target: ComposeTarget::New,
     });
     model
 }
