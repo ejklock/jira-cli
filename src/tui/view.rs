@@ -611,6 +611,9 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
     if let Some(compose) = &model.compose {
         render_compose_modal(frame, area, compose);
     }
+    if model.confirm.is_some() {
+        modal::render_modal(frame, area, &confirm_modal_content());
+    }
 }
 
 /// Renders the comment compose over the detail through the C3a modal
@@ -644,6 +647,32 @@ fn compose_status_text(status: &ComposeStatus) -> Option<String> {
         ComposeStatus::Idle => None,
         ComposeStatus::Submitting => Some(t("Sending…")),
         ComposeStatus::Error(reason) => Some(reason.clone()),
+    }
+}
+
+/// The delete-confirm modal's content (ADR 0026 §4, BDR 0017 S7, S10): a
+/// fixed localized prompt plus Sim/Não buttons. Built entirely in `view.rs`
+/// — mirroring `render_compose_modal`'s own in-view `ModalContent`
+/// construction — rather than as a `Model` method, so `model.rs` stays free
+/// of ratatui types (`ModalContent::body` is `Vec<Line<'static>>`), matching
+/// the documented pure-core boundary (ADR 0007 §6). Pure — no rendering, no
+/// I/O — so it is headlessly unit-tested.
+pub(super) fn confirm_modal_content() -> modal::ModalContent {
+    modal::ModalContent {
+        title: t("Delete comment?"),
+        body: vec![Line::from(t("This action cannot be undone."))],
+        hint: Some(t("y/Enter confirm · n/Esc cancel")),
+        status: None,
+        buttons: vec![
+            modal::ModalButton {
+                id: "yes".to_owned(),
+                label: t("Yes"),
+            },
+            modal::ModalButton {
+                id: "no".to_owned(),
+                label: t("No"),
+            },
+        ],
     }
 }
 

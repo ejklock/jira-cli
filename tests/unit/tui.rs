@@ -1,12 +1,12 @@
 use super::*;
 
 use super::model::{
-    entry_cmds, footer_mode, Compose, ComposeStatus, ComposeTarget, FooterMode, ListOrigin,
-    Selection, StatusKind, StatusMsg,
+    entry_cmds, footer_mode, Compose, ComposeStatus, ComposeTarget, ConfirmDelete, FooterMode,
+    ListOrigin, Selection, StatusKind, StatusMsg,
 };
 use super::shell::{
-    handle_reply, map_key_in_compose_mode, map_key_in_normal_mode, map_key_in_search_mode,
-    map_mouse_to_msg, read_snapshot, resolve_mouse_msg, MouseIntent,
+    handle_reply, map_key_in_compose_mode, map_key_in_confirm_mode, map_key_in_normal_mode,
+    map_key_in_search_mode, map_mouse_to_msg, read_snapshot, resolve_mouse_msg, MouseIntent,
 };
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
@@ -101,6 +101,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         compose: None,
         detail_focused_comment: None,
         current_account_id: None,
+        confirm: None,
     }
 }
 
@@ -4928,4 +4929,346 @@ fn comment_mutation_err_after_edit_preserves_buffer_and_sets_reauth_error() {
         cmds.is_empty(),
         "an edit failure must emit zero refresh Cmds"
     );
+}
+
+// ---- c4b-delete-confirm-modal / ADR 0026 §4, BDR 0017 S6-S7, S9-S10 —
+// 'd' opens a Sim/Não confirm for a focused OWN comment; non-own/no-focus
+// gating mirrors 'e'; Yes emits exactly one DeleteComment; No/Ok/Err close
+// the confirm; Ok/Err become context-aware between confirm and compose ----
+
+fn make_confirming_detail_model(comment_id: &str) -> Model {
+    let mut model = make_compose_detail_model();
+    model.confirm = Some(ConfirmDelete {
+        comment_id: comment_id.to_owned(),
+    });
+    model
+}
+
+// ---- S6-S7: 'd' gating mirrors 'e' — own+id opens the confirm; non-own
+// sets the hint; no focus / own-without-id is a no-op ----
+
+#[test]
+fn delete_focused_comment_on_own_comment_with_id_opens_confirm() {
+    let own = own_comment_with_id("10001", "hello world");
+    let model = comment_detail_model_with_focus(vec![own], Some(0));
+
+    let (next, cmds) = update(model, Msg::DeleteFocusedComment);
+
+    assert_eq!(
+        next.confirm,
+        Some(ConfirmDelete {
+            comment_id: "10001".to_owned()
+        }),
+        "'d' on an own comment with an id must open the confirm carrying its id"
+    );
+    assert!(cmds.is_empty(), "opening the confirm must emit no Cmd");
+}
+
+#[test]
+fn delete_focused_comment_on_non_own_comment_sets_hint_and_opens_no_confirm() {
+    let not_own = crate::models::IssueComment {
+        author_account_id: Some("acct-B".to_owned()),
+        ..comment(Some("10002"), Some("Bob"), "hi", None, None)
+    };
+    let model = comment_detail_model_with_focus(vec![not_own], Some(0));
+
+    let (next, cmds) = update(model, Msg::DeleteFocusedComment);
+
+    assert!(
+        next.confirm.is_none(),
+        "'d' on a non-own comment must open no confirm"
+    );
+    let status = next
+        .status
+        .expect("'d' on a non-own comment must set a status hint");
+    assert_eq!(status.kind, StatusKind::Info);
+    assert!(!status.text.is_empty(), "the hint text must not be empty");
+    assert!(cmds.is_empty(), "'d' on a non-own comment must emit no Cmd");
+}
+
+#[test]
+fn delete_focused_comment_with_no_focus_is_noop() {
+    let own = own_comment_with_id("10001", "hello");
+    let model = comment_detail_model_with_focus(vec![own], None);
+
+    let (next, cmds) = update(model, Msg::DeleteFocusedComment);
+
+    assert!(
+        next.confirm.is_none(),
+        "no focused comment must open no confirm"
+    );
+    assert!(
+        next.status.is_none(),
+        "no focused comment must change no status"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn delete_focused_comment_on_own_comment_with_no_id_is_noop() {
+    let own_no_id = crate::models::IssueComment {
+        author_account_id: Some(OWNER_ACCOUNT_ID.to_owned()),
+        ..comment(None, Some("Alice"), "hello", None, None)
+    };
+    let model = comment_detail_model_with_focus(vec![own_no_id], Some(0));
+
+    let (next, cmds) = update(model, Msg::DeleteFocusedComment);
+
+    assert!(
+        next.confirm.is_none(),
+        "an own comment with no id must open no confirm"
+    );
+    assert!(next.status.is_none());
+    assert!(cmds.is_empty());
+}
+
+// ---- S7: Yes emits exactly one DeleteComment; No closes with no Cmd ----
+
+#[test]
+fn confirm_delete_yes_emits_exactly_one_delete_comment_cmd() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::ConfirmDeleteYes);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::DeleteComment {
+            key: "PROJ-1".to_owned(),
+            comment_id: "10001".to_owned(),
+        }],
+        "Yes must emit exactly one DeleteComment for the open key and comment id"
+    );
+    assert!(
+        next.confirm.is_some(),
+        "the confirm stays open as the in-flight indicator until the mutation result closes it"
+    );
+}
+
+#[test]
+fn confirm_delete_yes_with_no_confirm_open_is_noop() {
+    let model = make_compose_detail_model();
+
+    let (next, cmds) = update(model, Msg::ConfirmDeleteYes);
+
+    assert!(next.confirm.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn confirm_delete_no_closes_confirm_with_no_cmd() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::ConfirmDeleteNo);
+
+    assert!(next.confirm.is_none(), "No must close the confirm");
+    assert!(cmds.is_empty(), "No must emit no Cmd");
+}
+
+// ---- S7: CommentMutationOk/Err become context-aware for a delete in
+// flight; the existing compose Ok/Err arms stay byte-for-byte unchanged
+// (regression, exercised above) ----
+
+#[test]
+fn comment_mutation_ok_with_confirm_open_closes_confirm_and_emits_one_refresh() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(
+        next.confirm.is_none(),
+        "a delete success must close the confirm"
+    );
+    assert_eq!(
+        cmds,
+        vec![Cmd::RefreshDetail("PROJ-1".to_owned())],
+        "a delete success must emit exactly one cache-busting refresh, no local removal"
+    );
+}
+
+#[test]
+fn comment_mutation_ok_with_compose_open_only_closes_compose_confirm_stays_none() {
+    let mut model = make_composing_detail_model("hi");
+    model.compose = Some(Compose {
+        buffer: "hi".to_owned(),
+        status: ComposeStatus::Submitting,
+        target: ComposeTarget::New,
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(next.compose.is_none());
+    assert!(
+        next.confirm.is_none(),
+        "a compose success must never touch confirm (it was already None)"
+    );
+    assert_eq!(cmds, vec![Cmd::RefreshDetail("PROJ-1".to_owned())]);
+}
+
+#[test]
+fn comment_mutation_err_with_confirm_open_closes_confirm_and_sets_error_status() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr("boom".to_owned()));
+
+    assert!(
+        next.confirm.is_none(),
+        "a delete failure must close the confirm"
+    );
+    let status = next
+        .status
+        .expect("a delete failure must set a transient status");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "boom");
+    assert!(
+        cmds.is_empty(),
+        "a delete failure must emit zero refresh Cmds"
+    );
+}
+
+#[test]
+fn comment_mutation_err_with_confirm_open_surfaces_reauth_guidance() {
+    let guidance = crate::commands::reauth_message("work");
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr(guidance.clone()));
+
+    assert!(next.confirm.is_none());
+    let status = next
+        .status
+        .expect("a delete failure must set a transient status");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, guidance);
+    assert!(cmds.is_empty());
+}
+
+// ---- S9: no key/mouse leakage while a delete confirm is open ----
+
+#[test]
+fn list_and_detail_nav_keys_are_inert_while_confirm_open() {
+    fn assert_inert(msg: Msg) {
+        let model = make_confirming_detail_model("10001");
+        let (next, cmds) = update(model, msg);
+
+        assert!(next.confirm.is_some(), "the confirm must remain open");
+        assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+        assert!(cmds.is_empty(), "a leaked msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::Down);
+    assert_inert(Msg::Up);
+    assert_inert(Msg::Back);
+    assert_inert(Msg::FocusNextLink);
+    assert_inert(Msg::FocusNextComment);
+    assert_inert(Msg::FocusPrevComment);
+    assert_inert(Msg::OpenSearch);
+    assert_inert(Msg::OpenProjects);
+    assert_inert(Msg::LoadMore);
+    assert_inert(Msg::EditFocusedComment);
+}
+
+#[test]
+fn quit_does_not_quit_while_confirm_open() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::Quit);
+
+    assert!(next.confirm.is_some(), "confirm must stay open");
+    assert!(
+        !cmds.contains(&Cmd::Quit),
+        "q must not quit while confirming"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn mouse_resolved_msgs_are_inert_while_confirm_open() {
+    fn assert_inert(msg: Msg) {
+        let model = make_confirming_detail_model("10001");
+        let (next, cmds) = update(model, msg);
+
+        assert!(next.confirm.is_some(), "the confirm must remain open");
+        assert!(cmds.is_empty(), "a leaked mouse msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::CardClicked(0));
+    assert_inert(Msg::LinkClicked("https://example.com".to_owned()));
+    assert_inert(Msg::SelStart((0, 0)));
+    assert_inert(Msg::SelDrag((0, 0)));
+    assert_inert(Msg::SelEnd(Some("x".to_owned())));
+    assert_inert(Msg::ProjectClicked(0));
+}
+
+// ---- S10: the pure confirm_modal_content builder ----
+
+#[test]
+fn confirm_modal_content_yields_localized_title_prompt_and_buttons() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let content = view::confirm_modal_content();
+    assert_eq!(content.title, "Delete comment?");
+    assert_eq!(
+        content.body.len(),
+        1,
+        "the confirm prompt must be a single body line"
+    );
+    let labels: Vec<String> = content.buttons.iter().map(|b| b.label.clone()).collect();
+    assert_eq!(labels, vec!["Yes".to_owned(), "No".to_owned()]);
+
+    set_language("pt_BR");
+    let content_pt = view::confirm_modal_content();
+    assert_eq!(content_pt.title, "Excluir comentário?");
+    let labels_pt: Vec<String> = content_pt.buttons.iter().map(|b| b.label.clone()).collect();
+    assert_eq!(labels_pt, vec!["Sim".to_owned(), "Não".to_owned()]);
+
+    set_language("en");
+}
+
+// ---- shell keymap: 'd' opens the delete confirm; the confirm keymap owns
+// y/Enter/n/Esc exclusively ----
+
+#[test]
+fn map_key_in_normal_mode_d_opens_delete_confirm() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('d'), KeyModifiers::NONE),
+        Some(Msg::DeleteFocusedComment)
+    ));
+}
+
+#[test]
+fn map_key_in_confirm_mode_enter_confirms() {
+    assert!(matches!(
+        map_key_in_confirm_mode(KeyCode::Enter, KeyModifiers::NONE),
+        Some(Msg::ConfirmDeleteYes)
+    ));
+}
+
+#[test]
+fn map_key_in_confirm_mode_y_confirms() {
+    assert!(matches!(
+        map_key_in_confirm_mode(KeyCode::Char('y'), KeyModifiers::NONE),
+        Some(Msg::ConfirmDeleteYes)
+    ));
+}
+
+#[test]
+fn map_key_in_confirm_mode_esc_cancels() {
+    assert!(matches!(
+        map_key_in_confirm_mode(KeyCode::Esc, KeyModifiers::NONE),
+        Some(Msg::ConfirmDeleteNo)
+    ));
+}
+
+#[test]
+fn map_key_in_confirm_mode_n_cancels() {
+    assert!(matches!(
+        map_key_in_confirm_mode(KeyCode::Char('n'), KeyModifiers::NONE),
+        Some(Msg::ConfirmDeleteNo)
+    ));
+}
+
+#[test]
+fn map_key_in_confirm_mode_other_keys_are_noop() {
+    assert!(map_key_in_confirm_mode(KeyCode::Tab, KeyModifiers::NONE).is_none());
+    assert!(map_key_in_confirm_mode(KeyCode::Char('q'), KeyModifiers::NONE).is_none());
 }

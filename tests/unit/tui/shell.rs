@@ -770,3 +770,161 @@ async fn edit_comment_non_2xx_non_401_maps_to_comment_mutation_err() {
         "a non-2xx, non-401 update_comment response must still map to CommentMutationErr, never panic"
     );
 }
+
+// ---- c4b-delete-confirm-modal / ADR 0026 §4 / BDR 0017 S7 — delete_comment's
+// reply mapping mirrors submit_comment's/edit_comment's: 2xx -> Ok,
+// Unauthorized (401) -> the typed ClientError the spawn wrapper turns into
+// the E2 re-auth guidance ----
+
+#[tokio::test]
+async fn delete_comment_2xx_is_ok() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = delete_comment(&instance, "PROJ-1", "10001").await;
+
+    assert!(result.is_ok(), "a 2xx delete_comment response must be Ok");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn delete_comment_401_maps_to_typed_unauthorized() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = delete_comment(&instance, "PROJ-1", "10001").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_delete_comment_2xx_replies_comment_mutation_ok() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_delete_comment("PROJ-1".to_owned(), "10001".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(matches!(reply, Msg::CommentMutationOk));
+}
+
+#[tokio::test]
+async fn spawn_delete_comment_401_replies_comment_mutation_err_with_reauth_guidance() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_delete_comment("PROJ-1".to_owned(), "10001".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    match reply {
+        Msg::CommentMutationErr(reason) => {
+            assert_eq!(reason, reauth_message("test"));
+        }
+        _ => panic!("expected Msg::CommentMutationErr, got a different Msg"),
+    }
+}
+
+#[tokio::test]
+async fn delete_comment_non_2xx_non_401_maps_to_comment_mutation_err() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment/10001"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_delete_comment("PROJ-1".to_owned(), "10001".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(
+        matches!(reply, Msg::CommentMutationErr(_)),
+        "a non-2xx, non-401 delete_comment response must still map to CommentMutationErr, never panic"
+    );
+}

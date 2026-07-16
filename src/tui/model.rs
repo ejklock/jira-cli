@@ -138,26 +138,36 @@ pub struct Model {
     /// set once from a one-shot `myself` fetch dispatched at browse startup.
     /// `None` until the fetch lands, and stays `None` on failure — safe
     /// degradation, since `is_own_comment` treats an unknown identity as
-    /// owning nothing. Read only by `is_own_comment` until C4a.2 wires the
-    /// edit-ownership gate — `#[allow(dead_code)]` mirrors
-    /// `theme::column_header`'s bridge-to-a-later-slice pattern.
-    #[allow(dead_code)]
+    /// owning nothing. Read by `is_own_comment`, gating both the edit
+    /// (C4a.2) and delete (C4b) ownership checks.
     pub current_account_id: Option<String>,
+    /// The open delete-confirm (ADR 0026 §4, BDR 0017 S7): `Some` only while
+    /// `Screen::Detail` shows the Sim/Não confirm modal over the dimmed
+    /// thread, mutually exclusive with `compose` (the input-leakage guard
+    /// never lets one open while the other is). `None` on every other screen
+    /// and whenever no confirm is open.
+    pub confirm: Option<ConfirmDelete>,
 }
 
 impl Model {
     /// Whether `comment` was authored by the current authenticated user (ADR
     /// 0026 §2, BDR 0017 S2): `true` iff `comment.author_account_id` equals
     /// `Some(current_account_id)`. A `None` `current_account_id` (the
-    /// `myself` fetch hasn't landed, or failed) means nothing is own. Gains
-    /// its first production caller in C4a.2's edit-ownership gate; unused
-    /// outside tests until then.
-    #[allow(dead_code)]
+    /// `myself` fetch hasn't landed, or failed) means nothing is own. Gates
+    /// both the edit (C4a.2) and delete (C4b) ownership checks.
     pub fn is_own_comment(&self, comment: &IssueComment) -> bool {
         self.current_account_id
             .as_deref()
             .is_some_and(|me| comment.author_account_id.as_deref() == Some(me))
     }
+}
+
+/// The open delete-confirm's identity (ADR 0026 §4, BDR 0017 S7): the id of
+/// the comment a confirmed `y`/Enter deletes. Carries no other draft state —
+/// unlike `Compose`, a delete has nothing to edit while the confirm is open.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmDelete {
+    pub comment_id: String,
 }
 
 /// The comment compose's draft state (ADR 0024 §3, ADR 0026 §3): `buffer` is
@@ -338,6 +348,19 @@ pub enum Msg {
     /// own sets the localized "not your comment" status with no compose; no
     /// focused comment (or an own comment with no id) is a no-op.
     EditFocusedComment,
+    /// `d` on the Detail screen (ADR 0026 §4, BDR 0017 S6-S7): a focused
+    /// comment that `is_own_comment` AND has an id opens the Sim/Não delete
+    /// confirm; a focused comment that is not own sets the localized "not
+    /// your comment" status with no confirm; no focused comment (or an own
+    /// comment with no id) is a no-op.
+    DeleteFocusedComment,
+    /// `y` / Enter confirms the open delete confirm (ADR 0026 §4, BDR 0017
+    /// S7): emits exactly one `Cmd::DeleteComment` for the confirmed
+    /// comment id; a no-op with no confirm open.
+    ConfirmDeleteYes,
+    /// `n` / Esc cancels the open delete confirm with no write (ADR 0026
+    /// §4, BDR 0017 S7): closes the confirm; a no-op with none open.
+    ConfirmDeleteNo,
 }
 
 #[derive(Debug, PartialEq)]
@@ -380,6 +403,15 @@ pub enum Cmd {
         comment_id: String,
         body: String,
     },
+    /// The delete-confirm's submit effect (ADR 0026 §4, BDR 0017 S7): DELETEs
+    /// `comment_id` on `key` via the `delete_comment` seam. The shell replies
+    /// the SAME `Msg::CommentMutationOk`/`Msg::CommentMutationErr`
+    /// `SubmitComment`/`EditComment` use — no new mutation-result arm exists
+    /// for delete.
+    DeleteComment {
+        key: String,
+        comment_id: String,
+    },
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
@@ -398,6 +430,9 @@ pub fn entry_cmds(model: &Model) -> Vec<Cmd> {
 pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
     let model = clear_status_on_key_event(model, &msg);
     if model.compose.is_some() && leaks_through_open_compose(&msg) {
+        return (model, vec![]);
+    }
+    if model.confirm.is_some() && leaks_through_open_confirm(&msg) {
         return (model, vec![]);
     }
     match msg {
@@ -442,6 +477,9 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::FocusPrevComment => update_focus_prev_comment(model),
         Msg::MyselfLoaded(account_id) => update_myself_loaded(model, account_id),
         Msg::EditFocusedComment => update_edit_focused_comment(model),
+        Msg::DeleteFocusedComment => update_delete_focused_comment(model),
+        Msg::ConfirmDeleteYes => update_confirm_delete_yes(model),
+        Msg::ConfirmDeleteNo => update_confirm_delete_no(model),
     }
 }
 
@@ -493,6 +531,17 @@ fn leaks_through_open_compose(msg: &Msg) -> bool {
             | Msg::CancelCompose
     );
     !compose_owned && !is_reply_msg(msg)
+}
+
+/// While a delete confirm is open, only its own `Msg`s and background
+/// replies may reach `update`'s reducers (ADR 0026 §4, BDR 0017 S9): every
+/// other key/mouse-resolved `Msg` — list/detail nav, search, links,
+/// selection, Projects, comment focus — is inert, so nothing behind the
+/// dimmed backdrop changes and `q` cannot quit while confirming. Mirrors
+/// `leaks_through_open_compose`'s contract.
+fn leaks_through_open_confirm(msg: &Msg) -> bool {
+    let confirm_owned = matches!(msg, Msg::ConfirmDeleteYes | Msg::ConfirmDeleteNo);
+    !confirm_owned && !is_reply_msg(msg)
 }
 
 fn update_down(model: Model) -> (Model, Vec<Cmd>) {
@@ -1210,11 +1259,15 @@ fn update_cancel_compose(model: Model) -> (Model, Vec<Cmd>) {
     (next, vec![])
 }
 
-/// The comment write succeeded (ADR 0024 §5, BDR 0015 S2): the compose
-/// closes and exactly one cache-busting refresh is emitted for the open
-/// issue — never a locally-fabricated comment (the server owns
-/// id/author/timestamp). No refresh key with no loaded issue never happens
-/// in practice (the compose only opens with one), guarded defensively.
+/// The comment write succeeded (ADR 0024 §5, BDR 0015 S2; ADR 0026 §6, BDR
+/// 0017 S7): closes whichever of `compose`/`confirm` was open — the two are
+/// mutually exclusive (the leakage guards never let one open while the
+/// other is), so closing both is always correct and needs no discriminator —
+/// and emits exactly one cache-busting refresh for the open issue: never a
+/// locally-fabricated or locally-removed comment (the server owns
+/// id/author/timestamp, and for a delete, the comment's very absence). No
+/// refresh key with no loaded issue never happens in practice (a compose or
+/// confirm only ever opens with one), guarded defensively.
 fn update_comment_mutation_ok(model: Model) -> (Model, Vec<Cmd>) {
     let cmds = match model.detail.as_ref() {
         Some(issue) => vec![Cmd::RefreshDetail(issue.key.clone())],
@@ -1222,16 +1275,22 @@ fn update_comment_mutation_ok(model: Model) -> (Model, Vec<Cmd>) {
     };
     let next = Model {
         compose: None,
+        confirm: None,
         ..model
     };
     (next, cmds)
 }
 
-/// The comment write failed (ADR 0024 §5, BDR 0015 S4): the buffer is
-/// preserved, the compose shows the localized `reason` (a 401 reuses the E2
-/// re-auth message), and no refresh Cmd is emitted. A no-op with no compose
-/// open.
+/// The comment write failed (ADR 0024 §5, BDR 0015 S4; ADR 0026 §6, BDR 0017
+/// S7): a delete in flight (a confirm open) closes the confirm and surfaces
+/// `reason` on the transient status row instead (a 401 reuses the E2
+/// re-auth message via the caller), emitting no refresh; an edit/new submit
+/// in flight keeps its draft with the in-box `ComposeStatus::Error` — the
+/// existing C3b/C4a.2 behavior, unchanged. A no-op with neither open.
 fn update_comment_mutation_err(model: Model, reason: String) -> (Model, Vec<Cmd>) {
+    if model.confirm.is_some() {
+        return (close_confirm_with_error_status(model, reason), vec![]);
+    }
     let Some(compose) = model.compose.clone() else {
         return (model, vec![]);
     };
@@ -1243,6 +1302,20 @@ fn update_comment_mutation_err(model: Model, reason: String) -> (Model, Vec<Cmd>
         ..model
     };
     (next, vec![])
+}
+
+/// Closes the open delete confirm and surfaces `reason` on the transient
+/// status row in the Error style (ADR 0026 §6, BDR 0017 S7) — the single
+/// seam `update_comment_mutation_err`'s delete branch routes through.
+fn close_confirm_with_error_status(model: Model, reason: String) -> Model {
+    Model {
+        confirm: None,
+        status: Some(StatusMsg {
+            text: reason,
+            kind: StatusKind::Error,
+        }),
+        ..model
+    }
 }
 
 /// `]` advances the focused comment (ADR 0026 §1, BDR 0017 S1): an unset
@@ -1335,9 +1408,62 @@ fn update_edit_focused_comment(model: Model) -> (Model, Vec<Cmd>) {
     (next, vec![])
 }
 
+/// `d` opens the Sim/Não delete confirm for the focused OWN comment (ADR
+/// 0026 §4, BDR 0017 S6-S7): no focused comment is a no-op; a focused
+/// comment that is not `is_own_comment` sets the localized "not your
+/// comment" status and opens no confirm; an own comment with no `id` (never
+/// happens for a server-returned comment, guarded defensively) is also a
+/// no-op; otherwise `confirm` opens carrying the comment's id.
+fn update_delete_focused_comment(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(comment) = focused_comment(&model) else {
+        return (model, vec![]);
+    };
+    if !model.is_own_comment(comment) {
+        return (set_not_your_comment_status(model), vec![]);
+    }
+    let Some(comment_id) = comment.id.clone() else {
+        return (model, vec![]);
+    };
+    let next = Model {
+        confirm: Some(ConfirmDelete { comment_id }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// `y` / Enter confirms the open delete (ADR 0026 §4, BDR 0017 S7): emits
+/// exactly one `Cmd::DeleteComment` for the open key and the confirmed
+/// comment id, keeping the confirm open as the in-flight indicator until
+/// `update_comment_mutation_ok`/`_err` closes it. A no-op with no confirm
+/// open or no loaded issue — defense in depth, since the confirm only ever
+/// opens with one (mirrors `update_submit_compose`'s guard style).
+fn update_confirm_delete_yes(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(confirm) = model.confirm.clone() else {
+        return (model, vec![]);
+    };
+    let Some(issue) = model.detail.as_ref() else {
+        return (model, vec![]);
+    };
+    let cmd = Cmd::DeleteComment {
+        key: issue.key.clone(),
+        comment_id: confirm.comment_id,
+    };
+    (model, vec![cmd])
+}
+
+/// `n` / Esc cancels the open delete confirm with no write (ADR 0026 §4, BDR
+/// 0017 S7): a no-op with no confirm open.
+fn update_confirm_delete_no(model: Model) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        confirm: None,
+        ..model
+    };
+    (next, vec![])
+}
+
 /// The currently focused comment on the Detail screen, or `None` when off
 /// Detail, with no loaded issue, or with no focus set — the shared
-/// precondition `update_edit_focused_comment` (and a future delete/reply)
+/// precondition `update_edit_focused_comment`/`update_delete_focused_comment`
 /// reads before acting on "the focused comment".
 fn focused_comment(model: &Model) -> Option<&IssueComment> {
     if model.screen != Screen::Detail {

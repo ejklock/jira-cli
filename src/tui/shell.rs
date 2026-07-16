@@ -320,6 +320,7 @@ fn seeded_model(
         compose: None,
         detail_focused_comment: None,
         current_account_id: None,
+        confirm: None,
     }
 }
 
@@ -380,6 +381,7 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         ']' => Some(Msg::FocusNextComment),
         '[' => Some(Msg::FocusPrevComment),
         'e' => Some(Msg::EditFocusedComment),
+        'd' => Some(Msg::DeleteFocusedComment),
         _ => None,
     }
 }
@@ -396,6 +398,18 @@ pub(super) fn map_key_in_compose_mode(key_code: KeyCode, modifiers: KeyModifiers
         KeyCode::Backspace => Some(Msg::ComposeBackspace),
         KeyCode::Char('s') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::SubmitCompose),
         KeyCode::Char(c) => Some(Msg::ComposeInput(c)),
+        _ => None,
+    }
+}
+
+/// The delete-confirm's keymap (ADR 0026 §4, BDR 0017 S7): while a confirm
+/// is open, it owns every key — `y`/Enter confirms, `n`/Esc cancels. Any
+/// other key (mouse-click activation is deferred; arrows, Tab, …) is a
+/// no-op, mirroring `map_key_in_compose_mode`'s exclusivity.
+pub(super) fn map_key_in_confirm_mode(key_code: KeyCode, _modifiers: KeyModifiers) -> Option<Msg> {
+    match key_code {
+        KeyCode::Enter | KeyCode::Char('y') => Some(Msg::ConfirmDeleteYes),
+        KeyCode::Esc | KeyCode::Char('n') => Some(Msg::ConfirmDeleteNo),
         _ => None,
     }
 }
@@ -586,14 +600,19 @@ fn handle_terminal_event(
 ) -> StepOutcome {
     let search_active = model.search.is_some();
     let compose_active = model.compose.is_some();
+    let confirm_active = model.confirm.is_some();
     let msg = match event {
+        Some(Ok(Event::Key(key))) if confirm_active => {
+            map_key_in_confirm_mode(key.code, key.modifiers)
+        }
         Some(Ok(Event::Key(key))) if compose_active => {
             map_key_in_compose_mode(key.code, key.modifiers)
         }
         Some(Ok(Event::Key(key))) => map_key_to_msg(key.code, key.modifiers, search_active),
-        // While a compose is open, no mouse event reaches the detail/list
-        // machinery (ADR 0024 §3, BDR 0015 S6) — the backdrop is inert.
-        Some(Ok(Event::Mouse(_))) if compose_active => None,
+        // While a compose or delete confirm is open, no mouse event reaches
+        // the detail/list machinery (ADR 0024 §3, BDR 0015 S6; ADR 0026 §4,
+        // BDR 0017 S9) — the backdrop is inert.
+        Some(Ok(Event::Mouse(_))) if confirm_active || compose_active => None,
         Some(Ok(Event::Mouse(mouse))) => resolve_mouse_msg(mouse, search_active, &model, area),
         Some(Ok(_)) => None,
         Some(Err(_)) | None => return StepOutcome::Exit(1),
@@ -701,6 +720,10 @@ fn dispatch_cmd(
             body,
         } => {
             spawn_edit_comment(key, comment_id, body, instance.clone(), tx.clone());
+            model
+        }
+        Cmd::DeleteComment { key, comment_id } => {
+            spawn_delete_comment(key, comment_id, instance.clone(), tx.clone());
             model
         }
     }
@@ -867,6 +890,38 @@ pub(crate) async fn edit_comment(
     let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.update_comment(key, comment_id, body).await?;
     Ok(())
+}
+
+/// Spawns the delete-confirm's submit effect (ADR 0026 §4, BDR 0017 S7):
+/// DELETEs `comment_id` on `key` via the `delete_comment` seam and replies
+/// the SAME `Msg::CommentMutationOk`/`Msg::CommentMutationErr`
+/// `spawn_submit_comment`/`spawn_edit_comment` use, mirroring their 401 ->
+/// re-auth guidance mapping.
+fn spawn_delete_comment(
+    key: String,
+    comment_id: String,
+    instance: Instance,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    tokio::spawn(async move {
+        let msg = match delete_comment(&instance, &key, &comment_id).await {
+            Ok(()) => Msg::CommentMutationOk,
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::CommentMutationErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::CommentMutationErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn delete_comment(
+    instance: &Instance,
+    key: &str,
+    comment_id: &str,
+) -> Result<(), ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.delete_comment(key, comment_id).await
 }
 
 /// Spawns the one-shot authenticated-identity fetch (ADR 0026 §2, BDR 0017

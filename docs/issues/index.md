@@ -58,7 +58,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0049](/issues/0049-e1b-list-commands-tui-default.md) | E1b | list read commands open the browse TUI in a terminal (mine, bare, search) | done | — |
 | [0050](/issues/0050-e1b-detail-commands-tui-default.md) | E1b | single-issue read commands open the detail TUI in a terminal (get, current) | done | 0049 |
 | [0051](/issues/0051-c4a-comment-focus-edit.md) | C4a | comment focus axis + myself ownership + edit own comment (pre-filled compose → update) | done | 0045, 0047, 0048 |
-| [0052](/issues/0052-c4b-delete-confirm-modal.md) | C4b | delete own comment via a Sim/Não confirm modal (modal button adapter → delete) | todo | 0045, 0047, 0051 |
+| [0052](/issues/0052-c4b-delete-confirm-modal.md) | C4b | delete own comment via a Sim/Não confirm modal (modal button adapter → delete) | done | 0045, 0047, 0051 |
 | [0053](/issues/0053-c4c-reply-mention.md) | C4c | reply to a focused comment: mentioned new comment (Jira is flat) | todo | 0045, 0047, 0051 |
 
 ## Phase 2 — browse TUI (delivered)

@@ -76,6 +76,7 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         compose: None,
         detail_focused_comment: None,
         current_account_id: None,
+        confirm: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         compose: None,
         detail_focused_comment: None,
         current_account_id: None,
+        confirm: None,
     }
 }
 
