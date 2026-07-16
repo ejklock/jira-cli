@@ -1,5 +1,6 @@
 use super::model::{
-    header_line, FooterMode, Identity, ListOrigin, Selection, StatusKind, StatusMsg,
+    header_line, Compose, ComposeStatus, FooterMode, Identity, ListOrigin, Selection, StatusKind,
+    StatusMsg,
 };
 use super::panel;
 use super::theme;
@@ -72,6 +73,7 @@ fn make_list_model_with_rows(rows: Vec<IssueRow>, selected: usize) -> Model {
         list_origin: ListOrigin::Mine,
         projects: vec![],
         projects_selected: 0,
+        compose: None,
     }
 }
 
@@ -130,6 +132,7 @@ fn make_list_model(identities: Vec<Identity>) -> Model {
         list_origin: ListOrigin::Mine,
         projects: vec![],
         projects_selected: 0,
+        compose: None,
     }
 }
 
@@ -2792,4 +2795,98 @@ fn projects_click_row_windowed_click_resolves_windowed_index_not_zero() {
     // first_visible_card(9, 10, 15) == 0 (all fit), so a click on the last
     // row (index 9 => y = 2 + 9 = 11) must resolve to 9, not clamp away.
     assert_eq!(view::projects_click_row(&model, area, 11), Some(9));
+}
+
+// ---- c3b-comment-compose / ADR 0024 §3-6 / BDR 0015 S5 — the compose modal
+// renders over Detail through the C3a `render_modal` primitive: a dimmed
+// backdrop, a centered box, and the localized title/typed buffer/hint/status
+// inside it ----
+
+fn make_composing_detail_model(buffer: &str, status: ComposeStatus) -> Model {
+    let mut model = make_detail_model(vec![]);
+    model.compose = Some(Compose {
+        buffer: buffer.to_owned(),
+        status,
+    });
+    model
+}
+
+#[test]
+fn compose_modal_dims_the_backdrop_and_boxes_at_roughly_seventy_percent() {
+    let model = make_composing_detail_model("hi", ComposeStatus::Idle);
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    let backdrop_style = cell_style(&buf, 0, 0);
+    assert!(
+        backdrop_style.add_modifier.contains(Modifier::DIM),
+        "backdrop cell must carry DIM: {backdrop_style:?}"
+    );
+    assert_eq!(backdrop_style.bg, theme::modal_backdrop().bg);
+}
+
+#[test]
+fn compose_modal_renders_localized_title_typed_buffer_and_hint() {
+    let model = make_composing_detail_model("hello world", ComposeStatus::Idle);
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    assert!(
+        find_text_position(&buf, "New comment").is_some(),
+        "the modal title must render"
+    );
+    assert!(
+        find_text_position(&buf, "hello world").is_some(),
+        "the typed buffer must render inside the box"
+    );
+    assert!(
+        find_text_position(&buf, "Ctrl+S send").is_some(),
+        "the compose hint must render inside the box"
+    );
+}
+
+#[test]
+fn compose_modal_renders_a_multiline_buffer_as_separate_lines() {
+    let model = make_composing_detail_model("line one\nline two", ComposeStatus::Idle);
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    assert!(find_text_position(&buf, "line one").is_some());
+    assert!(find_text_position(&buf, "line two").is_some());
+}
+
+#[test]
+fn compose_modal_renders_submitting_status_inside_the_box() {
+    let model = make_composing_detail_model("hi", ComposeStatus::Submitting);
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    assert!(
+        find_text_position(&buf, "Sending").is_some(),
+        "the Submitting status must render inside the box"
+    );
+}
+
+#[test]
+fn compose_modal_renders_the_error_reason_inside_the_box() {
+    let model = make_composing_detail_model("hi", ComposeStatus::Error("boom".to_owned()));
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    assert!(
+        find_text_position(&buf, "boom").is_some(),
+        "the failure reason must render inside the box"
+    );
+}
+
+#[test]
+fn compose_modal_does_not_render_when_no_compose_is_open() {
+    let model = make_detail_model(vec![]);
+
+    let buf = render_to_buffer(&model, 60, 24);
+
+    assert!(
+        find_text_position(&buf, "New comment").is_none(),
+        "the compose modal must not render on a plain Detail view"
+    );
 }

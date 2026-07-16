@@ -317,6 +317,7 @@ fn seeded_model(
         list_origin,
         projects: vec![],
         projects_selected: 0,
+        compose: None,
     }
 }
 
@@ -373,6 +374,23 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         'n' => Some(Msg::LoadMore),
         'p' => Some(Msg::OpenProjects),
         'c' if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::Quit),
+        'c' => Some(Msg::OpenCompose),
+        _ => None,
+    }
+}
+
+/// The comment compose's keymap (ADR 0024 §3, BDR 0015 S1-S3): while a
+/// compose is open, it owns every key — printable chars append, Enter
+/// inserts a newline (never submits), Backspace deletes, Ctrl+S submits, Esc
+/// cancels. Any other key (Tab, arrows, …) is a no-op, mirroring
+/// `map_key_in_search_mode`'s exclusivity.
+pub(super) fn map_key_in_compose_mode(key_code: KeyCode, modifiers: KeyModifiers) -> Option<Msg> {
+    match key_code {
+        KeyCode::Esc => Some(Msg::CancelCompose),
+        KeyCode::Enter => Some(Msg::ComposeNewline),
+        KeyCode::Backspace => Some(Msg::ComposeBackspace),
+        KeyCode::Char('s') if modifiers.contains(KeyModifiers::CONTROL) => Some(Msg::SubmitCompose),
+        KeyCode::Char(c) => Some(Msg::ComposeInput(c)),
         _ => None,
     }
 }
@@ -562,8 +580,15 @@ fn handle_terminal_event(
     area: Rect,
 ) -> StepOutcome {
     let search_active = model.search.is_some();
+    let compose_active = model.compose.is_some();
     let msg = match event {
+        Some(Ok(Event::Key(key))) if compose_active => {
+            map_key_in_compose_mode(key.code, key.modifiers)
+        }
         Some(Ok(Event::Key(key))) => map_key_to_msg(key.code, key.modifiers, search_active),
+        // While a compose is open, no mouse event reaches the detail/list
+        // machinery (ADR 0024 §3, BDR 0015 S6) — the backdrop is inert.
+        Some(Ok(Event::Mouse(_))) if compose_active => None,
         Some(Ok(Event::Mouse(mouse))) => resolve_mouse_msg(mouse, search_active, &model, area),
         Some(Ok(_)) => None,
         Some(Err(_)) | None => return StepOutcome::Exit(1),
@@ -647,6 +672,18 @@ fn dispatch_cmd(
         }
         Cmd::LoadProjects => {
             spawn_load_projects(instance.clone(), tx.clone());
+            model
+        }
+        Cmd::SubmitComment { key, body } => {
+            spawn_submit_comment(key, body, instance.clone(), tx.clone());
+            model
+        }
+        Cmd::RefreshDetail(key) => {
+            // Bypasses `dispatch_load_detail`'s cache-read gate on purpose
+            // (ADR 0024 §5, BDR 0015 S2): a stale cached issue must never
+            // shadow the just-posted comment, so this reuses
+            // `spawn_load_detail`'s fetch effect and reply mapping directly.
+            spawn_load_detail(key, instance.clone(), tx.clone());
             model
         }
     }
@@ -746,6 +783,39 @@ fn spawn_load_projects(instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
 pub(crate) async fn run_list_projects(instance: &Instance) -> Result<Vec<ProjectRow>, ClientError> {
     let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.list_projects().await
+}
+
+/// Spawns the comment-compose submit effect (ADR 0024 §4, BDR 0015 S2/S4):
+/// posts `body` on `key` via the C1 `add_comment` seam and replies
+/// `Msg::CommentMutationOk` on success or `Msg::CommentMutationErr` on
+/// failure — an Unauthorized (401) carries the same re-auth guidance text
+/// every other write/read seam builds (E2 parity).
+fn spawn_submit_comment(
+    key: String,
+    body: String,
+    instance: Instance,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    tokio::spawn(async move {
+        let msg = match submit_comment(&instance, &key, &body).await {
+            Ok(()) => Msg::CommentMutationOk,
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::CommentMutationErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::CommentMutationErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn submit_comment(
+    instance: &Instance,
+    key: &str,
+    body: &str,
+) -> Result<(), ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.add_comment(key, body).await?;
+    Ok(())
 }
 
 /// Spawns the load-more page fetch effect (ADR 0009); the result is sent back

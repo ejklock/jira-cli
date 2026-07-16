@@ -53,8 +53,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0044](/issues/0044-b5b-projects-screen-tui.md) | B5b | Projects screen in the browse TUI ('p' opens, Enter drills in) | done | 0043 |
 | [0045](/issues/0045-c1-comment-write-seam.md) | C1 | comment write seam: add/update/delete_comment + ADF builder + write-surface gate | done | — |
 | [0046](/issues/0046-c2-non-tty-comment-command.md) | C2 | non-interactive `jira comment` (-m/stdin body, --json write result) | done | 0045 |
-| [0047](/issues/0047-c3a-modal-primitive.md) | C3a | reusable modal overlay primitive (modal_area + render_modal) | todo | — |
-| [0048](/issues/0048-c3b-compose-post-refresh.md) | C3b | comment compose modal: 'c' opens, Ctrl+S posts, server-truth refresh | todo | 0045, 0047 |
+| [0047](/issues/0047-c3a-modal-primitive.md) | C3a | reusable modal overlay primitive (modal_area + render_modal) | done | — |
+| [0048](/issues/0048-c3b-compose-post-refresh.md) | C3b | comment compose modal: 'c' opens, Ctrl+S posts, server-truth refresh | done | 0045, 0047 |
 | [0049](/issues/0049-e1b-list-commands-tui-default.md) | E1b | list read commands open the browse TUI in a terminal (mine, bare, search) | done | — |
 | [0050](/issues/0050-e1b-detail-commands-tui-default.md) | E1b | single-issue read commands open the detail TUI in a terminal (get, current) | done | 0049 |
 

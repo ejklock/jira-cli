@@ -124,6 +124,31 @@ pub struct Model {
     /// The Projects screen's selected row index, bounded to
     /// `[0, projects.len() - 1]` (BDR 0013 S2).
     pub projects_selected: usize,
+    /// The open comment compose (ADR 0024 §3, BDR 0015): `Some` only while
+    /// `Screen::Detail` shows its modal over the dimmed thread. `None` on
+    /// every other screen and whenever no compose is open.
+    pub compose: Option<Compose>,
+}
+
+/// The comment compose's draft state (ADR 0024 §3): `buffer` is the
+/// multi-line text built by typing (Enter inserts `\n`, never submits, BDR
+/// 0015 S1); `status` tracks the in-box submit feedback. Leaves room for a
+/// future edit variant (C4) without implementing one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compose {
+    pub buffer: String,
+    pub status: ComposeStatus,
+}
+
+/// The compose's in-box status line (ADR 0024 §4-5, BDR 0015 S2/S4):
+/// `Idle` shows no status line; `Submitting` shows the localized "Sending…"
+/// while the write is in flight; `Error(reason)` preserves the draft with a
+/// localized failure reason (a 401 reuses the E2 re-auth message).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComposeStatus {
+    Idle,
+    Submitting,
+    Error(String),
 }
 
 /// An active detail-body text selection (ADR 0019 §1): `anchor` is where the
@@ -213,6 +238,34 @@ pub enum Msg {
     /// A left click resolved to a visible Projects row's index (ADR 0021,
     /// BDR 0013 S2-S3): mirrors `CardClicked`'s contract on the List screen.
     ProjectClicked(usize),
+    /// `c` on the Detail screen with a loaded issue opens the comment compose
+    /// (ADR 0024 §3, BDR 0015 S1, S8): a no-op on List/Projects or with no
+    /// issue loaded yet.
+    OpenCompose,
+    /// A printable character appended to the open compose's buffer (BDR 0015
+    /// S1); a no-op with no compose open.
+    ComposeInput(char),
+    /// Enter inserts a newline into the open compose's buffer — never
+    /// submits (BDR 0015 S1).
+    ComposeNewline,
+    /// Backspace deletes the open compose's last character.
+    ComposeBackspace,
+    /// Ctrl+S submits the open compose (BDR 0015 S2, S7): a non-empty
+    /// (trimmed) buffer emits exactly one `Cmd::SubmitComment` and sets
+    /// `ComposeStatus::Submitting`; an empty/whitespace buffer is a no-op and
+    /// the modal stays open.
+    SubmitCompose,
+    /// Esc discards the open compose: no write, no refresh, the detail is
+    /// unchanged (BDR 0015 S3).
+    CancelCompose,
+    /// The comment write succeeded (ADR 0024 §5, BDR 0015 S2): the compose
+    /// closes and the thread is refreshed from the server — never a
+    /// locally-fabricated comment.
+    CommentMutationOk,
+    /// The comment write failed (ADR 0024 §5, BDR 0015 S4): the buffer is
+    /// preserved, the compose shows the localized reason (a 401 reuses the
+    /// E2 re-auth message), and no refresh happens.
+    CommentMutationErr(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -229,6 +282,18 @@ pub enum Cmd {
     /// The Projects screen's fetch (ADR 0021 §2, BDR 0013 S1): `list_projects`
     /// on 'p', dispatched at most once per Projects screen entry.
     LoadProjects,
+    /// The comment compose's submit effect (ADR 0024 §4): posts `body` as a
+    /// new comment on `key` via the C1 `add_comment` seam.
+    SubmitComment {
+        key: String,
+        body: String,
+    },
+    /// The post-mutation server-truth refresh (ADR 0024 §5, BDR 0015 S2):
+    /// re-fetches `key`'s detail bypassing the cache-read gate `Cmd::LoadDetail`
+    /// uses, so the thread reflects the just-posted comment — reusing
+    /// `Cmd::LoadDetail`'s own fetch effect and single-flight discipline (one
+    /// spawn, one reply), never a second fetch mechanism.
+    RefreshDetail(String),
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
@@ -245,6 +310,9 @@ pub fn entry_cmds(model: &Model) -> Vec<Cmd> {
 /// Pure state transition — no I/O, no terminal, no clock.
 pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
     let model = clear_status_on_key_event(model, &msg);
+    if model.compose.is_some() && leaks_through_open_compose(&msg) {
+        return (model, vec![]);
+    }
     match msg {
         Msg::Up => update_up(model),
         Msg::Down => update_down(model),
@@ -275,6 +343,14 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::ProjectsLoaded(rows) => update_projects_loaded(model, rows),
         Msg::ProjectsFailed(msg) => update_projects_failed(model, msg),
         Msg::ProjectClicked(index) => update_project_clicked(model, index),
+        Msg::OpenCompose => update_open_compose(model),
+        Msg::ComposeInput(c) => update_compose_input(model, c),
+        Msg::ComposeNewline => update_compose_newline(model),
+        Msg::ComposeBackspace => update_compose_backspace(model),
+        Msg::SubmitCompose => update_submit_compose(model),
+        Msg::CancelCompose => update_cancel_compose(model),
+        Msg::CommentMutationOk => update_comment_mutation_ok(model),
+        Msg::CommentMutationErr(reason) => update_comment_mutation_err(model, reason),
     }
 }
 
@@ -304,7 +380,27 @@ fn is_reply_msg(msg: &Msg) -> bool {
             | Msg::RevalidationFailed(_)
             | Msg::ProjectsLoaded(_)
             | Msg::ProjectsFailed(_)
+            | Msg::CommentMutationOk
+            | Msg::CommentMutationErr(_)
     )
+}
+
+/// While a compose is open, only the compose's own `Msg`s and background
+/// replies may reach `update`'s reducers (ADR 0024 §3, BDR 0015 S6): every
+/// other key/mouse-resolved `Msg` — list/detail nav, search, links,
+/// selection, Projects — is inert, so nothing behind the dimmed backdrop
+/// changes and `q` cannot quit while composing.
+fn leaks_through_open_compose(msg: &Msg) -> bool {
+    let compose_owned = matches!(
+        msg,
+        Msg::OpenCompose
+            | Msg::ComposeInput(_)
+            | Msg::ComposeNewline
+            | Msg::ComposeBackspace
+            | Msg::SubmitCompose
+            | Msg::CancelCompose
+    );
+    !compose_owned && !is_reply_msg(msg)
 }
 
 fn update_down(model: Model) -> (Model, Vec<Cmd>) {
@@ -908,6 +1004,129 @@ fn update_revalidation_failed(model: Model, msg: String) -> (Model, Vec<Cmd>) {
         status: Some(StatusMsg {
             text: msg,
             kind: StatusKind::Error,
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// `c` opens the comment compose only on `Screen::Detail` with a loaded
+/// issue (BDR 0015 S1, S8): a no-op on List/Projects (so `c` keeps its
+/// absent meaning there) and on a Detail screen still loading, which has no
+/// issue key to attach the comment to.
+fn update_open_compose(model: Model) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail || model.detail.is_none() {
+        return (model, vec![]);
+    }
+    let next = Model {
+        compose: Some(Compose {
+            buffer: String::new(),
+            status: ComposeStatus::Idle,
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+fn update_compose_input(model: Model, c: char) -> (Model, Vec<Cmd>) {
+    update_compose_buffer(model, |buffer| buffer.push(c))
+}
+
+/// Enter inserts a newline into the buffer — it never submits (BDR 0015 S1);
+/// submitting is `Ctrl+S`'s job alone (`update_submit_compose`).
+fn update_compose_newline(model: Model) -> (Model, Vec<Cmd>) {
+    update_compose_buffer(model, |buffer| buffer.push('\n'))
+}
+
+fn update_compose_backspace(model: Model) -> (Model, Vec<Cmd>) {
+    update_compose_buffer(model, |buffer| {
+        buffer.pop();
+    })
+}
+
+/// Applies `edit` to the open compose's buffer; a no-op with no compose
+/// open. The single seam every buffer-mutating `Msg` routes through, so
+/// `ComposeInput`/`ComposeNewline`/`ComposeBackspace` can never drift on how
+/// the buffer is read or written back.
+fn update_compose_buffer(model: Model, edit: impl FnOnce(&mut String)) -> (Model, Vec<Cmd>) {
+    let Some(mut compose) = model.compose.clone() else {
+        return (model, vec![]);
+    };
+    edit(&mut compose.buffer);
+    let next = Model {
+        compose: Some(compose),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// Ctrl+S submits the open compose (BDR 0015 S2, S7): a non-empty (trimmed)
+/// buffer emits exactly one `Cmd::SubmitComment` for the Detail screen's
+/// loaded issue and sets `Submitting`; an empty/whitespace buffer is a no-op
+/// and the modal stays open unchanged. A no-op with no compose open or no
+/// loaded issue — defense in depth, since the compose only ever opens with
+/// one (mirrors `update_card_clicked`'s guard style).
+fn update_submit_compose(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(compose) = model.compose.clone() else {
+        return (model, vec![]);
+    };
+    if compose.buffer.trim().is_empty() {
+        return (model, vec![]);
+    }
+    let Some(issue) = model.detail.as_ref() else {
+        return (model, vec![]);
+    };
+    let key = issue.key.clone();
+    let body = compose.buffer.clone();
+    let next = Model {
+        compose: Some(Compose {
+            status: ComposeStatus::Submitting,
+            ..compose
+        }),
+        ..model
+    };
+    (next, vec![Cmd::SubmitComment { key, body }])
+}
+
+/// Esc discards the open compose with no write and no refresh, leaving the
+/// detail state (scroll/selection/links) untouched (BDR 0015 S3).
+fn update_cancel_compose(model: Model) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        compose: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// The comment write succeeded (ADR 0024 §5, BDR 0015 S2): the compose
+/// closes and exactly one cache-busting refresh is emitted for the open
+/// issue — never a locally-fabricated comment (the server owns
+/// id/author/timestamp). No refresh key with no loaded issue never happens
+/// in practice (the compose only opens with one), guarded defensively.
+fn update_comment_mutation_ok(model: Model) -> (Model, Vec<Cmd>) {
+    let cmds = match model.detail.as_ref() {
+        Some(issue) => vec![Cmd::RefreshDetail(issue.key.clone())],
+        None => vec![],
+    };
+    let next = Model {
+        compose: None,
+        ..model
+    };
+    (next, cmds)
+}
+
+/// The comment write failed (ADR 0024 §5, BDR 0015 S4): the buffer is
+/// preserved, the compose shows the localized `reason` (a 401 reuses the E2
+/// re-auth message), and no refresh Cmd is emitted. A no-op with no compose
+/// open.
+fn update_comment_mutation_err(model: Model, reason: String) -> (Model, Vec<Cmd>) {
+    let Some(compose) = model.compose.clone() else {
+        return (model, vec![]);
+    };
+    let next = Model {
+        compose: Some(Compose {
+            status: ComposeStatus::Error(reason),
+            ..compose
         }),
         ..model
     };

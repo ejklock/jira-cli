@@ -2,7 +2,7 @@
 type: Issue
 title: "C3b — comment compose through the modal: 'c' opens, Ctrl+S posts, server-truth refresh"
 description: Model gains compose state + keymap (c opens on detail; chars/Enter-newline/Backspace; Ctrl+S submits non-empty; Esc discards) with full key/mouse leakage guards; Cmd::SubmitComment -> shell spawn -> client.add_comment -> CommentMutationOk/Err; Ok clears compose + exactly one cache-busting detail refresh (no optimistic mutation), Err preserves the draft with a localized in-box error (401 reauth); view renders the compose through the C3a modal.
-status: todo
+status: done
 labels: [tui, comments, write, compose, parity]
 blocked_by: 0045, 0047
 tracker:
@@ -17,3 +17,12 @@ Implements [PRD 0003](/prd/0003-active-collab-parity.md) R-C1 (create) per
 
 Scope: `src/tui/model.rs`, `src/tui/view.rs`, `src/tui/shell.rs`,
 `locales/pt_BR.json`, `tests/unit/tui.rs`, `tests/unit/tui_render.rs`.
+
+**Delivered 2026-07-16.** `Model.compose` (`Compose`/`ComposeStatus`), 8 `Msg`
+variants + `Cmd::SubmitComment`/`Cmd::RefreshDetail`; `c` opens on Detail only,
+Enter=newline, Ctrl+S posts via the C1 `add_comment` seam, Esc discards; full
+key/mouse leakage guards. Server-truth only: success emits exactly one
+`Cmd::RefreshDetail` (no optimistic insert), failure preserves the draft with a
+localized in-box error (401 → E2 reauth). Note: `Cmd::RefreshDetail` calls
+`spawn_load_detail` directly to bypass the cache-read gate — `Cmd::LoadDetail`
+would have served the stale pre-comment issue.

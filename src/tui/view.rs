@@ -9,8 +9,10 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::modal;
 use super::model::{
-    footer_mode, header_line, FooterMode, Model, Screen, Selection, StatusKind, StatusMsg,
+    footer_mode, header_line, Compose, ComposeStatus, FooterMode, Model, Screen, Selection,
+    StatusKind, StatusMsg,
 };
 use super::panel;
 use super::theme;
@@ -603,6 +605,42 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
             model.detail_scroll,
             model.selection.as_ref(),
         ),
+    }
+
+    if let Some(compose) = &model.compose {
+        render_compose_modal(frame, area, compose);
+    }
+}
+
+/// Renders the comment compose over the detail through the C3a modal
+/// primitive (ADR 0024 §3, BDR 0015 S5): every user-facing string routes
+/// through `t()`, the buffer becomes the modal's body split on `\n` (Enter's
+/// newline, S1), and the status line reflects `ComposeStatus`. Only ever
+/// called from `view_detail` with `model.compose` set, so it never renders
+/// on List/Projects.
+fn render_compose_modal(frame: &mut Frame, area: Rect, compose: &Compose) {
+    let content = modal::ModalContent {
+        title: t("New comment"),
+        body: compose_body_lines(&compose.buffer),
+        hint: Some(t("Ctrl+S send · Esc cancel")),
+        status: compose_status_text(&compose.status),
+        buttons: vec![],
+    };
+    modal::render_modal(frame, area, &content);
+}
+
+fn compose_body_lines(buffer: &str) -> Vec<Line<'static>> {
+    buffer
+        .split('\n')
+        .map(|line| Line::from(line.to_owned()))
+        .collect()
+}
+
+fn compose_status_text(status: &ComposeStatus) -> Option<String> {
+    match status {
+        ComposeStatus::Idle => None,
+        ComposeStatus::Submitting => Some(t("Sending…")),
+        ComposeStatus::Error(reason) => Some(reason.clone()),
     }
 }
 

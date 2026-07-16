@@ -1,11 +1,12 @@
 use super::*;
 
 use super::model::{
-    entry_cmds, footer_mode, FooterMode, ListOrigin, Selection, StatusKind, StatusMsg,
+    entry_cmds, footer_mode, Compose, ComposeStatus, FooterMode, ListOrigin, Selection, StatusKind,
+    StatusMsg,
 };
 use super::shell::{
-    handle_reply, map_key_in_normal_mode, map_key_in_search_mode, map_mouse_to_msg, read_snapshot,
-    resolve_mouse_msg, MouseIntent,
+    handle_reply, map_key_in_compose_mode, map_key_in_normal_mode, map_key_in_search_mode,
+    map_mouse_to_msg, read_snapshot, resolve_mouse_msg, MouseIntent,
 };
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
@@ -97,6 +98,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         list_origin: ListOrigin::Mine,
         projects: vec![],
         projects_selected: 0,
+        compose: None,
     }
 }
 
@@ -4054,4 +4056,400 @@ fn revalidation_loaded_still_writes_the_mine_snapshot_unaffected() {
         .expect("read must not error")
         .expect("RevalidationLoaded must still write the mine-scope snapshot");
     assert!(stored.contains("MINE-2"));
+}
+
+// ---- c3b-comment-compose / ADR 0024 / BDR 0015 S1-S8 — compose state
+// machine, input-leakage guards, 'c' detail-only scoping ----
+
+fn make_compose_detail_model() -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-1"));
+    model
+}
+
+fn make_composing_detail_model(buffer: &str) -> Model {
+    let mut model = make_compose_detail_model();
+    model.detail_scroll = 2;
+    model.compose = Some(Compose {
+        buffer: buffer.to_owned(),
+        status: ComposeStatus::Idle,
+    });
+    model
+}
+
+// ---- S1, S8: OpenCompose is Detail-only, and only with a loaded issue ----
+
+#[test]
+fn open_compose_on_detail_with_loaded_issue_opens_an_empty_idle_compose() {
+    let model = make_compose_detail_model();
+
+    let (next, cmds) = update(model, Msg::OpenCompose);
+
+    let compose = next
+        .compose
+        .expect("OpenCompose on Detail with a loaded issue must open the compose");
+    assert_eq!(compose.buffer, "");
+    assert_eq!(compose.status, ComposeStatus::Idle);
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_compose_on_list_screen_opens_no_compose() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::OpenCompose);
+
+    assert!(next.compose.is_none(), "'c' on List must open no compose");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_compose_on_projects_screen_opens_no_compose() {
+    let model = make_projects_model(vec![project_row("A", "A Project")]);
+
+    let (next, cmds) = update(model, Msg::OpenCompose);
+
+    assert!(
+        next.compose.is_none(),
+        "'c' on Projects must open no compose"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_compose_on_detail_screen_still_loading_opens_no_compose() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = None;
+
+    let (next, cmds) = update(model, Msg::OpenCompose);
+
+    assert!(
+        next.compose.is_none(),
+        "a Detail screen with no loaded issue has nothing to attach a comment to"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S1: typing builds a multi-line buffer; Enter is a newline, never a submit ----
+
+#[test]
+fn typing_and_enter_build_a_two_line_buffer_with_no_cmd() {
+    let model = make_compose_detail_model();
+    let (model, _) = update(model, Msg::OpenCompose);
+    let (model, _) = update(model, Msg::ComposeInput('L'));
+    let (model, _) = update(model, Msg::ComposeInput('1'));
+    let (model, _) = update(model, Msg::ComposeNewline);
+    let (model, cmds) = update(model, Msg::ComposeInput('2'));
+
+    let compose = model
+        .compose
+        .expect("compose must remain open while typing");
+    assert_eq!(compose.buffer, "L1\n2");
+    assert!(
+        compose.buffer.contains('\n'),
+        "Enter must insert a newline, not submit"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn compose_backspace_pops_the_last_character() {
+    let model = make_composing_detail_model("ab");
+
+    let (next, cmds) = update(model, Msg::ComposeBackspace);
+
+    assert_eq!(next.compose.unwrap().buffer, "a");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn compose_input_with_no_compose_open_is_noop() {
+    let model = make_compose_detail_model();
+
+    let (next, cmds) = update(model, Msg::ComposeInput('x'));
+
+    assert!(next.compose.is_none());
+    assert!(cmds.is_empty());
+}
+
+// ---- S2, S7: Ctrl+S submit gate — non-empty submits exactly once; empty/whitespace never does ----
+
+#[test]
+fn submit_compose_with_non_empty_buffer_emits_exactly_one_submit_comment_and_sets_submitting() {
+    let model = make_composing_detail_model("hi");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::SubmitComment {
+            key: "PROJ-1".to_owned(),
+            body: "hi".to_owned(),
+        }],
+        "a non-empty buffer must emit exactly one SubmitComment for the open key"
+    );
+    let compose = next
+        .compose
+        .expect("the compose must stay open while submitting");
+    assert_eq!(compose.status, ComposeStatus::Submitting);
+    assert_eq!(compose.buffer, "hi", "the buffer must be unchanged");
+}
+
+#[test]
+fn submit_compose_with_empty_buffer_emits_no_cmd_and_stays_open() {
+    let model = make_composing_detail_model("");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert!(cmds.is_empty(), "an empty buffer must never submit");
+    assert_eq!(next.compose.unwrap().status, ComposeStatus::Idle);
+}
+
+#[test]
+fn submit_compose_with_whitespace_only_buffer_emits_no_cmd() {
+    let model = make_composing_detail_model("   \n  ");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert!(
+        cmds.is_empty(),
+        "a whitespace-only buffer must never submit"
+    );
+    assert_eq!(next.compose.unwrap().status, ComposeStatus::Idle);
+}
+
+#[test]
+fn submit_compose_with_no_compose_open_is_noop() {
+    let model = make_compose_detail_model();
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert!(next.compose.is_none());
+    assert!(cmds.is_empty());
+}
+
+// ---- S2: CommentMutationOk closes the compose and refreshes the thread ----
+
+#[test]
+fn comment_mutation_ok_closes_compose_and_emits_exactly_one_cache_busting_refresh() {
+    let mut model = make_composing_detail_model("hi");
+    model.compose = Some(Compose {
+        buffer: "hi".to_owned(),
+        status: ComposeStatus::Submitting,
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(next.compose.is_none(), "success must close the compose");
+    assert_eq!(
+        cmds,
+        vec![Cmd::RefreshDetail("PROJ-1".to_owned())],
+        "success must emit exactly one cache-busting refresh for the open key"
+    );
+}
+
+#[test]
+fn comment_mutation_ok_with_no_loaded_issue_emits_no_refresh() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = None;
+    model.compose = Some(Compose {
+        buffer: "hi".to_owned(),
+        status: ComposeStatus::Submitting,
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(next.compose.is_none());
+    assert!(cmds.is_empty());
+}
+
+// ---- S4: CommentMutationErr preserves the draft, sets Error, emits no refresh ----
+
+#[test]
+fn comment_mutation_err_preserves_buffer_sets_error_and_emits_no_refresh() {
+    let mut model = make_composing_detail_model("hi");
+    model.compose = Some(Compose {
+        buffer: "hi".to_owned(),
+        status: ComposeStatus::Submitting,
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr("boom".to_owned()));
+
+    let compose = next
+        .compose
+        .expect("a failed submit must keep the compose open");
+    assert_eq!(compose.buffer, "hi", "the draft must be preserved");
+    assert_eq!(compose.status, ComposeStatus::Error("boom".to_owned()));
+    assert!(cmds.is_empty(), "a failed submit must emit no refresh Cmd");
+}
+
+#[test]
+fn comment_mutation_err_with_no_compose_open_is_noop() {
+    let model = make_compose_detail_model();
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr("boom".to_owned()));
+
+    assert!(next.compose.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn comment_mutation_err_with_reauth_message_surfaces_the_e2_guidance() {
+    let guidance = crate::commands::reauth_message("work");
+    let model = make_composing_detail_model("hi");
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr(guidance.clone()));
+
+    let compose = next.compose.expect("failure must keep the compose open");
+    assert_eq!(compose.status, ComposeStatus::Error(guidance));
+    assert!(cmds.is_empty());
+}
+
+// ---- S3: Esc discards the draft with no Cmd, detail untouched ----
+
+#[test]
+fn cancel_compose_closes_with_no_cmd_and_leaves_detail_untouched() {
+    let model = make_composing_detail_model("draft");
+
+    let (next, cmds) = update(model, Msg::CancelCompose);
+
+    assert!(next.compose.is_none());
+    assert!(cmds.is_empty());
+    assert_eq!(
+        next.detail_scroll, 2,
+        "cancel must never touch detail state"
+    );
+}
+
+// ---- S6: no key/mouse leakage while a compose is open ----
+
+#[test]
+fn list_and_detail_nav_keys_are_inert_while_composing() {
+    fn assert_inert(msg: Msg) {
+        let model = make_composing_detail_model("draft");
+        let (next, cmds) = update(model, msg);
+
+        assert!(next.compose.is_some(), "the compose must remain open");
+        assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+        assert_eq!(next.detail_scroll, 2, "detail scroll must be unchanged");
+        assert!(cmds.is_empty(), "a leaked msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::Down);
+    assert_inert(Msg::Up);
+    assert_inert(Msg::Back);
+    assert_inert(Msg::FocusNextLink);
+    assert_inert(Msg::OpenProjects);
+    assert_inert(Msg::LoadMore);
+}
+
+#[test]
+fn quit_does_not_quit_while_composing() {
+    let model = make_composing_detail_model("draft");
+
+    let (next, cmds) = update(model, Msg::Quit);
+
+    assert!(next.compose.is_some(), "compose must stay open");
+    assert!(
+        !cmds.contains(&Cmd::Quit),
+        "q must not quit while composing"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn mouse_resolved_msgs_are_inert_while_composing() {
+    fn assert_inert(msg: Msg) {
+        let model = make_composing_detail_model("draft");
+        let (next, cmds) = update(model, msg);
+
+        assert!(next.compose.is_some(), "the compose must remain open");
+        assert!(
+            next.selection.is_none(),
+            "no selection must be created while composing"
+        );
+        assert!(cmds.is_empty(), "a leaked mouse msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::CardClicked(0));
+    assert_inert(Msg::LinkClicked("https://example.com".to_owned()));
+    assert_inert(Msg::SelStart((0, 0)));
+    assert_inert(Msg::SelDrag((0, 0)));
+    assert_inert(Msg::SelEnd(Some("x".to_owned())));
+    assert_inert(Msg::ProjectClicked(0));
+}
+
+// ---- shell keymap: 'c' opens compose in normal mode; the compose keymap
+// owns Enter/Backspace/Ctrl+S/Esc/printable chars exclusively ----
+
+#[test]
+fn map_key_in_normal_mode_c_opens_compose() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('c'), KeyModifiers::NONE),
+        Some(Msg::OpenCompose)
+    ));
+}
+
+#[test]
+fn map_key_in_normal_mode_ctrl_c_still_quits() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Msg::Quit)
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_esc_cancels() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Esc, KeyModifiers::NONE),
+        Some(Msg::CancelCompose)
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_enter_inserts_newline_never_submits() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Enter, KeyModifiers::NONE),
+        Some(Msg::ComposeNewline)
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_backspace_deletes() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Backspace, KeyModifiers::NONE),
+        Some(Msg::ComposeBackspace)
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_ctrl_s_submits() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        Some(Msg::SubmitCompose)
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_plain_s_types_into_the_buffer() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Char('s'), KeyModifiers::NONE),
+        Some(Msg::ComposeInput('s'))
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_plain_char_appends() {
+    assert!(matches!(
+        map_key_in_compose_mode(KeyCode::Char('q'), KeyModifiers::NONE),
+        Some(Msg::ComposeInput('q'))
+    ));
+}
+
+#[test]
+fn map_key_in_compose_mode_tab_is_unmapped() {
+    assert!(map_key_in_compose_mode(KeyCode::Tab, KeyModifiers::NONE).is_none());
 }
