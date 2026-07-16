@@ -1,3 +1,4 @@
+mod modal;
 mod model;
 mod panel;
 mod shell;

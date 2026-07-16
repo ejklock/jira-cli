@@ -101,3 +101,34 @@ pub fn status_error() -> Style {
 pub fn selection_highlight() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
 }
+
+/// The modal panel's border style (ADR 0024 §2, BDR 0015 S5): the same
+/// cool-retro accent as the section titles, so the box reads as a sibling of
+/// the rounded detail panels.
+pub fn modal_border() -> Style {
+    Style::default().fg(Color::Rgb(102, 204, 204))
+}
+
+/// The modal panel's interior background (ADR 0024 §2): the same steel-blue
+/// fill as the header/footer bars, so the box reads as chrome floating over
+/// the dimmed thread rather than a transparent frame.
+pub fn modal_background() -> Style {
+    Style::default().bg(Color::Rgb(38, 52, 74))
+}
+
+/// The dimmed backdrop behind an open modal (ADR 0024 §2a, BDR 0015 S5):
+/// `Modifier::DIM` plus a near-black background, patched onto every cell
+/// behind the box so the thread reads as strongly behind it, not merely
+/// darkened text.
+pub fn modal_backdrop() -> Style {
+    Style::default()
+        .bg(Color::Rgb(13, 13, 13))
+        .add_modifier(Modifier::DIM)
+}
+
+/// The modal's in-box hint/status line (ADR 0024 §2): a muted foreground on
+/// the modal background, so the trailing chrome line reads distinct from the
+/// body text without competing with it.
+pub fn modal_hint() -> Style {
+    Style::default().fg(Color::Rgb(140, 165, 196))
+}
