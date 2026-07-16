@@ -1,36 +1,16 @@
 use super::*;
+use crate::test_support::{comment, issue as issue_fixture};
 use serde_json::json;
 
 #[test]
 fn issue_roundtrips_through_serde() {
+    // Overrides `duedate`/`comments` explicitly: the shared fixture defaults them
+    // to `None`/empty, but a serde round-trip must also exercise `Some(duedate)`
+    // and a non-empty `comments` vec (itself with partial `None` fields).
     let issue = Issue {
-        key: "PROJ-1".to_string(),
-        summary: "Do the thing".to_string(),
-        status: "In Progress".to_string(),
-        status_category: Some("In Progress".to_string()),
-        issue_type: "Task".to_string(),
-        assignee: Some(IssueAssignee {
-            display_name: "Alice".to_string(),
-            account_id: Some("abc123".to_string()),
-        }),
-        reporter: Some(IssueAssignee {
-            display_name: "Charlie".to_string(),
-            account_id: Some("def456".to_string()),
-        }),
-        priority: Some("High".to_string()),
-        created: Some("2026-01-01T00:00:00+00:00".to_string()),
-        updated: Some("2026-01-02T00:00:00+00:00".to_string()),
         duedate: Some("2026-01-05".to_string()),
-        description: Some("Description text".to_string()),
-        comments: vec![IssueComment {
-            id: Some("10".to_string()),
-            author: Some("Bob".to_string()),
-            author_account_id: None,
-            body: "Nice work".to_string(),
-            created: None,
-            updated: None,
-        }],
-        attachments: vec![],
+        comments: vec![comment(Some("10"), Some("Bob"), "Nice work", None, None)],
+        ..issue_fixture("PROJ-1")
     };
 
     let serialized = serde_json::to_value(&issue).unwrap();

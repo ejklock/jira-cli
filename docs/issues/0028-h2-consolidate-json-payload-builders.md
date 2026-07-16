@@ -2,13 +2,21 @@
 type: Issue
 title: "H2 — centralize the JSON payload builders (client + commands) into support.rs"
 description: Move build_issue_payload (95% duplicated between tests/unit/client.rs and tests/unit/commands.rs), build_myself_payload, and the Instance builder into tests/unit/support.rs, parametrized to cover both call sites; migrate client.rs + commands.rs. No behavior change, no assertion change. Second of three test-support consolidation slices (observation 55).
-status: open
+status: done
 tracker:
 tags: [test-hygiene, fixtures, duplication, debt, phase2]
 timestamp: 2026-07-01T00:00:00Z
 ---
 
 # H2 — centralize the JSON payload builders (client + commands)
+
+> **Delivered 2026-07-16** via the re-sliced test-support debt program
+> (plan `589`, slice B). `build_issue_payload` diverged in 9 fields between
+> `client.rs` and `commands.rs`, so it was consolidated as a shared
+> parametrized builder (`IssuePayloadOptions` + thin per-file wrappers) in
+> `support.rs`; `build_myself_payload` (an exact duplicate) was moved
+> verbatim. The two exhaustive `Issue{..}` literals in those files were also
+> spread onto `..issue(key)`.
 
 ## Objective link
 

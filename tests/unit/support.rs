@@ -176,3 +176,220 @@ pub(crate) fn issue(key: &str) -> Issue {
         attachments: vec![],
     }
 }
+
+// --- HTTP fixture payload builders (formerly duplicated between
+// tests/unit/client.rs and tests/unit/commands.rs `get_issue`/`get_core`
+// tests) ---
+
+/// Every field where `client.rs`'s and `commands.rs`'s issue payload fixtures
+/// diverge. Each call site supplies its own current values so
+/// `build_issue_payload` reproduces its exact prior JSON byte-for-byte.
+pub(crate) struct IssuePayloadOptions<'a> {
+    pub status_description: &'a str,
+    pub issuetype_description: &'a str,
+    pub assignee_account_id: &'a str,
+    pub assignee_display_name: &'a str,
+    pub assignee_email: Option<&'a str>,
+    pub reporter: Option<(&'a str, &'a str)>,
+    pub comment_author_account_id: &'a str,
+    pub comment_collection_self: Option<&'a str>,
+    pub attachments: Option<serde_json::Value>,
+}
+
+fn build_comment_field(
+    author_account_id: &str,
+    collection_self: Option<&str>,
+) -> serde_json::Value {
+    let mut comment = serde_json::json!({
+        "comments": [
+            {
+                "id": "100",
+                "self": "https://example.atlassian.net/rest/api/3/issue/10001/comment/100",
+                "author": {
+                    "accountId": author_account_id,
+                    "displayName": "Bob Dev",
+                    "active": true,
+                    "self": format!(
+                        "https://example.atlassian.net/rest/api/3/user?accountId={author_account_id}"
+                    ),
+                    "avatarUrls": {}
+                },
+                "body": "Reproduced on v2.1.",
+                "created": "2026-06-29T10:00:00.000+0000",
+                "updated": "2026-06-29T10:00:00.000+0000"
+            }
+        ],
+        "maxResults": 1,
+        "total": 1,
+        "startAt": 0
+    });
+    if let Some(self_url) = collection_self {
+        comment["self"] = serde_json::json!(self_url);
+    }
+    comment
+}
+
+/// The Jira Cloud `GET /issue/{key}` response shape, parametrized on every
+/// field `client.rs` and `commands.rs` set differently. See
+/// `IssuePayloadOptions` for the union of those differences.
+pub(crate) fn build_issue_payload(opts: IssuePayloadOptions) -> serde_json::Value {
+    let mut assignee = serde_json::json!({
+        "accountId": opts.assignee_account_id,
+        "displayName": opts.assignee_display_name,
+        "active": true,
+        "self": format!(
+            "https://example.atlassian.net/rest/api/3/user?accountId={}",
+            opts.assignee_account_id
+        ),
+        "avatarUrls": {}
+    });
+    if let Some(email) = opts.assignee_email {
+        assignee["emailAddress"] = serde_json::json!(email);
+    }
+
+    let mut fields = serde_json::json!({
+        "summary": "Fix the login bug",
+        "status": {
+            "id": "3",
+            "name": "In Progress",
+            "description": opts.status_description,
+            "iconUrl": "https://example.atlassian.net/images/icons/statuses/inprogress.png",
+            "self": "https://example.atlassian.net/rest/api/3/status/3",
+            "statusCategory": {
+                "id": 4,
+                "key": "indeterminate",
+                "colorName": "yellow",
+                "name": "In Progress"
+            }
+        },
+        "issuetype": {
+            "id": "10002",
+            "name": "Bug",
+            "description": opts.issuetype_description,
+            "iconUrl": "https://example.atlassian.net/images/icons/issuetypes/bug.png",
+            "self": "https://example.atlassian.net/rest/api/3/issuetype/10002",
+            "subtask": false
+        },
+        "assignee": assignee,
+        "priority": {
+            "id": "2",
+            "name": "High",
+            "iconUrl": "https://example.atlassian.net/images/icons/priorities/high.png",
+            "self": "https://example.atlassian.net/rest/api/3/priority/2"
+        },
+        "created": "2026-01-10T09:00:00.000+0000",
+        "updated": "2026-06-29T12:00:00.000+0000",
+        "description": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        { "type": "text", "text": "Login fails when MFA is enabled." }
+                    ]
+                }
+            ]
+        },
+        "comment": build_comment_field(opts.comment_author_account_id, opts.comment_collection_self)
+    });
+
+    if let Some(attachments) = opts.attachments {
+        fields["attachment"] = attachments;
+    }
+    if let Some((account_id, display_name)) = opts.reporter {
+        fields["reporter"] = serde_json::json!({
+            "accountId": account_id,
+            "displayName": display_name,
+            "active": true,
+            "self": format!(
+                "https://example.atlassian.net/rest/api/3/user?accountId={account_id}"
+            ),
+            "avatarUrls": {}
+        });
+    }
+
+    serde_json::json!({
+        "id": "10001",
+        "key": "PROJ-123",
+        "self": "https://example.atlassian.net/rest/api/3/issue/10001",
+        "fields": fields
+    })
+}
+
+pub(crate) fn build_myself_payload() -> serde_json::Value {
+    serde_json::json!({
+        "accountId": "5b10a2844c20165700ede21g",
+        "displayName": "Alice Example",
+        "emailAddress": "alice@example.com",
+        "active": true,
+        "self": "https://example.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
+        "avatarUrls": {}
+    })
+}
+
+// --- shared instance / search-payload builders (formerly duplicated between
+// tests/unit/tui.rs and tests/unit/tui/shell.rs) ---
+
+pub(crate) fn make_test_instance() -> crate::store::instances::Instance {
+    crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: "https://test.atlassian.net".to_owned(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    }
+}
+
+pub(crate) fn build_search_payload_with_key(key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "issues": [
+            {
+                "id": "10001",
+                "key": key,
+                "self": "https://example.atlassian.net/rest/api/3/issue/10001",
+                "fields": {
+                    "summary": "Search result issue",
+                    "status": {
+                        "id": "1",
+                        "name": "Open",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "statusCategory": {
+                            "id": 2,
+                            "key": "new",
+                            "colorName": "blue-gray",
+                            "name": "To Do"
+                        }
+                    },
+                    "issuetype": {
+                        "id": "10002",
+                        "name": "Task",
+                        "description": "",
+                        "iconUrl": "",
+                        "self": "",
+                        "subtask": false
+                    },
+                    "assignee": {
+                        "accountId": "u1",
+                        "displayName": "Bob",
+                        "active": true,
+                        "self": "",
+                        "avatarUrls": {}
+                    },
+                    "priority": {
+                        "id": "3",
+                        "name": "Medium",
+                        "iconUrl": "",
+                        "self": ""
+                    },
+                    "created": "2026-01-01T00:00:00.000+0000",
+                    "updated": "2026-06-29T00:00:00.000+0000"
+                }
+            }
+        ],
+        "isLast": true,
+        "nextPageToken": null
+    })
+}

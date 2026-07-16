@@ -1,5 +1,6 @@
 use super::*;
 use crate::store::instances::Instance;
+use crate::test_support::*;
 use wiremock::matchers::{body_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -14,112 +15,31 @@ fn make_instance(base_url: &str) -> Instance {
 }
 
 fn build_issue_payload() -> serde_json::Value {
-    serde_json::json!({
-        "id": "10001",
-        "key": "PROJ-123",
-        "self": "https://example.atlassian.net/rest/api/3/issue/10001",
-        "fields": {
-            "summary": "Fix the login bug",
-            "status": {
-                "id": "3",
-                "name": "In Progress",
-                "description": "This issue is being worked on",
-                "iconUrl": "https://example.atlassian.net/images/icons/statuses/inprogress.png",
-                "self": "https://example.atlassian.net/rest/api/3/status/3",
-                "statusCategory": {
-                    "id": 4,
-                    "key": "indeterminate",
-                    "colorName": "yellow",
-                    "name": "In Progress"
-                }
+    crate::test_support::build_issue_payload(IssuePayloadOptions {
+        status_description: "This issue is being worked on",
+        issuetype_description: "A problem or error",
+        assignee_account_id: "5b10a2844c20165700ede21g",
+        assignee_display_name: "Alice Example",
+        assignee_email: Some("alice@example.com"),
+        reporter: None,
+        comment_author_account_id: "aaa",
+        comment_collection_self: Some(
+            "https://example.atlassian.net/rest/api/3/issue/10001/comment",
+        ),
+        attachments: Some(serde_json::json!([
+            {
+                "id": "200",
+                "filename": "screenshot.png",
+                "content": "https://example.atlassian.net/secure/attachment/200/screenshot.png",
+                "mimeType": "image/png",
+                "size": 2048
             },
-            "issuetype": {
-                "id": "10002",
-                "name": "Bug",
-                "description": "A problem or error",
-                "iconUrl": "https://example.atlassian.net/images/icons/issuetypes/bug.png",
-                "self": "https://example.atlassian.net/rest/api/3/issuetype/10002",
-                "subtask": false
-            },
-            "assignee": {
-                "accountId": "5b10a2844c20165700ede21g",
-                "displayName": "Alice Example",
-                "emailAddress": "alice@example.com",
-                "active": true,
-                "self": "https://example.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
-                "avatarUrls": {}
-            },
-            "priority": {
-                "id": "2",
-                "name": "High",
-                "iconUrl": "https://example.atlassian.net/images/icons/priorities/high.png",
-                "self": "https://example.atlassian.net/rest/api/3/priority/2"
-            },
-            "created": "2026-01-10T09:00:00.000+0000",
-            "updated": "2026-06-29T12:00:00.000+0000",
-            "description": {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Login fails when MFA is enabled."
-                            }
-                        ]
-                    }
-                ]
-            },
-            "comment": {
-                "comments": [
-                    {
-                        "id": "100",
-                        "self": "https://example.atlassian.net/rest/api/3/issue/10001/comment/100",
-                        "author": {
-                            "accountId": "aaa",
-                            "displayName": "Bob Dev",
-                            "active": true,
-                            "self": "https://example.atlassian.net/rest/api/3/user?accountId=aaa",
-                            "avatarUrls": {}
-                        },
-                        "body": "Reproduced on v2.1.",
-                        "created": "2026-06-29T10:00:00.000+0000",
-                        "updated": "2026-06-29T10:00:00.000+0000"
-                    }
-                ],
-                "self": "https://example.atlassian.net/rest/api/3/issue/10001/comment",
-                "maxResults": 1,
-                "total": 1,
-                "startAt": 0
-            },
-            "attachment": [
-                {
-                    "id": "200",
-                    "filename": "screenshot.png",
-                    "content": "https://example.atlassian.net/secure/attachment/200/screenshot.png",
-                    "mimeType": "image/png",
-                    "size": 2048
-                },
-                {
-                    "id": "201",
-                    "filename": "notes.txt",
-                    "content": "https://example.atlassian.net/secure/attachment/201/notes.txt"
-                }
-            ]
-        }
-    })
-}
-
-fn build_myself_payload() -> serde_json::Value {
-    serde_json::json!({
-        "accountId": "5b10a2844c20165700ede21g",
-        "displayName": "Alice Example",
-        "emailAddress": "alice@example.com",
-        "active": true,
-        "self": "https://example.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
-        "avatarUrls": {}
+            {
+                "id": "201",
+                "filename": "notes.txt",
+                "content": "https://example.atlassian.net/secure/attachment/201/notes.txt"
+            }
+        ])),
     })
 }
 
@@ -844,25 +764,21 @@ fn issue_pre_attachments_cached_json_deserializes_with_empty_attachments() {
 #[test]
 fn issue_attachments_roundtrip_through_serde() {
     let issue = crate::models::Issue {
-        key: "PROJ-10".to_string(),
         summary: "Has attachments".to_string(),
-        status: "Open".to_string(),
         status_category: None,
-        issue_type: "Task".to_string(),
         assignee: None,
         reporter: None,
         priority: None,
         created: None,
         updated: None,
-        duedate: None,
         description: None,
-        comments: vec![],
         attachments: vec![crate::test_support::attachment(
             "screenshot.png",
             "https://example.atlassian.net/secure/attachment/200/screenshot.png",
             Some("image/png"),
             Some(2048),
         )],
+        ..crate::test_support::issue("PROJ-10")
     };
 
     let serialized = serde_json::to_value(&issue).unwrap();

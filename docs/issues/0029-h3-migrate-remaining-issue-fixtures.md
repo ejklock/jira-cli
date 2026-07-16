@@ -2,13 +2,20 @@
 type: Issue
 title: "H3 — migrate the remaining Issue fixtures (cache/agent_json/models) to the shared builder"
 description: Migrate the last exhaustive Issue{..} fixtures — tests/unit/store/cache.rs make_issue, tests/unit/agent_json.rs sample_issue, and tests/unit/models.rs inline Issue literal — to the shared crate::test_support::issue()+spread builder, so every Issue{..} literal lives once in support.rs and a future Issue field only touches it. No behavior change, no assertion change. Third of three test-support consolidation slices (observation 55).
-status: open
+status: done
 tracker:
 tags: [test-hygiene, fixtures, duplication, debt, phase2]
 timestamp: 2026-07-01T00:00:00Z
 ---
 
 # H3 — migrate the remaining Issue fixtures (cache / agent_json / models)
+
+> **Delivered 2026-07-16** via the re-sliced test-support debt program
+> (plan `589`, slice C). `cache.rs make_issue`, `agent_json.rs sample_issue`
+> and the `models.rs` serde-roundtrip literal were all migrated to
+> `..crate::test_support::issue(key)` spreads. After this slice the only
+> exhaustive all-field `Issue{..}` literal in `tests/unit/**` is `support.rs`'s
+> `issue()` builder — adding a future `Issue` field now touches one file.
 
 ## Objective link
 

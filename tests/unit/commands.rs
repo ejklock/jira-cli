@@ -1,10 +1,11 @@
 use super::*;
 use crate::config::Config;
 use crate::i18n::{set_language, LANG_MUTEX};
-use crate::models::{Issue, IssueAssignee, IssueComment};
+use crate::models::{Issue, IssueComment};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::{Instance, InstanceRepository};
 use crate::store::Store;
+use crate::test_support::*;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -44,17 +45,6 @@ fn sample_instance(store: &Store, name: &str) -> Instance {
 
 fn output_str(buf: &[u8]) -> &str {
     std::str::from_utf8(buf).unwrap()
-}
-
-fn build_myself_payload() -> serde_json::Value {
-    serde_json::json!({
-        "accountId": "5b10a2844c20165700ede21g",
-        "displayName": "Alice Example",
-        "emailAddress": "alice@example.com",
-        "active": true,
-        "self": "https://example.atlassian.net/rest/api/3/user?accountId=5b10a2844c20165700ede21g",
-        "avatarUrls": {}
-    })
 }
 
 // ---- pick_instance tests ----
@@ -440,83 +430,16 @@ fn parse_issue_ref_lowercase_key_returns_none() {
 // ---- get_core integration tests (BDR 0001) ----
 
 fn build_issue_payload() -> serde_json::Value {
-    serde_json::json!({
-        "id": "10001",
-        "key": "PROJ-123",
-        "self": "https://example.atlassian.net/rest/api/3/issue/10001",
-        "fields": {
-            "summary": "Fix the login bug",
-            "status": {
-                "id": "3",
-                "name": "In Progress",
-                "description": "Being worked on",
-                "iconUrl": "https://example.atlassian.net/images/icons/statuses/inprogress.png",
-                "self": "https://example.atlassian.net/rest/api/3/status/3",
-                "statusCategory": {
-                    "id": 4,
-                    "key": "indeterminate",
-                    "colorName": "yellow",
-                    "name": "In Progress"
-                }
-            },
-            "issuetype": {
-                "id": "10002",
-                "name": "Bug",
-                "description": "A problem",
-                "iconUrl": "https://example.atlassian.net/images/icons/issuetypes/bug.png",
-                "self": "https://example.atlassian.net/rest/api/3/issuetype/10002",
-                "subtask": false
-            },
-            "assignee": {
-                "accountId": "acc-alice",
-                "displayName": "Alice",
-                "active": true,
-                "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-alice",
-                "avatarUrls": {}
-            },
-            "reporter": {
-                "accountId": "acc-reporter",
-                "displayName": "Reporter Name",
-                "active": true,
-                "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-reporter",
-                "avatarUrls": {}
-            },
-            "priority": {
-                "id": "2",
-                "name": "High",
-                "iconUrl": "https://example.atlassian.net/images/icons/priorities/high.png",
-                "self": "https://example.atlassian.net/rest/api/3/priority/2"
-            },
-            "created": "2026-01-10T09:00:00.000+0000",
-            "updated": "2026-06-29T12:00:00.000+0000",
-            "description": {
-                "type": "doc",
-                "version": 1,
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{ "type": "text", "text": "Login fails when MFA is enabled." }]
-                }]
-            },
-            "comment": {
-                "comments": [{
-                    "id": "100",
-                    "self": "https://example.atlassian.net/rest/api/3/issue/10001/comment/100",
-                    "author": {
-                        "accountId": "acc-bob",
-                        "displayName": "Bob Dev",
-                        "active": true,
-                        "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-bob",
-                        "avatarUrls": {}
-                    },
-                    "body": "Reproduced on v2.1.",
-                    "created": "2026-06-29T10:00:00.000+0000",
-                    "updated": "2026-06-29T10:00:00.000+0000"
-                }],
-                "maxResults": 1,
-                "total": 1,
-                "startAt": 0
-            }
-        }
+    crate::test_support::build_issue_payload(IssuePayloadOptions {
+        status_description: "Being worked on",
+        issuetype_description: "A problem",
+        assignee_account_id: "acc-alice",
+        assignee_display_name: "Alice",
+        assignee_email: None,
+        reporter: Some(("acc-reporter", "Reporter Name")),
+        comment_author_account_id: "acc-bob",
+        comment_collection_self: None,
+        attachments: None,
     })
 }
 
@@ -828,20 +751,13 @@ fn build_updated_issue_payload() -> serde_json::Value {
 
 fn pre_populate_cache(store: &Store, instance_name: &str) {
     let issue = Issue {
-        key: "PROJ-123".to_string(),
         summary: "Cached summary before refresh".to_string(),
-        status: "Open".to_string(),
-        status_category: Some("new".to_string()),
         issue_type: "Bug".to_string(),
-        assignee: Some(IssueAssignee {
-            display_name: "Alice".to_string(),
-            account_id: Some("acc-alice".to_string()),
-        }),
+        assignee: Some(assignee("Alice", Some("acc-alice"))),
         reporter: None,
         priority: None,
         created: None,
         updated: None,
-        duedate: None,
         description: None,
         comments: vec![IssueComment {
             id: Some("1".to_string()),
@@ -851,7 +767,7 @@ fn pre_populate_cache(store: &Store, instance_name: &str) {
             created: None,
             updated: None,
         }],
-        attachments: vec![],
+        ..crate::test_support::issue("PROJ-123")
     };
     IssueCache::new(store.conn())
         .write(instance_name, &issue)

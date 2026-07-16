@@ -2,13 +2,21 @@
 type: Issue
 title: "H1 — shared tests/unit/support.rs (ADF + Issue builders), migrate render + tui tests"
 description: Create a shared tests/unit/support.rs test-support module (ADF fixture builders, duedate_offset_from_today, assignee()/comment() helpers, and an issue(key) builder), wire it into src/main.rs via #[cfg(test)] mod test_support, and migrate tests/unit/render.rs + tests/unit/tui.rs to use it — deleting their duplicated local fixtures. No production behavior change, no test assertion change. First of three test-support consolidation slices (observation 55).
-status: open
+status: done
 tracker:
 tags: [test-hygiene, fixtures, duplication, debt, phase2]
 timestamp: 2026-07-01T00:00:00Z
 ---
 
 # H1 — shared `tests/unit/support.rs` + migrate render/tui tests
+
+> **Delivered 2026-07-16** via the re-sliced test-support debt program
+> (plan `589`, slice A). This manifest had drifted: `support.rs` already
+> existed and was wired, and issue [0015](/issues/0015-split-tui-into-submodule.md)
+> had split `tui.rs` into a `tui/` submodule after H1 was written. Slice A
+> migrated the TUI fixtures and de-duplicated `make_test_instance` +
+> `build_search_payload_with_key` (the new duplicates the split introduced,
+> unlisted here) into `support.rs`.
 
 ## Objective link
 

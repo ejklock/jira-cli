@@ -1,16 +1,8 @@
 use super::*;
 
-// ---- Helpers ----
+use crate::test_support::{build_search_payload_with_key, make_test_instance};
 
-fn make_test_instance() -> crate::store::instances::Instance {
-    crate::store::instances::Instance {
-        name: "test".to_owned(),
-        base_url: "https://test.atlassian.net".to_owned(),
-        email: "test@example.com".to_owned(),
-        token: "token".to_owned(),
-        account_id: None,
-    }
-}
+// ---- Helpers ----
 
 fn open_in_memory_conn() -> rusqlite::Connection {
     rusqlite::Connection::open_in_memory().unwrap()
@@ -25,59 +17,6 @@ fn open_temp_store() -> (tempfile::TempDir, crate::store::Store) {
     };
     let store = crate::store::Store::open(&config).unwrap();
     (dir, store)
-}
-
-fn build_search_payload_with_key(key: &str) -> serde_json::Value {
-    serde_json::json!({
-        "issues": [
-            {
-                "id": "10001",
-                "key": key,
-                "self": "https://example.atlassian.net/rest/api/3/issue/10001",
-                "fields": {
-                    "summary": "Search result issue",
-                    "status": {
-                        "id": "1",
-                        "name": "Open",
-                        "description": "",
-                        "iconUrl": "",
-                        "self": "",
-                        "statusCategory": {
-                            "id": 2,
-                            "key": "new",
-                            "colorName": "blue-gray",
-                            "name": "To Do"
-                        }
-                    },
-                    "issuetype": {
-                        "id": "10002",
-                        "name": "Task",
-                        "description": "",
-                        "iconUrl": "",
-                        "self": "",
-                        "subtask": false
-                    },
-                    "assignee": {
-                        "accountId": "u1",
-                        "displayName": "Bob",
-                        "active": true,
-                        "self": "",
-                        "avatarUrls": {}
-                    },
-                    "priority": {
-                        "id": "3",
-                        "name": "Medium",
-                        "iconUrl": "",
-                        "self": ""
-                    },
-                    "created": "2026-01-01T00:00:00.000+0000",
-                    "updated": "2026-06-29T00:00:00.000+0000"
-                }
-            }
-        ],
-        "isLast": true,
-        "nextPageToken": null
-    })
 }
 
 // ---- ac2 (S1): a Model built from TuiSeed::Mine matches browse's existing

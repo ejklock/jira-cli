@@ -1,11 +1,12 @@
 use super::*;
 use crate::config::Config;
-use crate::models::{Issue, IssueAssignee};
+use crate::models::Issue;
 use crate::store::cache::{
     derive_project_key, instances_key, IssueCache, ProjectNamesCache, TaskListCache, UserMapCache,
 };
 use crate::store::instances::Instance;
 use crate::store::Store;
+use crate::test_support::issue;
 use serde_json::json;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -374,23 +375,8 @@ fn task_list_cache_row_within_max_age_reads_some() {
 
 fn make_issue(key: &str) -> Issue {
     Issue {
-        key: key.to_string(),
         summary: "Test summary".to_string(),
-        status: "In Progress".to_string(),
-        status_category: Some("indeterminate".to_string()),
-        issue_type: "Story".to_string(),
-        assignee: Some(IssueAssignee {
-            display_name: "Alice".to_string(),
-            account_id: Some("acc-123".to_string()),
-        }),
-        reporter: None,
-        priority: Some("High".to_string()),
-        created: Some("2026-01-01T00:00:00Z".to_string()),
-        updated: Some("2026-01-02T00:00:00Z".to_string()),
-        duedate: None,
-        description: Some("Description text".to_string()),
-        comments: vec![],
-        attachments: vec![],
+        ..issue(key)
     }
 }
 

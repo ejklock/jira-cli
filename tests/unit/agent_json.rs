@@ -1,36 +1,26 @@
 use super::*;
-use crate::models::{Issue, IssueAssignee, IssueComment, IssueRow};
-use crate::test_support::attachment;
+use crate::models::{Issue, IssueRow};
+use crate::test_support::{assignee, attachment, comment, issue};
 
 fn sample_issue() -> Issue {
     Issue {
-        key: "PROJ-123".to_string(),
         summary: "Fix the login bug".to_string(),
         status: "In Progress".to_string(),
         status_category: Some("indeterminate".to_string()),
         issue_type: "Bug".to_string(),
-        assignee: Some(IssueAssignee {
-            display_name: "Alice Example".to_string(),
-            account_id: Some("5b10a2844c20165700ede21g".to_string()),
-        }),
-        reporter: Some(IssueAssignee {
-            display_name: "John Reporter".to_string(),
-            account_id: Some("rep-account-id".to_string()),
-        }),
-        priority: Some("High".to_string()),
-        created: Some("2026-01-02T10:00:00.000+0000".to_string()),
-        updated: Some("2026-01-09T12:00:00.000+0000".to_string()),
-        duedate: None,
+        assignee: Some(assignee(
+            "Alice Example",
+            Some("5b10a2844c20165700ede21g"),
+        )),
         description: Some(r#"{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"plain text description"}]}]}"#.to_string()),
-        comments: vec![IssueComment {
-            id: Some("100".to_string()),
-            author: Some("John".to_string()),
-            author_account_id: None,
-            body: "A comment body.".to_string(),
-            created: Some("2026-01-03T14:22:00.000+0000".to_string()),
-            updated: None,
-        }],
-        attachments: vec![],
+        comments: vec![comment(
+            Some("100"),
+            Some("John"),
+            "A comment body.",
+            Some("2026-01-03T14:22:00.000+0000"),
+            None,
+        )],
+        ..issue("PROJ-123")
     }
 }
 
