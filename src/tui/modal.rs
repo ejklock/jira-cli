@@ -2,8 +2,10 @@
 //! `modal_area` is a pure layout function (centers, clamps with a margin,
 //! never overflows) and `render_modal` draws through it — dimming the
 //! backdrop, `Clear`ing the box, then drawing a rounded bordered panel with
-//! title/body/hint/status and optional buttons. No consumer wires this yet
-//! (C3b's compose is the first adapter; C4's delete-confirm is the second).
+//! title/body/hint/status and optional buttons. `button_targets` exposes the
+//! same button geometry `render_buttons` draws in ABSOLUTE frame coordinates
+//! (ADR 0024 §2d) so a caller can hit-test a click without rendering; the
+//! delete-confirm modal's Sim/Não click (C4e) is its first consumer.
 #![allow(dead_code)]
 
 use ratatui::{
@@ -123,6 +125,20 @@ pub fn render_modal(frame: &mut Frame, frame_area: Rect, content: &ModalContent)
     ModalRender { area, buttons }
 }
 
+/// The button click targets `render_modal` would register for `content`,
+/// computed WITHOUT rendering, in ABSOLUTE `frame_area` coordinates (ADR 0024
+/// §2d): `desired_size` -> `modal_area` -> the modal block's inner rect ->
+/// `split_rows`' buttons row -> [`layout_button_targets`] — the exact chain
+/// `render_modal` walks before it maps targets modal-relative for its own
+/// `ModalRender`, so a caller's hit-test can never drift from what's drawn.
+pub fn button_targets(frame_area: Rect, content: &ModalContent) -> Vec<ButtonTarget> {
+    let (desired_w, desired_h) = desired_size(frame_area, content);
+    let area = modal_area(frame_area, desired_w, desired_h);
+    let inner = modal_block(&content.title).inner(area);
+    let buttons_row = split_rows(inner, content).buttons;
+    layout_button_targets(buttons_row, &content.buttons)
+}
+
 fn dim_backdrop(frame: &mut Frame, frame_area: Rect) {
     frame
         .buffer_mut()
@@ -239,29 +255,46 @@ fn render_optional_line(frame: &mut Frame, area: Rect, text: Option<&str>) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_buttons(frame: &mut Frame, area: Rect, buttons: &[ModalButton]) -> Vec<ButtonTarget> {
+/// The per-button x-advance layout: each button's `[ label ]` rect, left to
+/// right starting at `buttons_row.x`, advancing by the label's display width
+/// plus a 2-column gap. The SINGLE geometry source [`render_buttons`] and
+/// [`button_targets`] both build on, so the rendered button cells and a
+/// click hit-test can never drift apart.
+fn layout_button_targets(buttons_row: Rect, buttons: &[ModalButton]) -> Vec<ButtonTarget> {
     let mut targets = Vec::with_capacity(buttons.len());
-    let mut spans = Vec::with_capacity(buttons.len() * 2);
-    let mut x = area.x;
+    let mut x = buttons_row.x;
     for button in buttons {
-        let label = format!("[ {} ]", button.label);
-        let width = display_width(&label) as u16;
+        let width = display_width(&button_label(button)) as u16;
         targets.push(ButtonTarget {
             id: button.id.clone(),
             area: Rect {
                 x,
-                y: area.y,
+                y: buttons_row.y,
                 width,
                 height: 1,
             },
         });
-        spans.push(Span::styled(label, theme::modal_border()));
-        spans.push(Span::raw("  "));
         x += width + 2;
     }
-    if !targets.is_empty() {
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    targets
+}
+
+fn button_label(button: &ModalButton) -> String {
+    format!("[ {} ]", button.label)
+}
+
+fn render_buttons(frame: &mut Frame, area: Rect, buttons: &[ModalButton]) -> Vec<ButtonTarget> {
+    let targets = layout_button_targets(area, buttons);
+    if targets.is_empty() {
+        return targets;
     }
+
+    let mut spans = Vec::with_capacity(buttons.len() * 2);
+    for button in buttons {
+        spans.push(Span::styled(button_label(button), theme::modal_border()));
+        spans.push(Span::raw("  "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
     targets
 }
 

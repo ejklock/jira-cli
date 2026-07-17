@@ -116,6 +116,16 @@ delete-confirm, When the frame renders, Then backdrop cells carry DIM + the dark
 backdrop background, the box is centered (clamped on small terminals), and the
 localized prompt plus the Sim and Não button labels render inside the box.
 
+**Scenario 11: the confirm buttons are clickable** — Given an open delete-confirm,
+When the user left-clicks inside the Sim button's rendered cells, Then exactly one
+`Msg::ConfirmDeleteYes` resolves (identical to pressing `y`/Enter); When the user
+left-clicks inside the Não button, Then exactly one `Msg::ConfirmDeleteNo`
+resolves (identical to `n`/Esc). A left-click on the backdrop or the prompt body
+(no button hit) is inert (the confirm stays open, no Cmd), and scroll/drag/release
+over the confirm are inert. The rendered button cells and the click hit-test share
+one geometry source (ADR 0024 §2d), so they cannot drift. Keyboard confirm/cancel
+and `q`-does-not-quit are unchanged.
+
 ## Test Design
 
 Pure `update()` drives S1–S9 headlessly (focus arithmetic, ownership predicate,
@@ -138,6 +148,9 @@ labels + DIM backdrop). The shell spawns are covered by wiremock write tests
 | Confirm render | render (TestBackend) | 10 | backdrop DIM+dark bg; centered box; prompt + Sim + Não labels in box | confirm visual |
 | Edit render | render (TestBackend) | 3 | edit modal shows "Edit comment" + pre-filled buffer text | edit visual |
 | PUT/DELETE spawn | unit (wiremock) | 5, 7 | 2xx → CommentMutationOk; non-2xx → CommentMutationErr (401 marker) for update_comment and delete_comment | shell effect |
+| Button geometry | unit (modal) | 11 | button_targets returns absolute rects (two buttons, buttons row, x-advance) matching the rendered layout | click geometry |
+| Confirm click hit-test | unit/render | 11 | confirm_button_at returns "yes" on the Sim cells, "no" on the Não cells, None on the backdrop/body | pure hit-test |
+| Confirm click dispatch | unit (shell) | 11 | left-Down on Sim → ConfirmDeleteYes; on Não → ConfirmDeleteNo; backdrop click + scroll/drag inert; compose/transitions mouse still inert | click wiring |
 
 ## Related
 
@@ -146,4 +159,6 @@ labels + DIM backdrop). The shell spawns are covered by wiremock write tests
   [/adr/0022-comment-write-seam.md](/adr/0022-comment-write-seam.md)
 - Issues: [/issues/0051-c4a-comment-focus-edit.md](/issues/0051-c4a-comment-focus-edit.md),
   [/issues/0052-c4b-delete-confirm-modal.md](/issues/0052-c4b-delete-confirm-modal.md),
-  [/issues/0053-c4c-reply-mention.md](/issues/0053-c4c-reply-mention.md)
+  [/issues/0053-c4c-reply-mention.md](/issues/0053-c4c-reply-mention.md),
+  [/issues/0056-c4d-detail-footer-action-hints.md](/issues/0056-c4d-detail-footer-action-hints.md),
+  [/issues/0057-c4e-confirm-modal-mouse-click.md](/issues/0057-c4e-confirm-modal-mouse-click.md)

@@ -682,6 +682,24 @@ pub(super) fn confirm_modal_content() -> modal::ModalContent {
     }
 }
 
+/// Resolves a left click at absolute terminal coordinates `(x, y)` within the
+/// delete-confirm modal to the id of the button it hit (ADR 0024 §2d, BDR
+/// 0017 S11): recomputes `modal::button_targets` over the exact
+/// `confirm_modal_content()` `render_modal` draws, so the hit test can never
+/// drift from what's on screen. `None` on the backdrop/prompt body (no
+/// button under the cursor).
+pub(super) fn confirm_button_at(frame_area: Rect, x: u16, y: u16) -> Option<String> {
+    let content = confirm_modal_content();
+    modal::button_targets(frame_area, &content)
+        .into_iter()
+        .find(|target| point_in_rect(target.area, x, y))
+        .map(|target| target.id)
+}
+
+fn point_in_rect(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+}
+
 /// The transition picker's content (ADR 0027 §3, BDR 0018 S1-S2, S8): built
 /// entirely in `view.rs`, mirroring `confirm_modal_content`'s in-view
 /// `ModalContent` construction, so `model.rs` stays free of ratatui types

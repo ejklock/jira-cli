@@ -1,3 +1,4 @@
+use super::modal;
 use super::model::{
     header_line, Compose, ComposeStatus, ComposeTarget, FooterMode, Identity, ListOrigin,
     Selection, StatusKind, StatusMsg,
@@ -3036,4 +3037,64 @@ fn compose_modal_does_not_render_when_no_compose_is_open() {
         find_text_position(&buf, "New comment").is_none(),
         "the compose modal must not render on a plain Detail view"
     );
+}
+
+// ---- c4e-confirm-modal-mouse-click / ADR 0024 §2d, BDR 0017 S11 —
+// confirm_button_at's hit-test: mirrors detail_link_at's pure-hit-test
+// contract, built on modal::button_targets (single geometry source) ----
+
+#[test]
+fn confirm_button_at_hits_the_yes_and_no_buttons() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let area = Rect::new(0, 0, 60, 24);
+    let content = view::confirm_modal_content();
+    let targets = modal::button_targets(area, &content);
+    let yes = targets
+        .iter()
+        .find(|target| target.id == "yes")
+        .expect("the confirm content must carry a yes button target");
+    let no = targets
+        .iter()
+        .find(|target| target.id == "no")
+        .expect("the confirm content must carry a no button target");
+
+    assert_eq!(
+        view::confirm_button_at(area, yes.area.x, yes.area.y),
+        Some("yes".to_owned())
+    );
+    assert_eq!(
+        view::confirm_button_at(area, no.area.x, no.area.y),
+        Some("no".to_owned())
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn confirm_button_at_on_the_backdrop_or_body_is_none() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let area = Rect::new(0, 0, 60, 24);
+
+    assert_eq!(
+        view::confirm_button_at(area, area.x, area.y),
+        None,
+        "a click on the far corner (backdrop) must resolve to None"
+    );
+
+    let content = view::confirm_modal_content();
+    let yes = modal::button_targets(area, &content)
+        .into_iter()
+        .find(|target| target.id == "yes")
+        .expect("the confirm content must carry a yes button target");
+    assert_eq!(
+        view::confirm_button_at(area, yes.area.x - 1, yes.area.y),
+        None,
+        "a click one column left of the yes button (prompt body) must resolve to None"
+    );
+
+    set_language("en");
 }

@@ -20,8 +20,8 @@ use crate::store::instances::Instance;
 
 use super::model::{entry_cmds, update, Cmd, Identity, ListOrigin, Model, Msg, Screen};
 use super::view::{
-    detail_link_at, detail_pos_at, detail_pos_at_clamped, list_click_card, projects_click_row,
-    selection_text, view,
+    confirm_button_at, detail_link_at, detail_pos_at, detail_pos_at_clamped, list_click_card,
+    projects_click_row, selection_text, view,
 };
 
 const TTY_ERROR_KEY: &str = "Error: 'browse' requires an interactive terminal (TTY).";
@@ -567,6 +567,32 @@ fn resolve_release(model: &Model, modifiers: KeyModifiers) -> Option<Msg> {
     Some(Msg::SelEnd(text))
 }
 
+/// Resolves a mouse event over the open delete-confirm to a `Msg` (ADR 0024
+/// §2d, BDR 0017 S11): a left-button Down inside the Sim/Não button routes
+/// through `view::confirm_button_at`; a click on the backdrop/prompt body
+/// (no button hit), and every scroll/drag/release over the confirm, are
+/// inert (the confirm stays open, no `Cmd`).
+fn resolve_confirm_mouse(mouse: MouseEvent, area: Rect) -> Option<Msg> {
+    match map_mouse_to_msg(mouse, false)? {
+        MouseIntent::Click { x, y, .. } => {
+            confirm_button_at(area, x, y).and_then(confirm_msg_for_id)
+        }
+        _ => None,
+    }
+}
+
+/// Maps a hit button's opaque id (ADR 0024 §2d) to the SAME `Msg` its
+/// keyboard equivalent emits (`map_key_in_confirm_mode`): `"yes"` ->
+/// `ConfirmDeleteYes`, `"no"` -> `ConfirmDeleteNo`. Any other id is `None`
+/// (defensive — `confirm_modal_content` only ever emits these two).
+fn confirm_msg_for_id(id: String) -> Option<Msg> {
+    match id.as_str() {
+        "yes" => Some(Msg::ConfirmDeleteYes),
+        "no" => Some(Msg::ConfirmDeleteNo),
+        _ => None,
+    }
+}
+
 /// Outcome of one event-loop turn: either the model to keep drawing with, or the
 /// process exit code once the loop is done.
 pub(super) enum StepOutcome {
@@ -633,11 +659,15 @@ fn handle_terminal_event(
             map_key_in_compose_mode(key.code, key.modifiers)
         }
         Some(Ok(Event::Key(key))) => map_key_to_msg(key.code, key.modifiers, search_active),
-        // While a compose, delete confirm, or transition picker is open, no
-        // mouse event reaches the detail/list machinery (ADR 0024 §3, BDR
-        // 0015 S6; ADR 0026 §4, BDR 0017 S9; ADR 0027 §3, BDR 0018 S9) — the
-        // backdrop is inert.
-        Some(Ok(Event::Mouse(_))) if confirm_active || compose_active || transitions_active => None,
+        // The open delete-confirm is the one overlay whose mouse is live (ADR
+        // 0024 §2d, BDR 0017 S11): a left-click on Sim/Não resolves through
+        // `resolve_confirm_mouse`; every other click/scroll/drag over it, and
+        // the backdrop itself, are inert.
+        Some(Ok(Event::Mouse(mouse))) if confirm_active => resolve_confirm_mouse(mouse, area),
+        // While a compose or transition picker is open, no mouse event
+        // reaches the detail/list machinery (ADR 0024 §3, BDR 0015 S6; ADR
+        // 0027 §3, BDR 0018 S9) — the backdrop is inert.
+        Some(Ok(Event::Mouse(_))) if compose_active || transitions_active => None,
         Some(Ok(Event::Mouse(mouse))) => resolve_mouse_msg(mouse, search_active, &model, area),
         Some(Ok(_)) => None,
         Some(Err(_)) | None => return StepOutcome::Exit(1),

@@ -286,3 +286,81 @@ fn render_modal_registers_button_click_targets_in_modal_relative_coordinates() {
     assert_eq!(delete_row, render.area.y + expected.area.y);
     assert_eq!(delete_col, render.area.x + expected.area.x);
 }
+
+// ---- button_targets: pure ABSOLUTE-coordinate geometry, the single source
+// render_buttons AND a caller's hit-test both build on (ADR 0024 §2d) ----
+
+fn two_button_content() -> ModalContent {
+    ModalContent {
+        title: "Confirm".to_owned(),
+        body: vec![Line::from("Sure?")],
+        hint: None,
+        status: None,
+        buttons: vec![
+            ModalButton {
+                id: "yes".to_owned(),
+                label: "Yes".to_owned(),
+            },
+            ModalButton {
+                id: "no".to_owned(),
+                label: "No".to_owned(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn button_targets_returns_two_targets_on_the_same_row_advancing_by_x() {
+    let content = two_button_content();
+    let frame = frame_at(0, 0, 60, 24);
+
+    let targets = button_targets(frame, &content);
+
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].id, "yes");
+    assert_eq!(targets[1].id, "no");
+    assert_eq!(
+        targets[0].area.y, targets[1].area.y,
+        "both buttons must sit on the same (buttons) row"
+    );
+    assert!(
+        targets[1].area.x > targets[0].area.x + targets[0].area.width,
+        "the second button's x ({}) must advance beyond the first's x+width ({})",
+        targets[1].area.x,
+        targets[0].area.x + targets[0].area.width
+    );
+}
+
+#[test]
+fn button_targets_areas_sit_inside_the_modal_box() {
+    let content = two_button_content();
+    let frame = frame_at(0, 0, 60, 24);
+
+    let targets = button_targets(frame, &content);
+    let (desired_w, desired_h) = desired_size(frame, &content);
+    let modal_box = modal_area(frame, desired_w, desired_h);
+
+    for target in &targets {
+        assert_contained(target.area, modal_box);
+    }
+}
+
+#[test]
+fn button_targets_matches_the_absolute_coordinates_render_modal_draws_at() {
+    let content = two_button_content();
+
+    let (buf, render) = render_to_buffer(60, 24, &content);
+    let targets = button_targets(frame_at(0, 0, 60, 24), &content);
+
+    let (yes_col, yes_row) =
+        find_text_position(&buf, "[ Yes ]").expect("yes button label must render");
+    let yes_target = &targets[0];
+    assert_eq!(yes_row, yes_target.area.y);
+    assert_eq!(yes_col, yes_target.area.x);
+
+    // The SAME geometry, expressed modal-relative by render_modal's own
+    // ModalRender, must recover the identical absolute coordinate.
+    let relative_yes = &render.buttons[0];
+    assert_eq!(render.area.x + relative_yes.area.x, yes_target.area.x);
+    assert_eq!(render.area.y + relative_yes.area.y, yes_target.area.y);
+}

@@ -1,6 +1,9 @@
 use super::*;
 
 use crate::test_support::{build_search_payload_with_key, make_test_instance};
+use crate::tui::model::{
+    Compose, ComposeStatus, ComposeTarget, TransitionPicker, TransitionPickerState,
+};
 
 // ---- Helpers ----
 
@@ -1459,4 +1462,159 @@ async fn exec_transition_non_2xx_non_401_maps_to_transition_apply_err() {
         matches!(reply, Msg::TransitionApplyErr(_)),
         "a non-2xx, non-401 transition_issue response must still map to TransitionApplyErr, never panic"
     );
+}
+
+// ---- c4e-confirm-modal-mouse-click / ADR 0024 §2d, BDR 0017 S11 —
+// resolve_confirm_mouse: a left click on Sim/Não routes to
+// ConfirmDeleteYes/ConfirmDeleteNo; a backdrop click and every
+// scroll/drag/release over the confirm are inert ----
+
+fn confirm_area() -> Rect {
+    Rect::new(0, 0, 60, 24)
+}
+
+fn confirm_button_coord(id: &str) -> (u16, u16) {
+    let area = confirm_area();
+    let content = crate::tui::view::confirm_modal_content();
+    let target = crate::tui::modal::button_targets(area, &content)
+        .into_iter()
+        .find(|t| t.id == id)
+        .unwrap_or_else(|| panic!("the confirm content must carry a '{id}' button target"));
+    (target.area.x, target.area.y)
+}
+
+fn left_down_at(column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn resolve_confirm_mouse_click_on_yes_button_yields_confirm_delete_yes() {
+    let (x, y) = confirm_button_coord("yes");
+
+    let msg = resolve_confirm_mouse(left_down_at(x, y), confirm_area());
+
+    assert!(matches!(msg, Some(Msg::ConfirmDeleteYes)));
+}
+
+#[test]
+fn resolve_confirm_mouse_click_on_no_button_yields_confirm_delete_no() {
+    let (x, y) = confirm_button_coord("no");
+
+    let msg = resolve_confirm_mouse(left_down_at(x, y), confirm_area());
+
+    assert!(matches!(msg, Some(Msg::ConfirmDeleteNo)));
+}
+
+#[test]
+fn resolve_confirm_mouse_click_on_the_backdrop_is_inert() {
+    let area = confirm_area();
+
+    let msg = resolve_confirm_mouse(left_down_at(area.x, area.y), area);
+
+    assert!(
+        msg.is_none(),
+        "a click with no button under the cursor must leave the confirm open"
+    );
+}
+
+#[test]
+fn resolve_confirm_mouse_scroll_drag_and_release_are_inert() {
+    let area = confirm_area();
+    let (x, y) = confirm_button_coord("yes");
+    let scroll = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let drag = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let release = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    assert!(resolve_confirm_mouse(scroll, area).is_none());
+    assert!(resolve_confirm_mouse(drag, area).is_none());
+    assert!(resolve_confirm_mouse(release, area).is_none());
+}
+
+// ---- compose/transition-picker overlays stay FULLY mouse-inert (unchanged
+// regression, ADR 0024 §3, BDR 0015 S6; ADR 0027 §3, BDR 0018 S9) ----
+
+#[tokio::test]
+async fn handle_terminal_event_mouse_stays_inert_with_compose_open() {
+    let instance = make_test_instance();
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+    let area = confirm_area();
+
+    let mut model = seeded_model(vec![], None, &instance, false, &TuiSeed::Mine);
+    model.compose = Some(Compose {
+        buffer: String::new(),
+        status: ComposeStatus::Idle,
+        target: ComposeTarget::New,
+    });
+
+    let outcome = handle_terminal_event(
+        Some(Ok(Event::Mouse(left_down_at(area.x, area.y)))),
+        model,
+        &instance,
+        &cache,
+        &tx,
+        area,
+    );
+
+    match outcome {
+        StepOutcome::Continue(model) => assert!(
+            model.compose.is_some(),
+            "a mouse click while compose is open must leave it open"
+        ),
+        StepOutcome::Exit(_) => panic!("a mouse click while compose is open must never exit"),
+    }
+}
+
+#[tokio::test]
+async fn handle_terminal_event_mouse_stays_inert_with_transition_picker_open() {
+    let instance = make_test_instance();
+    let (_dir, store) = open_temp_store();
+    let cache = crate::store::cache::TaskCache::new(store.conn());
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+    let area = confirm_area();
+
+    let mut model = seeded_model(vec![], None, &instance, false, &TuiSeed::Mine);
+    model.transition_picker = Some(TransitionPicker {
+        state: TransitionPickerState::Loading,
+    });
+
+    let outcome = handle_terminal_event(
+        Some(Ok(Event::Mouse(left_down_at(area.x, area.y)))),
+        model,
+        &instance,
+        &cache,
+        &tx,
+        area,
+    );
+
+    match outcome {
+        StepOutcome::Continue(model) => assert!(
+            model.transition_picker.is_some(),
+            "a mouse click while the transition picker is open must leave it open"
+        ),
+        StepOutcome::Exit(_) => {
+            panic!("a mouse click while the transition picker is open must never exit")
+        }
+    }
 }
