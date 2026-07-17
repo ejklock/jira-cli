@@ -60,6 +60,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0051](/issues/0051-c4a-comment-focus-edit.md) | C4a | comment focus axis + myself ownership + edit own comment (pre-filled compose → update) | done | 0045, 0047, 0048 |
 | [0052](/issues/0052-c4b-delete-confirm-modal.md) | C4b | delete own comment via a Sim/Não confirm modal (modal button adapter → delete) | done | 0045, 0047, 0051 |
 | [0053](/issues/0053-c4c-reply-mention.md) | C4c | reply to a focused comment: mentioned new comment (Jira is flat) | done | 0045, 0047, 0051 |
+| [0054](/issues/0054-t1a-transition-client-seam.md) | T1a | transition client seam: list_transitions + transition_issue (GET/POST transitions endpoints) + Transition type | todo | — |
+| [0055](/issues/0055-t1b-transition-picker-tui.md) | T1b | transition picker TUI: 's' opens a workflow-fetched modal, Enter applies a field-free transition, server-truth refresh | todo | 0054 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -163,7 +165,9 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
 
 ## Parked (not in the parity program)
 
-- Other writes: create/edit issue, transition status, log work (out per
-  Constitution Amendment 1 — each would need its own amendment + ADR).
+- Other writes: create/edit issue, log work (out — each would need its own
+  amendment + ADR). Status transitions entered scope via Constitution
+  Amendment 2 ([ADR 0027](/adr/0027-status-transition-write-enablement.md),
+  issues 0054/0055).
 - Jira Server / Data Center (REST v2 / PAT) adapter.
 - Secret-at-rest encryption / OS keychain; native release binaries.

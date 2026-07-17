@@ -32,3 +32,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 | [0024](/adr/0024-modal-overlay-compose.md) | Reusable centered modal overlay + comment compose (modal-first); server-truth refresh | Accepted |
 | [0025](/adr/0025-tty-interactive-default-read-commands.md) | TTY = interactive-by-default for read commands (mine/bare/search/get/current → browse TUI; agent mode prints) | Accepted |
 | [0026](/adr/0026-comment-edit-delete-reply-focus.md) | Comment edit/delete/reply via a comment-focus axis — own-gated edit/delete, reply-as-mentioned-new-comment, server-truth | Accepted |
+| [0027](/adr/0027-status-transition-write-enablement.md) | Status transition write enablement — GET/POST the transitions endpoints only, field-free transitions in v1, picker modal, server-truth | Accepted |

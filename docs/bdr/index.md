@@ -23,3 +23,4 @@ Append-only: supersede or amend.
 | [0015](/bdr/0015-comment-compose-behaviors.md) | comment compose — 'c' opens a centered modal, Ctrl+S posts, server-truth reload, lossless failure | Accepted |
 | [0016](/bdr/0016-interactive-default-read-commands.md) | read commands interactive-by-default — TTY opens the browse TUI (list/detail seed), agent mode prints | Accepted |
 | [0017](/bdr/0017-comment-action-behaviors.md) | comment actions — [ ] focus a comment, e edits own, d deletes own (Sim/Não), r replies (mentioned new comment), server-truth | Accepted |
+| [0018](/bdr/0018-status-transition-behaviors.md) | status transition — 's' opens a workflow-fetched picker, Enter applies a field-free transition, detail reloads from the server | Accepted |

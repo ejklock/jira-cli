@@ -137,3 +137,21 @@ Cloud comment REST endpoints (`POST`/`PUT`/`DELETE` on
 `/rest/api/3/issue/{key}/comment`), host-pinned per the token-isolation
 non-negotiable. Falsifiable: no code path issues a non-GET request to any
 endpoint other than the comment endpoints.
+
+## Amendment 2 — 2026-07-16: status transitions enter scope (parity program)
+
+The "Writing to Jira" exclusion is narrowed again: **status transitions**
+(moving an issue through its workflow — e.g. To Do → In Progress → Done) are
+now in scope, as the next slice of the total-parity program with the fork base
+`active-collab-cli` ([ADR 0027](/adr/0027-status-transition-write-enablement.md)).
+
+Everything else still stays read-only: creating/editing issues and logging work
+remain out of scope, each behind its own future amendment + ADR. The added write
+surface is exactly the Jira Cloud transition REST endpoints — `GET`
+`/rest/api/3/issue/{key}/transitions` (read the available transitions for the
+current workflow state) and `POST` `/rest/api/3/issue/{key}/transitions`
+(execute one) — host-pinned per the token-isolation non-negotiable. Only
+transitions that require **no screen fields** execute in v1; a transition that
+requires fields is surfaced but not performed. Falsifiable: no code path issues
+a non-GET request to any endpoint other than the comment endpoints and the
+transition `POST`, and no transition with required fields is `POST`ed.
