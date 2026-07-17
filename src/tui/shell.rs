@@ -382,6 +382,7 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         '[' => Some(Msg::FocusPrevComment),
         'e' => Some(Msg::EditFocusedComment),
         'd' => Some(Msg::DeleteFocusedComment),
+        'r' => Some(Msg::ReplyToFocusedComment),
         _ => None,
     }
 }
@@ -726,6 +727,22 @@ fn dispatch_cmd(
             spawn_delete_comment(key, comment_id, instance.clone(), tx.clone());
             model
         }
+        Cmd::ReplyComment {
+            key,
+            mention_account_id,
+            mention_display,
+            body,
+        } => {
+            spawn_reply_comment(
+                key,
+                mention_account_id,
+                mention_display,
+                body,
+                instance.clone(),
+                tx.clone(),
+            );
+            model
+        }
     }
 }
 
@@ -922,6 +939,53 @@ pub(crate) async fn delete_comment(
 ) -> Result<(), ClientError> {
     let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
     client.delete_comment(key, comment_id).await
+}
+
+/// Spawns the compose's reply-submit effect (ADR 0026 §5, BDR 0017 S8):
+/// posts a brand-new mentioned comment on `key` via the `reply_comment` seam
+/// and replies the SAME `Msg::CommentMutationOk`/`Msg::CommentMutationErr`
+/// `spawn_submit_comment`/`spawn_edit_comment`/`spawn_delete_comment` use,
+/// mirroring their 401 -> re-auth guidance mapping.
+fn spawn_reply_comment(
+    key: String,
+    mention_account_id: String,
+    mention_display: String,
+    body: String,
+    instance: Instance,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    tokio::spawn(async move {
+        let msg = match reply_comment(
+            &instance,
+            &key,
+            &mention_account_id,
+            &mention_display,
+            &body,
+        )
+        .await
+        {
+            Ok(()) => Msg::CommentMutationOk,
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::CommentMutationErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::CommentMutationErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn reply_comment(
+    instance: &Instance,
+    key: &str,
+    mention_account_id: &str,
+    mention_display: &str,
+    body: &str,
+) -> Result<(), ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client
+        .reply_comment(key, mention_account_id, mention_display, body)
+        .await?;
+    Ok(())
 }
 
 /// Spawns the one-shot authenticated-identity fetch (ADR 0026 §2, BDR 0017

@@ -182,9 +182,13 @@ pub struct Compose {
     pub target: ComposeTarget,
 }
 
-/// What a compose submit does (ADR 0026 §3, BDR 0017 S3-S4): `New` posts a
-/// brand-new comment (`Cmd::SubmitComment`, the C3b path, unchanged);
-/// `Edit` updates the identified existing comment (`Cmd::EditComment`).
+/// What a compose submit does (ADR 0026 §3/§5, BDR 0017 S3-S4, S8): `New`
+/// posts a brand-new comment (`Cmd::SubmitComment`, the C3b path,
+/// unchanged); `Edit` updates the identified existing comment
+/// (`Cmd::EditComment`); `Reply` posts a brand-new comment carrying a
+/// structural mention of the replied-to author (`Cmd::ReplyComment`) — Jira
+/// comments are flat, so a reply is a new top-level comment, and the mention
+/// is injected into the ADF at submit rather than seeded into the buffer.
 /// `Default`s to `New` so every pre-C4 compose-open path is unaffected.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ComposeTarget {
@@ -193,16 +197,21 @@ pub enum ComposeTarget {
     Edit {
         comment_id: String,
     },
+    Reply {
+        mention_account_id: String,
+        mention_display: String,
+    },
 }
 
 impl ComposeTarget {
-    /// The modal title's locale key (ADR 0026 §3, BDR 0017 S3): "New comment"
-    /// for a fresh post, "Edit comment" while editing. Pure — `view.rs` runs
-    /// it through `t()`.
+    /// The modal title's locale key (ADR 0026 §3/§5, BDR 0017 S3, S8): "New
+    /// comment" for a fresh post, "Edit comment" while editing, "Reply
+    /// comment" while replying. Pure — `view.rs` runs it through `t()`.
     pub fn title_key(&self) -> &'static str {
         match self {
             ComposeTarget::New => "New comment",
             ComposeTarget::Edit { .. } => "Edit comment",
+            ComposeTarget::Reply { .. } => "Reply comment",
         }
     }
 }
@@ -361,6 +370,14 @@ pub enum Msg {
     /// `n` / Esc cancels the open delete confirm with no write (ADR 0026
     /// §4, BDR 0017 S7): closes the confirm; a no-op with none open.
     ConfirmDeleteNo,
+    /// `r` on the Detail screen (ADR 0026 §5, BDR 0017 S8): opens the
+    /// compose to post a NEW top-level comment seeded (structurally, via
+    /// `ComposeTarget::Reply`) with a mention of the focused comment's
+    /// author — NOT ownership-gated, unlike `EditFocusedComment`/
+    /// `DeleteFocusedComment`; a focused comment with no
+    /// `author_account_id` (defensive, mirrors the edit id-guard) or no
+    /// focused comment at all is a no-op.
+    ReplyToFocusedComment,
 }
 
 #[derive(Debug, PartialEq)]
@@ -411,6 +428,18 @@ pub enum Cmd {
     DeleteComment {
         key: String,
         comment_id: String,
+    },
+    /// The compose's reply-submit effect (ADR 0026 §5, BDR 0017 S8): posts a
+    /// brand-new comment on `key` whose ADF carries a leading mention of
+    /// `mention_account_id`/`mention_display`, via the `reply_comment` seam.
+    /// The shell replies the SAME `Msg::CommentMutationOk`/`Err`
+    /// `SubmitComment`/`EditComment` use — no new mutation-result arm exists
+    /// for reply.
+    ReplyComment {
+        key: String,
+        mention_account_id: String,
+        mention_display: String,
+        body: String,
     },
 }
 
@@ -480,6 +509,7 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::DeleteFocusedComment => update_delete_focused_comment(model),
         Msg::ConfirmDeleteYes => update_confirm_delete_yes(model),
         Msg::ConfirmDeleteNo => update_confirm_delete_no(model),
+        Msg::ReplyToFocusedComment => update_reply_to_focused_comment(model),
     }
 }
 
@@ -1234,9 +1264,10 @@ fn update_submit_compose(model: Model) -> (Model, Vec<Cmd>) {
     (next, vec![cmd])
 }
 
-/// The submit `Cmd` a compose's `target` emits (BDR 0017 S4): `New` posts a
-/// brand-new comment, `Edit` PUTs onto the identified comment. The single
-/// seam `update_submit_compose` routes through, so the two write paths can
+/// The submit `Cmd` a compose's `target` emits (BDR 0017 S4, S8): `New`
+/// posts a brand-new comment, `Edit` PUTs onto the identified comment,
+/// `Reply` posts a brand-new comment carrying its mention fields. The single
+/// seam `update_submit_compose` routes through, so the three write paths can
 /// never drift on how `key`/`body` are carried.
 fn submit_compose_cmd(target: &ComposeTarget, key: String, body: String) -> Cmd {
     match target {
@@ -1244,6 +1275,15 @@ fn submit_compose_cmd(target: &ComposeTarget, key: String, body: String) -> Cmd 
         ComposeTarget::Edit { comment_id } => Cmd::EditComment {
             key,
             comment_id: comment_id.clone(),
+            body,
+        },
+        ComposeTarget::Reply {
+            mention_account_id,
+            mention_display,
+        } => Cmd::ReplyComment {
+            key,
+            mention_account_id: mention_account_id.clone(),
+            mention_display: mention_display.clone(),
             body,
         },
     }
@@ -1456,6 +1496,38 @@ fn update_confirm_delete_yes(model: Model) -> (Model, Vec<Cmd>) {
 fn update_confirm_delete_no(model: Model) -> (Model, Vec<Cmd>) {
     let next = Model {
         confirm: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// `r` opens the compose to reply to the focused comment (ADR 0026 §5, BDR
+/// 0017 S8): no focused comment is a no-op; a focused comment with no
+/// `author_account_id` (defensive, mirrors the edit/delete id-guard — never
+/// happens for a server-returned comment) is also a no-op; otherwise the
+/// compose opens EMPTY — the mention is carried structurally on
+/// `ComposeTarget::Reply` and injected into the ADF only at submit, never
+/// seeded into the buffer — with `status: Idle`. Unlike
+/// `update_edit_focused_comment`/`update_delete_focused_comment`, this never
+/// calls `is_own_comment`: reply reaches any focused comment, including the
+/// user's own.
+fn update_reply_to_focused_comment(model: Model) -> (Model, Vec<Cmd>) {
+    let Some(comment) = focused_comment(&model) else {
+        return (model, vec![]);
+    };
+    let Some(mention_account_id) = comment.author_account_id.clone() else {
+        return (model, vec![]);
+    };
+    let mention_display = comment.author.clone().unwrap_or_default();
+    let next = Model {
+        compose: Some(Compose {
+            buffer: String::new(),
+            status: ComposeStatus::Idle,
+            target: ComposeTarget::Reply {
+                mention_account_id,
+                mention_display,
+            },
+        }),
         ..model
     };
     (next, vec![])

@@ -928,3 +928,203 @@ async fn delete_comment_non_2xx_non_401_maps_to_comment_mutation_err() {
         "a non-2xx, non-401 delete_comment response must still map to CommentMutationErr, never panic"
     );
 }
+
+// ---- c4c-reply-mention / ADR 0026 §5 / BDR 0017 S8 — reply_comment's ADF
+// carries a leading mention node + the body; reply mapping mirrors
+// submit_comment's/edit_comment's/delete_comment's: 2xx -> Ok, Unauthorized
+// (401) -> the typed ClientError the spawn wrapper turns into the E2
+// re-auth guidance ----
+
+fn expected_reply_adf_body(account_id: &str, display: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    {"type": "mention", "attrs": {"id": account_id, "text": format!("@{display}")}},
+                    {"type": "text", "text": " "},
+                    {"type": "text", "text": text},
+                ]
+            }]
+        }
+    })
+}
+
+#[tokio::test]
+async fn reply_comment_posts_v3_path_with_mention_adf_body_and_is_ok() {
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .and(body_json(expected_reply_adf_body(
+            "acct-B", "Bob", "Thanks!",
+        )))
+        .respond_with(ResponseTemplate::new(201).set_body_json(build_comment_payload_with_id("1")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = reply_comment(&instance, "PROJ-1", "acct-B", "Bob", "Thanks!").await;
+
+    assert!(result.is_ok(), "a 2xx reply_comment response must be Ok");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn reply_comment_401_maps_to_typed_unauthorized() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = reply_comment(&instance, "PROJ-1", "acct-B", "Bob", "Thanks!").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_reply_comment_2xx_replies_comment_mutation_ok() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(build_comment_payload_with_id("1")))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_reply_comment(
+        "PROJ-1".to_owned(),
+        "acct-B".to_owned(),
+        "Bob".to_owned(),
+        "Thanks!".to_owned(),
+        instance,
+        tx,
+    );
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(matches!(reply, Msg::CommentMutationOk));
+}
+
+#[tokio::test]
+async fn spawn_reply_comment_401_replies_comment_mutation_err_with_reauth_guidance() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_reply_comment(
+        "PROJ-1".to_owned(),
+        "acct-B".to_owned(),
+        "Bob".to_owned(),
+        "Thanks!".to_owned(),
+        instance,
+        tx,
+    );
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    match reply {
+        Msg::CommentMutationErr(reason) => {
+            assert_eq!(reason, reauth_message("test"));
+        }
+        _ => panic!("expected Msg::CommentMutationErr, got a different Msg"),
+    }
+}
+
+#[tokio::test]
+async fn reply_comment_non_2xx_non_401_maps_to_comment_mutation_err() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/comment"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_reply_comment(
+        "PROJ-1".to_owned(),
+        "acct-B".to_owned(),
+        "Bob".to_owned(),
+        "Thanks!".to_owned(),
+        instance,
+        tx,
+    );
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(
+        matches!(reply, Msg::CommentMutationErr(_)),
+        "a non-2xx, non-401 reply_comment response must still map to CommentMutationErr, never panic"
+    );
+}

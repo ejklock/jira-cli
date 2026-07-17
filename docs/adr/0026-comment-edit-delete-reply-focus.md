@@ -101,13 +101,23 @@ as the compose applies (no key/mouse reaches the detail or list).
 ### 5. Reply posts a new comment with an @mention (C4c)
 
 **`r` on ANY focused comment** opens the compose to post a **new** comment
-(`ComposeTarget::New` — Jira is flat) seeded with an @mention of the focused
-comment's author, built from `author_account_id` so the mention is a real Jira
-mention (notifies the person), not a plain-text `@name`. The submit path passes
-the mention account_id alongside the body so `plain_text_to_adf` (or a thin
-wrapper) emits a leading ADF mention node. The exact seeding mechanics are
-finalized in the C4c slice; this ADR fixes the decision (reply = mentioned new
-comment, server-truth refresh) and the flat-comment rationale.
+(Jira is flat) seeded with an @mention of the focused comment's author, built
+from `author_account_id` so the mention is a real Jira mention (notifies the
+person), not a plain-text `@name`.
+
+**Finalized mechanics (C4c).** The mention is carried **structurally** on a
+dedicated `ComposeTarget::Reply { mention_account_id, mention_display }` — not
+seeded into the compose buffer, which starts **empty**. This keeps the mention
+intact regardless of buffer edits and is cleaner than reusing
+`ComposeTarget::New` with a pre-filled `@name`. `submit_compose_cmd` maps
+`Reply → Cmd::ReplyComment`, whose shell spawn calls a new
+`reply_comment(key, account_id, display, body)` client seam. In `client.rs` the
+paragraph-content builder is extracted (`plain_text_content`) so
+`plain_text_to_adf` stays byte-identical while `mention_adf` prepends
+`[mention, text " ", …plain_text_content(body)]`. Reply reuses the existing
+context-aware `CommentMutationOk`/`Err` arms + server-truth `RefreshDetail`
+(no reply-specific result `Msg`). This ADR fixes the decision (reply = mentioned
+new comment, server-truth refresh) and the flat-comment rationale.
 
 ### 6. Server-truth refresh for every mutation
 

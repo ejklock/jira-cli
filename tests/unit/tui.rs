@@ -5164,6 +5164,7 @@ fn list_and_detail_nav_keys_are_inert_while_confirm_open() {
     assert_inert(Msg::OpenProjects);
     assert_inert(Msg::LoadMore);
     assert_inert(Msg::EditFocusedComment);
+    assert_inert(Msg::ReplyToFocusedComment);
 }
 
 #[test]
@@ -5271,4 +5272,230 @@ fn map_key_in_confirm_mode_n_cancels() {
 fn map_key_in_confirm_mode_other_keys_are_noop() {
     assert!(map_key_in_confirm_mode(KeyCode::Tab, KeyModifiers::NONE).is_none());
     assert!(map_key_in_confirm_mode(KeyCode::Char('q'), KeyModifiers::NONE).is_none());
+}
+
+// ---- c4c-reply-mention / ADR 0026 §5, BDR 0017 S8 — 'r' opens the compose
+// to post a NEW comment carrying a structural mention of the focused
+// comment's author; NOT ownership-gated (unlike 'e'/'d'); submit emits
+// exactly one Cmd::ReplyComment; Ok/Err reuse the C3b/C4a arms verbatim ----
+
+fn make_replying_detail_model(
+    buffer: &str,
+    mention_account_id: &str,
+    mention_display: &str,
+) -> Model {
+    let mut model = make_compose_detail_model();
+    model.detail_scroll = 2;
+    model.compose = Some(Compose {
+        buffer: buffer.to_owned(),
+        status: ComposeStatus::Idle,
+        target: ComposeTarget::Reply {
+            mention_account_id: mention_account_id.to_owned(),
+            mention_display: mention_display.to_owned(),
+        },
+    });
+    model
+}
+
+#[test]
+fn reply_to_focused_comment_opens_new_compose_seeded_with_mention_from_author() {
+    let author = crate::models::IssueComment {
+        author_account_id: Some("acct-B".to_owned()),
+        ..comment(Some("10002"), Some("Bob"), "hi", None, None)
+    };
+    let model = comment_detail_model_with_focus(vec![author], Some(0));
+
+    let (next, cmds) = update(model, Msg::ReplyToFocusedComment);
+
+    let compose = next
+        .compose
+        .expect("'r' on a focused comment must open the compose");
+    assert_eq!(
+        compose.target,
+        ComposeTarget::Reply {
+            mention_account_id: "acct-B".to_owned(),
+            mention_display: "Bob".to_owned(),
+        },
+        "the compose target must carry the focused comment's author"
+    );
+    assert_eq!(
+        compose.buffer, "",
+        "the buffer must start EMPTY — the mention is carried structurally, never seeded"
+    );
+    assert_eq!(compose.status, ComposeStatus::Idle);
+    assert_eq!(
+        compose.target.title_key(),
+        "Reply comment",
+        "the title-key helper must resolve to Reply comment"
+    );
+    assert!(
+        cmds.is_empty(),
+        "opening the reply compose must emit no Cmd"
+    );
+}
+
+#[test]
+fn reply_to_focused_own_comment_still_opens_compose_not_gated() {
+    let own = own_comment_with_id("10001", "hello world");
+    let model = comment_detail_model_with_focus(vec![own], Some(0));
+
+    let (next, cmds) = update(model, Msg::ReplyToFocusedComment);
+
+    let compose = next
+        .compose
+        .expect("'r' on the user's own comment must still open the compose");
+    assert_eq!(
+        compose.target,
+        ComposeTarget::Reply {
+            mention_account_id: OWNER_ACCOUNT_ID.to_owned(),
+            mention_display: "Alice".to_owned(),
+        }
+    );
+    assert!(
+        next.status.is_none(),
+        "reply must never set the 'not your comment' hint — it is not ownership-gated"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn reply_to_focused_comment_with_no_focus_is_noop() {
+    let own = own_comment_with_id("10001", "hello");
+    let model = comment_detail_model_with_focus(vec![own], None);
+
+    let (next, cmds) = update(model, Msg::ReplyToFocusedComment);
+
+    assert!(
+        next.compose.is_none(),
+        "no focused comment must open no compose"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn reply_to_focused_comment_with_no_author_account_id_is_noop() {
+    let unattributed = comment(Some("10003"), Some("Nobody"), "hi", None, None);
+    let model = comment_detail_model_with_focus(vec![unattributed], Some(0));
+
+    let (next, cmds) = update(model, Msg::ReplyToFocusedComment);
+
+    assert!(
+        next.compose.is_none(),
+        "a comment with no author_account_id must open no compose"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn reply_to_focused_comment_is_inert_while_composing() {
+    let mut model = make_composing_detail_model("draft");
+    model.detail = Some(make_issue_with_comments(
+        "PROJ-1",
+        vec![own_comment_with_id("10001", "hello")],
+    ));
+    model.detail_focused_comment = Some(0);
+
+    let (next, cmds) = update(model, Msg::ReplyToFocusedComment);
+
+    assert_eq!(
+        next.compose.unwrap().buffer,
+        "draft",
+        "ReplyToFocusedComment must not replace the open compose while composing"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S8: SubmitCompose on a Reply target emits exactly one ReplyComment
+// carrying the mention fields + trimmed body; empty/whitespace emits none ----
+
+#[test]
+fn submit_compose_reply_target_emits_exactly_one_reply_comment_and_sets_submitting() {
+    let model = make_replying_detail_model("hi there", "acct-B", "Bob");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::ReplyComment {
+            key: "PROJ-1".to_owned(),
+            mention_account_id: "acct-B".to_owned(),
+            mention_display: "Bob".to_owned(),
+            body: "hi there".to_owned(),
+        }],
+        "a non-empty Reply-target buffer must emit exactly one ReplyComment"
+    );
+    let compose = next
+        .compose
+        .expect("the compose must stay open while submitting");
+    assert_eq!(compose.status, ComposeStatus::Submitting);
+    assert_eq!(compose.buffer, "hi there");
+}
+
+#[test]
+fn submit_compose_reply_target_with_empty_buffer_emits_no_cmd() {
+    let model = make_replying_detail_model("   \n  ", "acct-B", "Bob");
+
+    let (next, cmds) = update(model, Msg::SubmitCompose);
+
+    assert!(
+        cmds.is_empty(),
+        "an empty/whitespace Reply buffer must never submit"
+    );
+    assert_eq!(next.compose.unwrap().status, ComposeStatus::Idle);
+}
+
+// ---- S8: CommentMutationOk/Err reuse the C3b/C4a arms verbatim for a Reply
+// compose ----
+
+#[test]
+fn comment_mutation_ok_after_reply_closes_compose_and_emits_one_refresh() {
+    let mut model = make_replying_detail_model("hi", "acct-B", "Bob");
+    model.compose = Some(Compose {
+        status: ComposeStatus::Submitting,
+        ..model.compose.unwrap()
+    });
+
+    let (next, cmds) = update(model, Msg::CommentMutationOk);
+
+    assert!(
+        next.compose.is_none(),
+        "a reply success must close the compose"
+    );
+    assert_eq!(
+        cmds,
+        vec![Cmd::RefreshDetail("PROJ-1".to_owned())],
+        "a reply success must emit exactly one cache-busting refresh, no local insertion"
+    );
+}
+
+#[test]
+fn comment_mutation_err_after_reply_preserves_buffer_and_sets_reauth_error() {
+    let mut model = make_replying_detail_model("hi", "acct-B", "Bob");
+    model.compose = Some(Compose {
+        status: ComposeStatus::Submitting,
+        ..model.compose.unwrap()
+    });
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::CommentMutationErr(guidance.clone()));
+
+    let compose = next
+        .compose
+        .expect("a reply failure must keep the compose open");
+    assert_eq!(compose.buffer, "hi", "the draft must be preserved");
+    assert_eq!(compose.status, ComposeStatus::Error(guidance));
+    assert!(
+        cmds.is_empty(),
+        "a reply failure must emit zero refresh Cmds"
+    );
+}
+
+// ---- shell keymap: 'r' opens the reply compose ----
+
+#[test]
+fn map_key_in_normal_mode_r_opens_reply_to_focused_comment() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('r'), KeyModifiers::NONE),
+        Some(Msg::ReplyToFocusedComment)
+    ));
 }

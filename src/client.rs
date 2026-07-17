@@ -56,14 +56,25 @@ pub trait JiraClient: Send + Sync {
         body_text: &str,
     ) -> ClientResult<CommentWriteResult>;
     async fn delete_comment(&self, key: &str, comment_id: &str) -> ClientResult<()>;
+    /// Posts a brand-new top-level comment on `key` whose ADF carries a
+    /// leading mention of `mention_account_id`/`mention_display` (ADR 0026
+    /// §5, BDR 0017 S8): Jira comments are flat, so a "reply" is a new
+    /// comment whose first content node is a real mention (notifies the
+    /// mentioned account), followed by `body_text`.
+    async fn reply_comment(
+        &self,
+        key: &str,
+        mention_account_id: &str,
+        mention_display: &str,
+        body_text: &str,
+    ) -> ClientResult<CommentWriteResult>;
 }
 
-/// Build the minimal ADF document Jira Cloud's comment-write endpoints
-/// require: a single paragraph whose text is split on `\n` and interleaved
-/// with `hardBreak` nodes. Pure — no I/O. Empty text yields a structurally
-/// valid doc with an empty paragraph `content` array (ADF rejects empty text
-/// nodes, so blank segments are never emitted).
-fn plain_text_to_adf(text: &str) -> serde_json::Value {
+/// Builds the paragraph `content` array shared by [`plain_text_to_adf`] and
+/// [`mention_adf`]: the text split on `\n` and interleaved with `hardBreak`
+/// nodes. Pure — no I/O. Empty text yields an empty array (ADR rejects empty
+/// text nodes, so blank segments are never emitted).
+fn plain_text_content(text: &str) -> Vec<serde_json::Value> {
     let mut lines = text.split('\n');
     let mut content = Vec::new();
     if let Some(first) = lines.next() {
@@ -73,6 +84,41 @@ fn plain_text_to_adf(text: &str) -> serde_json::Value {
         content.push(serde_json::json!({"type": "hardBreak"}));
         push_text_node(&mut content, line);
     }
+    content
+}
+
+/// Build the minimal ADF document Jira Cloud's comment-write endpoints
+/// require: a single paragraph whose text is split on `\n` and interleaved
+/// with `hardBreak` nodes. Pure — no I/O. Empty text yields a structurally
+/// valid doc with an empty paragraph `content` array (ADF rejects empty text
+/// nodes, so blank segments are never emitted).
+fn plain_text_to_adf(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "doc",
+        "version": 1,
+        "content": [{"type": "paragraph", "content": plain_text_content(text)}],
+    })
+}
+
+/// Build the reply ADF document (ADR 0026 §5, BDR 0017 S8): a single
+/// paragraph whose first content node is a real Jira `mention` node —
+/// `attrs.id` is the mentioned account's id, `attrs.text` its `@display`
+/// label — followed by a literal space and `body_text`'s own paragraph
+/// content (via [`plain_text_content`], mirroring [`plain_text_to_adf`]'s
+/// line-splitting). Pure — no I/O.
+fn mention_adf(
+    mention_account_id: &str,
+    mention_display: &str,
+    body_text: &str,
+) -> serde_json::Value {
+    let mut content = vec![
+        serde_json::json!({
+            "type": "mention",
+            "attrs": {"id": mention_account_id, "text": format!("@{mention_display}")},
+        }),
+        serde_json::json!({"type": "text", "text": " "}),
+    ];
+    content.extend(plain_text_content(body_text));
     serde_json::json!({
         "type": "doc",
         "version": 1,
@@ -248,6 +294,24 @@ impl JiraClient for GouqiJiraClient {
         result.map_err(|e| {
             self.classify_error(e, |e| anyhow!("delete_comment({key}, {comment_id}): {e}"))
         })
+    }
+
+    async fn reply_comment(
+        &self,
+        key: &str,
+        mention_account_id: &str,
+        mention_display: &str,
+        body_text: &str,
+    ) -> ClientResult<CommentWriteResult> {
+        let body = serde_json::json!({
+            "body": mention_adf(mention_account_id, mention_display, body_text)
+        });
+        let raw: CommentIdResponse = self
+            .jira
+            .post_versioned("api", Some("3"), &format!("/issue/{key}/comment"), body)
+            .await
+            .map_err(|e| self.classify_error(e, |e| anyhow!("reply_comment({key}): {e}")))?;
+        Ok(CommentWriteResult { id: raw.id })
     }
 }
 
