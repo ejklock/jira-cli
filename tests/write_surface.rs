@@ -109,12 +109,15 @@ fn find_write_verb_sites_in_file(file: &Path, lines: &[&str]) -> Vec<WriteVerbSi
 }
 
 /// The call site's window (this line plus a few lines either side) must
-/// mention a `/comment` endpoint — the literal check for AC5's "never a
-/// non-comment write surface" clause.
-fn window_targets_comment_endpoint(lines: &[&str], line_idx: usize) -> bool {
+/// mention either a `/comment` endpoint or the `/transitions` endpoint —
+/// the literal check for Constitution Amendment 2's "never a write surface
+/// beyond comment + transition" clause.
+fn window_targets_allowed_write_endpoint(lines: &[&str], line_idx: usize) -> bool {
     let start = line_idx.saturating_sub(ENDPOINT_WINDOW);
     let end = (line_idx + ENDPOINT_WINDOW + 1).min(lines.len());
-    lines[start..end].iter().any(|l| l.contains("/comment"))
+    lines[start..end]
+        .iter()
+        .any(|l| l.contains("/comment") || l.contains("/transitions"))
 }
 
 fn walk_rs_files(dir: &Path) -> Vec<PathBuf> {
@@ -152,10 +155,10 @@ fn scan_violations(files: &[PathBuf], client_rs: &Path) -> Vec<String> {
                 violations.push(describe_violation(&site, "found outside src/client.rs"));
                 continue;
             }
-            if !window_targets_comment_endpoint(&lines, site.line_num - 1) {
+            if !window_targets_allowed_write_endpoint(&lines, site.line_num - 1) {
                 violations.push(describe_violation(
                     &site,
-                    "call site does not target a /comment endpoint",
+                    "call site does not target a /comment or /transitions endpoint",
                 ));
             }
         }
@@ -183,12 +186,21 @@ fn has_jira_receiver_nearby_false_for_unrelated_receiver() {
 }
 
 #[test]
-fn window_targets_comment_endpoint_true_when_nearby_line_has_comment_path() {
+fn window_targets_allowed_write_endpoint_true_when_nearby_line_has_comment_path() {
     let lines = vec![
         "let endpoint = v3_write_endpoint(&format!(\"/issue/{key}/comment/{id}\"));",
         ".put(\"api\", &endpoint, body)",
     ];
-    assert!(window_targets_comment_endpoint(&lines, 1));
+    assert!(window_targets_allowed_write_endpoint(&lines, 1));
+}
+
+#[test]
+fn window_targets_allowed_write_endpoint_true_when_nearby_line_has_transitions_path() {
+    let lines = vec![
+        "let endpoint = format!(\"/issue/{key}/transitions\");",
+        ".post_versioned(\"api\", Some(\"3\"), &endpoint, body)",
+    ];
+    assert!(window_targets_allowed_write_endpoint(&lines, 1));
 }
 
 #[test]
@@ -211,7 +223,7 @@ fn scan_violations_flags_unconfined_write_verb_outside_client_rs() {
 }
 
 #[test]
-fn scan_violations_flags_client_rs_write_verb_not_targeting_comment_endpoint() {
+fn scan_violations_flags_client_rs_write_verb_not_targeting_allowed_endpoint() {
     let tmp = std::env::temp_dir().join("write_surface_non_comment_test");
     std::fs::create_dir_all(&tmp).unwrap();
     let client_rs = tmp.join("client.rs");
@@ -225,7 +237,7 @@ fn scan_violations_flags_client_rs_write_verb_not_targeting_comment_endpoint() {
     let violations = scan_violations(&files, &client_rs);
 
     assert_eq!(violations.len(), 1);
-    assert!(violations[0].contains("does not target a /comment endpoint"));
+    assert!(violations[0].contains("does not target a /comment or /transitions endpoint"));
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -246,6 +258,27 @@ fn scan_violations_is_clean_for_a_confined_comment_write_call() {
     assert!(
         violations.is_empty(),
         "unexpected violations: {violations:?}"
+    );
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn scan_violations_is_clean_for_a_confined_transition_write_call() {
+    let tmp = std::env::temp_dir().join("write_surface_transition_clean_test");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let client_rs = tmp.join("client.rs");
+    std::fs::write(
+        &client_rs,
+        "fn f() {\n    self.jira.post_versioned(\"api\", Some(\"3\"), \"/issue/1/transitions\", body);\n}\n",
+    )
+    .unwrap();
+
+    let files = vec![client_rs.clone()];
+    let violations = scan_violations(&files, &client_rs);
+
+    assert!(
+        violations.is_empty(),
+        "a transition POST window must be clean: {violations:?}"
     );
     std::fs::remove_dir_all(&tmp).ok();
 }

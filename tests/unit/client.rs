@@ -1386,3 +1386,212 @@ async fn get_issue_comment_author_account_id_maps_to_none_when_author_absent() {
     );
     server.verify().await;
 }
+
+// --- list_transitions / transition_issue (ADR 0027, BDR 0018) ---
+
+fn build_transitions_payload() -> serde_json::Value {
+    serde_json::json!({
+        "transitions": [
+            {
+                "id": "11",
+                "name": "Start Progress",
+                "to": { "id": "3", "name": "In Progress" },
+                "fields": {}
+            },
+            {
+                "id": "31",
+                "name": "Done",
+                "to": { "id": "10001", "name": "Done" },
+                "fields": {
+                    "resolution": { "required": true, "name": "Resolution" }
+                }
+            }
+        ]
+    })
+}
+
+/// AC1: list_transitions GETs the literal v3 path with `expand=transitions.fields`
+/// and parses a MIXED payload (one field-free, one field-requiring) into both
+/// rows exactly, including `to_status` and `requires_fields`.
+#[tokio::test]
+async fn list_transitions_gets_expand_and_parses_mixed_payload() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .and(query_param("expand", "transitions.fields"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(build_transitions_payload()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let transitions = client.list_transitions("PROJ-1").await.unwrap();
+
+    assert_eq!(
+        transitions,
+        vec![
+            crate::models::Transition {
+                id: "11".to_string(),
+                name: "Start Progress".to_string(),
+                to_status: "In Progress".to_string(),
+                requires_fields: false,
+            },
+            crate::models::Transition {
+                id: "31".to_string(),
+                name: "Done".to_string(),
+                to_status: "Done".to_string(),
+                requires_fields: true,
+            },
+        ]
+    );
+    server.verify().await;
+}
+
+/// AC1 edge case: `transitions` absent or non-array must yield an empty vec,
+/// never an error.
+#[tokio::test]
+async fn list_transitions_absent_transitions_key_yields_empty_vec() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let transitions = client.list_transitions("PROJ-1").await.unwrap();
+
+    assert_eq!(
+        transitions,
+        Vec::new(),
+        "absent transitions key must map to an empty vec"
+    );
+    server.verify().await;
+}
+
+/// AC1 edge case: an entry missing `id` or `name` is skipped, valid entries survive.
+#[tokio::test]
+async fn list_transitions_skips_entries_missing_id_or_name() {
+    let server = MockServer::start().await;
+    let payload = serde_json::json!({
+        "transitions": [
+            { "id": "11", "name": "Start Progress", "to": { "name": "In Progress" }, "fields": {} },
+            { "name": "Missing Id", "to": { "name": "Done" }, "fields": {} },
+            { "id": "99", "to": { "name": "Done" }, "fields": {} }
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(payload))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let transitions = client.list_transitions("PROJ-1").await.unwrap();
+
+    assert_eq!(
+        transitions.len(),
+        1,
+        "entries missing id/name must be skipped"
+    );
+    assert_eq!(transitions[0].id, "11");
+    server.verify().await;
+}
+
+/// AC3: a 401 on list_transitions maps to the typed `ClientError::Unauthorized`
+/// carrying this client's instance name.
+#[tokio::test]
+async fn list_transitions_401_maps_to_typed_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.list_transitions("PROJ-1").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test-instance"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC2: transition_issue POSTs the literal v3 path with body exactly
+/// `{"transition":{"id":"<id>"}}` and maps a 204 empty body to `Ok(())`.
+#[tokio::test]
+async fn transition_issue_posts_body_and_maps_204_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .and(body_json(
+            serde_json::json!({ "transition": { "id": "31" } }),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.transition_issue("PROJ-1", "31").await;
+
+    assert!(
+        result.is_ok(),
+        "204 empty body must map to Ok(()): {result:?}"
+    );
+    server.verify().await;
+}
+
+/// AC3: a 401 on transition_issue maps to the typed `ClientError::Unauthorized`.
+#[tokio::test]
+async fn transition_issue_401_maps_to_typed_unauthorized() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.transition_issue("PROJ-1", "31").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test-instance"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC3: a 400 on transition_issue must never be a false Ok — it stays `Other`.
+#[tokio::test]
+async fn transition_issue_400_does_not_map_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let result = client.transition_issue("PROJ-1", "31").await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 400, got: {other:?}"),
+    }
+    server.verify().await;
+}

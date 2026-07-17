@@ -108,6 +108,18 @@ pub struct ProjectRow {
     pub name: String,
 }
 
+/// A single workflow transition available on an issue (ADR 0027 / BDR 0018):
+/// the id to POST to execute it, its display name, the status it moves the
+/// issue to, and whether executing it requires filling in screen fields the
+/// CLI does not support in v1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transition {
+    pub id: String,
+    pub name: String,
+    pub to_status: String,
+    pub requires_fields: bool,
+}
+
 /// The result of a JQL search — a page of issue rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchResult {

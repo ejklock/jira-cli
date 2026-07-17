@@ -2,7 +2,7 @@
 
 use crate::models::{
     Attachment, CommentWriteResult, Issue, IssueAssignee, IssueComment, IssueRow, Myself,
-    ProjectRow, SearchResult,
+    ProjectRow, SearchResult, Transition,
 };
 use crate::store::instances::Instance;
 use anyhow::{anyhow, Result};
@@ -68,6 +68,14 @@ pub trait JiraClient: Send + Sync {
         mention_display: &str,
         body_text: &str,
     ) -> ClientResult<CommentWriteResult>;
+    /// Read the workflow transitions available for `key`'s current status
+    /// (ADR 0027 §1, BDR 0018): each row carries whether executing it
+    /// requires screen fields the CLI does not gate on yet.
+    async fn list_transitions(&self, key: &str) -> ClientResult<Vec<Transition>>;
+    /// Execute the transition `transition_id` on `key` (ADR 0027 §1): moves
+    /// the issue to the transition's target status. Callers are responsible
+    /// for only invoking this on a field-free transition (ADR 0027 §2).
+    async fn transition_issue(&self, key: &str, transition_id: &str) -> ClientResult<()>;
 }
 
 /// Builds the paragraph `content` array shared by [`plain_text_to_adf`] and
@@ -313,6 +321,33 @@ impl JiraClient for GouqiJiraClient {
             .map_err(|e| self.classify_error(e, |e| anyhow!("reply_comment({key}): {e}")))?;
         Ok(CommentWriteResult { id: raw.id })
     }
+
+    async fn list_transitions(&self, key: &str) -> ClientResult<Vec<Transition>> {
+        let raw: serde_json::Value = self
+            .jira
+            .get_versioned(
+                "api",
+                Some("3"),
+                &format!("/issue/{key}/transitions?expand=transitions.fields"),
+            )
+            .await
+            .map_err(|e| self.classify_error(e, |e| anyhow!("list_transitions({key}): {e}")))?;
+        Ok(extract_transitions(&raw))
+    }
+
+    async fn transition_issue(&self, key: &str, transition_id: &str) -> ClientResult<()> {
+        let body = serde_json::json!({ "transition": { "id": transition_id } });
+        let _: serde_json::Value = self
+            .jira
+            .post_versioned("api", Some("3"), &format!("/issue/{key}/transitions"), body)
+            .await
+            .map_err(|e| {
+                self.classify_error(e, |e| {
+                    anyhow!("transition_issue({key}, {transition_id}): {e}")
+                })
+            })?;
+        Ok(())
+    }
 }
 
 /// Map a gouqi `rep::SearchResults` page to our curated `SearchResult` domain type.
@@ -476,6 +511,55 @@ fn parse_project_entry(entry: &serde_json::Value) -> Option<ProjectRow> {
     let key = entry.get("key")?.as_str()?.to_string();
     let name = entry.get("name")?.as_str()?.to_string();
     Some(ProjectRow { key, name })
+}
+
+/// Extract `transitions[]` from a raw `/issue/{key}/transitions` response
+/// body into curated `Transition`s, mirroring `extract_project_rows`'s
+/// raw-field-access pattern. Absent, `null`, or non-array `transitions`
+/// yields an empty vec; each array entry is parsed by
+/// `parse_transition_entry`, which skips (never errors on) an entry missing
+/// its required `id`/`name`.
+fn extract_transitions(raw: &serde_json::Value) -> Vec<Transition> {
+    raw.get("transitions")
+        .and_then(|v| v.as_array())
+        .map(|entries| entries.iter().filter_map(parse_transition_entry).collect())
+        .unwrap_or_default()
+}
+
+/// Parse a single raw `transitions[]` entry into a curated `Transition`.
+/// `id` and `name` are both required — the entry is skipped (returns `None`)
+/// when either is missing or not a string. `to.name` defaults to an empty
+/// string when absent; `requires_fields` is true iff `fields` has any entry
+/// whose `required` is `true` (ADR 0027 §2).
+fn parse_transition_entry(entry: &serde_json::Value) -> Option<Transition> {
+    let id = entry.get("id")?.as_str()?.to_string();
+    let name = entry.get("name")?.as_str()?.to_string();
+    let to_status = entry
+        .get("to")
+        .and_then(|t| t.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .to_string();
+    let requires_fields = transition_requires_fields(entry);
+    Some(Transition {
+        id,
+        name,
+        to_status,
+        requires_fields,
+    })
+}
+
+/// True iff the transition entry's `fields` map has any entry whose
+/// `required` is `true` (ADR 0027 §2's field-free gate).
+fn transition_requires_fields(entry: &serde_json::Value) -> bool {
+    entry
+        .get("fields")
+        .and_then(|f| f.as_object())
+        .is_some_and(|fields| {
+            fields
+                .values()
+                .any(|field| field.get("required").and_then(|r| r.as_bool()) == Some(true))
+        })
 }
 
 fn map_comments(raw: &gouqi::Issue) -> Vec<IssueComment> {

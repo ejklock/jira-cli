@@ -2,7 +2,7 @@
 type: Issue
 title: "T1a — transition client seam: list_transitions + transition_issue on the JiraClient trait (GET/POST the Jira transitions endpoints), with a Transition domain type"
 description: Add the read + write transition seam to the client. The JiraClient trait grows list_transitions(key) -> Vec<Transition> (GET /rest/api/3/issue/{key}/transitions?expand=transitions.fields, parsed to a domain Transition { id, name, to_status, requires_fields }) and transition_issue(key, transition_id) -> () (POST /rest/api/3/issue/{key}/transitions with {transition:{id}}). Host-pinned via the existing GouqiJiraClient; 401 maps to the typed Unauthorized. Wiremock tests assert the exact GET path/expand + POST path/body and the required-fields parse; the client request-surface test is extended so the only non-GET endpoints are the comment endpoints + the transition POST (Constitution Amendment 2 falsifiable clause).
-status: todo
+status: done
 labels: [client, transition, workflow, write, api, parity]
 blocked_by:
 tracker:
@@ -31,3 +31,17 @@ Scope: `src/client.rs`, `src/models.rs`, `tests/unit/client.rs`.
   (a mixed payload: one field-free, one field-requiring), the exact POST path +
   body, and the 401 mapping. Extend the client request-surface test so the only
   non-GET endpoints are the comment endpoints and the transition `POST`.
+
+**Delivered 2026-07-16.** `Transition { id, name, to_status, requires_fields }`
+on `src/models.rs`; `list_transitions` (GET `?expand=transitions.fields` →
+`extract_transitions`/`parse_transition_entry`/`transition_requires_fields`,
+`requires_fields` true iff any expanded field is `required`) and
+`transition_issue` (POST `{transition:{id}}`, 204 tolerated by discarding the
+`serde_json::Value`, 401 → typed `Unauthorized`) on the host-pinned
+`GouqiJiraClient` (no new construction site). `tests/write_surface.rs` widened
+from `/comment`-only to `/comment` OR `/transitions`
+(`window_targets_allowed_write_endpoint`), whole-src scan green. Wiremock covers
+the mixed-payload parse, the exact POST body + 204, and the 401 mapping.
+Reviewer: approved, 7/7 ACs, confidence 0.95. Follow-up nit: the integration
+test fn is still named `..._comment_endpoints` though it now covers transitions
+too (cosmetic; behavior correct).
