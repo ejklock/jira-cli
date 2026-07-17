@@ -378,9 +378,12 @@ pub(crate) fn footer_hint(mode: FooterMode) -> String {
         FooterMode::List => t("↑/↓ navigate  /  search  Enter select  Esc/b back  q quit"),
         FooterMode::ListSearch => t("Enter submit  Esc cancel  Backspace delete"),
         FooterMode::Projects => t("↑/↓ navigate  Enter select  Esc/b back  q quit"),
-        FooterMode::Detail => t("↑/↓ j/k scroll  Esc/b back  q quit"),
+        FooterMode::Detail => t("↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"),
         FooterMode::DetailLink => {
-            t("↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit")
+            t("↑/↓ j/k scroll  Tab next link  Enter open  s status  Esc/b back  q quit")
+        }
+        FooterMode::DetailComment => {
+            t("[ ] focus  e edit  d delete  r reply  s status  Esc/b back  q quit")
         }
     }
 }

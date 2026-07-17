@@ -62,6 +62,7 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0053](/issues/0053-c4c-reply-mention.md) | C4c | reply to a focused comment: mentioned new comment (Jira is flat) | done | 0045, 0047, 0051 |
 | [0054](/issues/0054-t1a-transition-client-seam.md) | T1a | transition client seam: list_transitions + transition_issue (GET/POST transitions endpoints) + Transition type | done | — |
 | [0055](/issues/0055-t1b-transition-picker-tui.md) | T1b | transition picker TUI: 's' opens a workflow-fetched modal, Enter applies a field-free transition, server-truth refresh | done | 0054 |
+| [0056](/issues/0056-c4d-detail-footer-action-hints.md) | C4d | detail footer action-key hints ([ ] focus · e edit · d delete · r reply · s status) | done | 0053, 0055 |
 
 ## Phase 2 — browse TUI (delivered)
 

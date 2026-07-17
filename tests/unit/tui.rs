@@ -2804,6 +2804,30 @@ fn footer_mode_detail_screen_with_focused_link_is_detail_link() {
     assert_eq!(footer_mode(&model), FooterMode::DetailLink);
 }
 
+// ---- issue 0056 C4d: footer_mode — DetailComment, precedence over DetailLink ----
+
+#[test]
+fn footer_mode_detail_screen_with_focused_comment_is_detail_comment() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_focused_comment = Some(0);
+    assert_eq!(footer_mode(&model), FooterMode::DetailComment);
+}
+
+#[test]
+fn footer_mode_focused_comment_takes_precedence_over_focused_link() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail_links = vec!["https://example.com".to_owned()];
+    model.detail_focused_link = Some(0);
+    model.detail_focused_comment = Some(0);
+    assert_eq!(
+        footer_mode(&model),
+        FooterMode::DetailComment,
+        "a focused comment must win over a focused link"
+    );
+}
+
 // ---- issue 0033 D4 / BDR 0007 S7: view renders the mode-switched footer ----
 
 #[test]
@@ -2842,7 +2866,7 @@ fn view_footer_switches_when_opening_detail() {
     let text = buffer_text(&buf);
 
     assert!(
-        text.contains("↑/↓ j/k scroll  Esc/b back  q quit"),
+        text.contains("↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"),
         "opening detail must switch the footer to the detail hints; got: {text}"
     );
     assert!(
@@ -2863,7 +2887,7 @@ fn view_detail_footer_switches_when_a_link_is_focused() {
     model.detail = Some(make_issue("PROJ-1"));
 
     let plain_text = buffer_text(&render_to_buffer(&model, 120, 30));
-    assert!(plain_text.contains("↑/↓ j/k scroll  Esc/b back  q quit"));
+    assert!(plain_text.contains("↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"));
 
     model.detail_links = vec!["https://example.com".to_owned()];
     model.detail_focused_link = Some(0);
@@ -2919,12 +2943,76 @@ fn every_footer_mode_advertises_only_bound_keys() {
 
     let detail_hint = view::footer_hint(FooterMode::Detail);
     assert_footer_hint_advertises_bound_key(&detail_hint, "j/k", KeyCode::Char('j'), false);
+    assert_footer_hint_advertises_bound_key(&detail_hint, "[ ] focus", KeyCode::Char('['), false);
+    assert_footer_hint_advertises_bound_key(&detail_hint, "s status", KeyCode::Char('s'), false);
     assert_footer_hint_advertises_bound_key(&detail_hint, "Esc/b", KeyCode::Esc, false);
     assert_footer_hint_advertises_bound_key(&detail_hint, "q quit", KeyCode::Char('q'), false);
 
     let detail_link_hint = view::footer_hint(FooterMode::DetailLink);
     assert_footer_hint_advertises_bound_key(&detail_link_hint, "Tab", KeyCode::Tab, false);
     assert_footer_hint_advertises_bound_key(&detail_link_hint, "Enter open", KeyCode::Enter, false);
+    assert_footer_hint_advertises_bound_key(
+        &detail_link_hint,
+        "s status",
+        KeyCode::Char('s'),
+        false,
+    );
+
+    let detail_comment_hint = view::footer_hint(FooterMode::DetailComment);
+    assert_footer_hint_advertises_bound_key(
+        &detail_comment_hint,
+        "[ ] focus",
+        KeyCode::Char('['),
+        false,
+    );
+    assert_footer_hint_advertises_bound_key(
+        &detail_comment_hint,
+        "e edit",
+        KeyCode::Char('e'),
+        false,
+    );
+    assert_footer_hint_advertises_bound_key(
+        &detail_comment_hint,
+        "d delete",
+        KeyCode::Char('d'),
+        false,
+    );
+    assert_footer_hint_advertises_bound_key(
+        &detail_comment_hint,
+        "r reply",
+        KeyCode::Char('r'),
+        false,
+    );
+    assert_footer_hint_advertises_bound_key(
+        &detail_comment_hint,
+        "s status",
+        KeyCode::Char('s'),
+        false,
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn footer_hint_pt_br_translates_detail_family_strings() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("pt_BR");
+
+    assert_ne!(
+        view::footer_hint(FooterMode::Detail),
+        "↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit",
+        "pt_BR must not fall back to the English Detail footer text"
+    );
+    assert_ne!(
+        view::footer_hint(FooterMode::DetailLink),
+        "↑/↓ j/k scroll  Tab next link  Enter open  s status  Esc/b back  q quit",
+        "pt_BR must not fall back to the English DetailLink footer text"
+    );
+    assert_ne!(
+        view::footer_hint(FooterMode::DetailComment),
+        "[ ] focus  e edit  d delete  r reply  s status  Esc/b back  q quit",
+        "pt_BR must not fall back to the English DetailComment footer text"
+    );
 
     set_language("en");
 }

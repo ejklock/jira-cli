@@ -22,8 +22,10 @@ pub enum ListOrigin {
 }
 
 /// The footer's mode-aware hint bucket (ADR 0014 §5, BDR 0007 S7): derived
-/// purely from the current screen + search-input-active + focused-link state,
-/// so `footer_hint` never branches on `Model` fields directly.
+/// purely from the current screen + search-input-active + focused-link/
+/// focused-comment state, so `footer_hint` never branches on `Model` fields
+/// directly. `DetailComment` (issue 0056) is derived from
+/// `detail_focused_comment` and takes precedence over `DetailLink`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FooterMode {
     List,
@@ -31,15 +33,19 @@ pub enum FooterMode {
     Projects,
     Detail,
     DetailLink,
+    DetailComment,
 }
 
 /// Derives the active [`FooterMode`] from the model's screen, search-input,
-/// and focused-link state (BDR 0007 S7). Pure — no rendering, no I/O.
+/// and focused-link/focused-comment state (BDR 0007 S7; issue 0056). A
+/// focused comment takes precedence over a focused link, since focusing a
+/// comment (`]`/`[`) is the more specific state. Pure — no rendering, no I/O.
 pub fn footer_mode(model: &Model) -> FooterMode {
     match model.screen {
         Screen::List if model.search.is_some() => FooterMode::ListSearch,
         Screen::List => FooterMode::List,
         Screen::Projects => FooterMode::Projects,
+        Screen::Detail if model.detail_focused_comment.is_some() => FooterMode::DetailComment,
         Screen::Detail if model.detail_focused_link.is_some() => FooterMode::DetailLink,
         Screen::Detail => FooterMode::Detail,
     }

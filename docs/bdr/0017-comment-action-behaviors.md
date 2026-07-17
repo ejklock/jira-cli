@@ -27,10 +27,15 @@ On the **browse detail** of a loaded issue:
 - **`]`** focuses the next comment, **`[`** the previous (clamped; nothing to
   focus when the thread is empty). The focused comment is highlighted like a
   focused link. Focus resets when leaving the detail.
-- With a comment focused, the footer shows `[ ] focus · e edit · d delete · r
-  reply`; `e` and `d` appear only when the focused comment is **yours** (its
+- With a comment focused, the footer shows `[ ] focus  e edit  d delete  r
+  reply  s status` (finalized in [issue 0056](/issues/0056-c4d-detail-footer-action-hints.md),
+  keeping the established double-space footer separator).
+  The footer **advertises** the actions whenever a comment is focused; ownership
+  is **enforced at invocation** — `e`/`d` on a comment that is not **yours** (its
   author account id equals the authenticated user's, learned from a one-shot
-  `myself` fetch at browse entry).
+  `myself` fetch at browse entry) surface the localized "not your comment" hint
+  and do nothing. This advertise-then-enforce choice keeps the footer a single
+  string per `FooterMode` (ADR 0014 §5) with no per-ownership variant.
 - **`e` on your own comment** opens the compose in **edit mode**: the box title
   is "Edit comment" and the buffer is **pre-filled** with the comment's current
   text. Editing and Ctrl+S behave like compose, but a non-empty save emits an

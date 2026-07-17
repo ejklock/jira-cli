@@ -418,7 +418,7 @@ fn view_detail_footer_hint_text_is_unchanged() {
     let buf = render_to_buffer(&model, 120, 30);
 
     assert!(
-        row_text(&buf, 29).contains("↑/↓ j/k scroll  Esc/b back  q quit"),
+        row_text(&buf, 29).contains("↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"),
         "footer hint text must be unchanged; got: {:?}",
         row_text(&buf, 29)
     );
@@ -427,6 +427,7 @@ fn view_detail_footer_hint_text_is_unchanged() {
 }
 
 // ---- issue 0033 D4 / BDR 0007 S7: footer_hint — one string per FooterMode ----
+// ---- extended by issue 0056 C4d: [ ] focus / s status / DetailComment ----
 
 #[test]
 fn footer_hint_en_exact_strings_per_mode() {
@@ -443,11 +444,15 @@ fn footer_hint_en_exact_strings_per_mode() {
     );
     assert_eq!(
         view::footer_hint(FooterMode::Detail),
-        "↑/↓ j/k scroll  Esc/b back  q quit"
+        "↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"
     );
     assert_eq!(
         view::footer_hint(FooterMode::DetailLink),
-        "↑/↓ j/k scroll  Tab next link  Enter open  Esc/b back  q quit"
+        "↑/↓ j/k scroll  Tab next link  Enter open  s status  Esc/b back  q quit"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::DetailComment),
+        "[ ] focus  e edit  d delete  r reply  s status  Esc/b back  q quit"
     );
 
     set_language("en");
@@ -468,11 +473,15 @@ fn footer_hint_pt_br_exact_strings_per_mode() {
     );
     assert_eq!(
         view::footer_hint(FooterMode::Detail),
-        "↑/↓ j/k rolar  Esc/b voltar  q sair"
+        "↑/↓ j/k rolar  [ ] focar  s status  Esc/b voltar  q sair"
     );
     assert_eq!(
         view::footer_hint(FooterMode::DetailLink),
-        "↑/↓ j/k rolar  Tab próximo link  Enter abrir  Esc/b voltar  q sair"
+        "↑/↓ j/k rolar  Tab próximo link  Enter abrir  s status  Esc/b voltar  q sair"
+    );
+    assert_eq!(
+        view::footer_hint(FooterMode::DetailComment),
+        "[ ] focar  e editar  d excluir  r responder  s status  Esc/b voltar  q sair"
     );
 
     set_language("en");
@@ -596,9 +605,56 @@ fn view_detail_status_row_renders_above_the_footer() {
         "the detail screen's status row must show the confirmation; got: {text}"
     );
     assert!(
-        row_text(&buf, 29).contains("↑/↓ j/k scroll  Esc/b back  q quit"),
+        row_text(&buf, 29).contains("↑/↓ j/k scroll  [ ] focus  s status  Esc/b back  q quit"),
         "the footer must still render below the status row; got: {:?}",
         row_text(&buf, 29)
+    );
+
+    set_language("en");
+}
+
+// ---- issue 0056 C4d: browse-detail footer advertises the comment affordances
+// when a comment is focused, and the base Detail hints otherwise ----
+
+#[test]
+fn view_detail_footer_shows_comment_affordances_when_a_comment_is_focused() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let mut model = make_detail_model(vec![]);
+    model.detail_focused_comment = Some(0);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = row_text(&buf, 29);
+
+    assert!(
+        text.contains("e edit")
+            && text.contains("d delete")
+            && text.contains("r reply")
+            && text.contains("s status"),
+        "a focused comment must switch the footer to the comment affordances; got: {text:?}"
+    );
+
+    set_language("en");
+}
+
+#[test]
+fn view_detail_footer_shows_base_hints_when_no_comment_is_focused() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+
+    let model = make_detail_model(vec![]);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = row_text(&buf, 29);
+
+    assert!(
+        text.contains("[ ] focus") && text.contains("s status"),
+        "the base Detail footer must still advertise focus and status; got: {text:?}"
+    );
+    assert!(
+        !text.contains("e edit") && !text.contains("d delete") && !text.contains("r reply"),
+        "the base Detail footer must not show comment affordances when none is focused; got: {text:?}"
     );
 
     set_language("en");
