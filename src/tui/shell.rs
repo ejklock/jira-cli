@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use crate::client::{ClientError, GouqiJiraClient, JiraClient};
 use crate::commands::{reauth_message, DEFAULT_SEARCH_LIMIT, MINE_JQL};
 use crate::i18n::t;
-use crate::models::{Issue, IssueRow, Myself, ProjectRow, SearchResult};
+use crate::models::{Issue, IssueRow, Myself, ProjectRow, SearchResult, Transition};
 use crate::store::cache::{instances_key, IssueCache, TaskCache, TaskListCache};
 use crate::store::instances::Instance;
 
@@ -321,6 +321,7 @@ fn seeded_model(
         detail_focused_comment: None,
         current_account_id: None,
         confirm: None,
+        transition_picker: None,
     }
 }
 
@@ -383,6 +384,7 @@ fn map_normal_char_key(c: char, modifiers: KeyModifiers) -> Option<Msg> {
         'e' => Some(Msg::EditFocusedComment),
         'd' => Some(Msg::DeleteFocusedComment),
         'r' => Some(Msg::ReplyToFocusedComment),
+        's' => Some(Msg::OpenTransitions),
         _ => None,
     }
 }
@@ -411,6 +413,23 @@ pub(super) fn map_key_in_confirm_mode(key_code: KeyCode, _modifiers: KeyModifier
     match key_code {
         KeyCode::Enter | KeyCode::Char('y') => Some(Msg::ConfirmDeleteYes),
         KeyCode::Esc | KeyCode::Char('n') => Some(Msg::ConfirmDeleteNo),
+        _ => None,
+    }
+}
+
+/// The transition picker's keymap (ADR 0027 §3, BDR 0018): while the picker
+/// is open, it owns every key — Up/`k` and Down/`j` move the highlight,
+/// Enter applies the highlighted transition, Esc cancels. Any other key is a
+/// no-op, mirroring `map_key_in_confirm_mode`'s exclusivity.
+pub(super) fn map_key_in_transition_mode(
+    key_code: KeyCode,
+    _modifiers: KeyModifiers,
+) -> Option<Msg> {
+    match key_code {
+        KeyCode::Up | KeyCode::Char('k') => Some(Msg::TransitionMoveUp),
+        KeyCode::Down | KeyCode::Char('j') => Some(Msg::TransitionMoveDown),
+        KeyCode::Enter => Some(Msg::ApplyTransition),
+        KeyCode::Esc => Some(Msg::CancelTransitions),
         _ => None,
     }
 }
@@ -602,7 +621,11 @@ fn handle_terminal_event(
     let search_active = model.search.is_some();
     let compose_active = model.compose.is_some();
     let confirm_active = model.confirm.is_some();
+    let transitions_active = model.transition_picker.is_some();
     let msg = match event {
+        Some(Ok(Event::Key(key))) if transitions_active => {
+            map_key_in_transition_mode(key.code, key.modifiers)
+        }
         Some(Ok(Event::Key(key))) if confirm_active => {
             map_key_in_confirm_mode(key.code, key.modifiers)
         }
@@ -610,10 +633,11 @@ fn handle_terminal_event(
             map_key_in_compose_mode(key.code, key.modifiers)
         }
         Some(Ok(Event::Key(key))) => map_key_to_msg(key.code, key.modifiers, search_active),
-        // While a compose or delete confirm is open, no mouse event reaches
-        // the detail/list machinery (ADR 0024 §3, BDR 0015 S6; ADR 0026 §4,
-        // BDR 0017 S9) — the backdrop is inert.
-        Some(Ok(Event::Mouse(_))) if confirm_active || compose_active => None,
+        // While a compose, delete confirm, or transition picker is open, no
+        // mouse event reaches the detail/list machinery (ADR 0024 §3, BDR
+        // 0015 S6; ADR 0026 §4, BDR 0017 S9; ADR 0027 §3, BDR 0018 S9) — the
+        // backdrop is inert.
+        Some(Ok(Event::Mouse(_))) if confirm_active || compose_active || transitions_active => None,
         Some(Ok(Event::Mouse(mouse))) => resolve_mouse_msg(mouse, search_active, &model, area),
         Some(Ok(_)) => None,
         Some(Err(_)) | None => return StepOutcome::Exit(1),
@@ -741,6 +765,14 @@ fn dispatch_cmd(
                 instance.clone(),
                 tx.clone(),
             );
+            model
+        }
+        Cmd::LoadTransitions(key) => {
+            spawn_load_transitions(key, instance.clone(), tx.clone());
+            model
+        }
+        Cmd::ExecTransition { key, transition_id } => {
+            spawn_exec_transition(key, transition_id, instance.clone(), tx.clone());
             model
         }
     }
@@ -986,6 +1018,65 @@ pub(crate) async fn reply_comment(
         .reply_comment(key, mention_account_id, mention_display, body)
         .await?;
     Ok(())
+}
+
+/// Spawns the transition picker's fetch effect (ADR 0027 §3, BDR 0018 S1-S2,
+/// S7): lists the workflow transitions available for `key`'s current status
+/// via the `list_transitions` seam and replies `Msg::TransitionsLoaded` on
+/// success or `Msg::TransitionsLoadErr` on failure — an Unauthorized (401)
+/// carries the same re-auth guidance text every other write/read seam
+/// builds (E2 parity), mirroring `spawn_load_detail`'s spawn shape.
+fn spawn_load_transitions(key: String, instance: Instance, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::spawn(async move {
+        let msg = match list_transitions(&instance, &key).await {
+            Ok(transitions) => Msg::TransitionsLoaded(transitions),
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::TransitionsLoadErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::TransitionsLoadErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn list_transitions(
+    instance: &Instance,
+    key: &str,
+) -> Result<Vec<Transition>, ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.list_transitions(key).await
+}
+
+/// Spawns the transition picker's execute effect (ADR 0027 §3-§4, BDR 0018
+/// S3, S6): executes `transition_id` on `key` via the `transition_issue`
+/// seam and replies `Msg::TransitionApplied` on success or
+/// `Msg::TransitionApplyErr` on failure, mirroring `spawn_submit_comment`'s
+/// 401 -> re-auth guidance mapping.
+fn spawn_exec_transition(
+    key: String,
+    transition_id: String,
+    instance: Instance,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    tokio::spawn(async move {
+        let msg = match exec_transition(&instance, &key, &transition_id).await {
+            Ok(()) => Msg::TransitionApplied,
+            Err(ClientError::Unauthorized { instance }) => {
+                Msg::TransitionApplyErr(reauth_message(&instance))
+            }
+            Err(e) => Msg::TransitionApplyErr(e.to_string()),
+        };
+        let _ = tx.send(msg);
+    });
+}
+
+pub(crate) async fn exec_transition(
+    instance: &Instance,
+    key: &str,
+    transition_id: &str,
+) -> Result<(), ClientError> {
+    let client = GouqiJiraClient::new(instance).map_err(ClientError::Other)?;
+    client.transition_issue(key, transition_id).await
 }
 
 /// Spawns the one-shot authenticated-identity fetch (ADR 0026 §2, BDR 0017

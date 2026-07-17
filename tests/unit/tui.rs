@@ -2,20 +2,21 @@ use super::*;
 
 use super::model::{
     entry_cmds, footer_mode, Compose, ComposeStatus, ComposeTarget, ConfirmDelete, FooterMode,
-    ListOrigin, Selection, StatusKind, StatusMsg,
+    ListOrigin, Selection, StatusKind, StatusMsg, TransitionPicker, TransitionPickerState,
 };
 use super::shell::{
     handle_reply, map_key_in_compose_mode, map_key_in_confirm_mode, map_key_in_normal_mode,
-    map_key_in_search_mode, map_mouse_to_msg, read_snapshot, resolve_mouse_msg, MouseIntent,
+    map_key_in_search_mode, map_key_in_transition_mode, map_mouse_to_msg, read_snapshot,
+    resolve_mouse_msg, MouseIntent,
 };
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
 use crate::i18n::{set_language, LANG_MUTEX};
-use crate::models::{IssueRow, ProjectRow};
+use crate::models::{IssueRow, ProjectRow, Transition};
 use crate::store::cache::{instances_key, TaskListCache};
 use crate::test_support::*;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+use ratatui::{backend::TestBackend, layout::Rect, text::Line, Terminal};
 
 // ---- Helpers ----
 
@@ -102,6 +103,7 @@ fn make_list_model(keys: &[&str]) -> Model {
         detail_focused_comment: None,
         current_account_id: None,
         confirm: None,
+        transition_picker: None,
     }
 }
 
@@ -5498,4 +5500,801 @@ fn map_key_in_normal_mode_r_opens_reply_to_focused_comment() {
         map_key_in_normal_mode(KeyCode::Char('r'), KeyModifiers::NONE),
         Some(Msg::ReplyToFocusedComment)
     ));
+}
+
+// ---- t1b-transition-picker-tui / ADR 0027 §3-§5, BDR 0018 S1-S9 — the
+// transition-picker state machine, its input-leakage guard, and the pure
+// transition_picker_content builder ----
+
+fn make_transition(id: &str, name: &str, to_status: &str, requires_fields: bool) -> Transition {
+    Transition {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        to_status: to_status.to_owned(),
+        requires_fields,
+    }
+}
+
+fn make_transition_detail_model() -> Model {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = Some(make_issue("PROJ-1"));
+    model
+}
+
+fn make_loading_picker_model() -> Model {
+    let mut model = make_transition_detail_model();
+    model.transition_picker = Some(TransitionPicker {
+        state: TransitionPickerState::Loading,
+    });
+    model
+}
+
+fn make_loaded_picker_model(transitions: Vec<Transition>, highlight: usize) -> Model {
+    let mut model = make_transition_detail_model();
+    model.transition_picker = Some(TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions,
+            highlight,
+            notice: None,
+        },
+    });
+    model
+}
+
+fn line_text(line: &Line<'static>) -> String {
+    line.spans.iter().map(|s| s.content.to_string()).collect()
+}
+
+// ---- S1: 's' opens the picker in the Loading state with exactly one
+// LoadTransitions Cmd; Detail-only, and only with a loaded issue ----
+
+#[test]
+fn open_transitions_on_detail_with_loaded_issue_opens_loading_and_emits_one_load_cmd() {
+    let model = make_transition_detail_model();
+
+    let (next, cmds) = update(model, Msg::OpenTransitions);
+
+    assert!(
+        matches!(
+            next.transition_picker,
+            Some(TransitionPicker {
+                state: TransitionPickerState::Loading
+            })
+        ),
+        "OpenTransitions must open the picker in the Loading state"
+    );
+    assert_eq!(cmds, vec![Cmd::LoadTransitions("PROJ-1".to_owned())]);
+}
+
+#[test]
+fn open_transitions_on_list_screen_is_noop() {
+    let model = make_list_model(&["PROJ-1"]);
+
+    let (next, cmds) = update(model, Msg::OpenTransitions);
+
+    assert!(next.transition_picker.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_transitions_on_detail_with_no_loaded_issue_is_noop() {
+    let mut model = make_list_model(&["PROJ-1"]);
+    model.screen = Screen::Detail;
+    model.detail = None;
+
+    let (next, cmds) = update(model, Msg::OpenTransitions);
+
+    assert!(next.transition_picker.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_transitions_is_inert_while_composing() {
+    let model = make_composing_detail_model("draft");
+
+    let (next, cmds) = update(model, Msg::OpenTransitions);
+
+    assert!(
+        next.transition_picker.is_none(),
+        "'s' must not open the picker while composing"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn open_transitions_is_inert_while_confirm_open() {
+    let model = make_confirming_detail_model("10001");
+
+    let (next, cmds) = update(model, Msg::OpenTransitions);
+
+    assert!(
+        next.transition_picker.is_none(),
+        "'s' must not open the picker while a delete confirm is open"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S2: the fetch reply populates Loaded{highlight: 0}; an empty vec
+// still populates Loaded (the view renders the empty state) ----
+
+#[test]
+fn transitions_loaded_populates_loaded_state_with_highlight_zero() {
+    let model = make_loading_picker_model();
+    let transitions = vec![
+        make_transition("11", "Start Progress", "In Progress", false),
+        make_transition("21", "Resolve", "Done", true),
+    ];
+
+    let (next, cmds) = update(model, Msg::TransitionsLoaded(transitions.clone()));
+
+    assert_eq!(
+        next.transition_picker,
+        Some(TransitionPicker {
+            state: TransitionPickerState::Loaded {
+                transitions,
+                highlight: 0,
+                notice: None,
+            }
+        })
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn transitions_loaded_with_empty_vec_still_populates_loaded_empty_state() {
+    let model = make_loading_picker_model();
+
+    let (next, cmds) = update(model, Msg::TransitionsLoaded(vec![]));
+
+    assert_eq!(
+        next.transition_picker,
+        Some(TransitionPicker {
+            state: TransitionPickerState::Loaded {
+                transitions: vec![],
+                highlight: 0,
+                notice: None,
+            }
+        })
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn transitions_loaded_while_not_loading_is_noop() {
+    let model = make_transition_detail_model();
+
+    let (next, cmds) = update(
+        model,
+        Msg::TransitionsLoaded(vec![make_transition("1", "A", "B", false)]),
+    );
+
+    assert!(
+        next.transition_picker.is_none(),
+        "a late TransitionsLoaded after the picker was closed must be a no-op"
+    );
+    assert!(cmds.is_empty());
+}
+
+// ---- S7: a fetch failure closes the picker and sets a localized error ----
+
+#[test]
+fn transitions_load_err_closes_picker_and_sets_error_status() {
+    let model = make_loading_picker_model();
+
+    let (next, cmds) = update(model, Msg::TransitionsLoadErr("boom".to_owned()));
+
+    assert!(next.transition_picker.is_none());
+    let status = next
+        .status
+        .expect("a fetch failure must set a transient status");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "boom");
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn transitions_load_err_surfaces_reauth_guidance() {
+    let model = make_loading_picker_model();
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::TransitionsLoadErr(guidance.clone()));
+
+    assert!(next.transition_picker.is_none());
+    let status = next.status.expect("status must be set");
+    assert_eq!(status.text, guidance);
+    assert!(cmds.is_empty());
+}
+
+// ---- move: saturating-clamps the highlight and clears any notice ----
+
+#[test]
+fn transition_move_down_advances_highlight() {
+    let model = make_loaded_picker_model(
+        vec![
+            make_transition("1", "A", "S1", false),
+            make_transition("2", "B", "S2", false),
+        ],
+        0,
+    );
+
+    let (next, cmds) = update(model, Msg::TransitionMoveDown);
+
+    match next.transition_picker.expect("picker must stay open").state {
+        TransitionPickerState::Loaded { highlight, .. } => assert_eq!(highlight, 1),
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn transition_move_down_clamps_at_last_row() {
+    let model = make_loaded_picker_model(
+        vec![
+            make_transition("1", "A", "S1", false),
+            make_transition("2", "B", "S2", false),
+        ],
+        1,
+    );
+
+    let (next, _) = update(model, Msg::TransitionMoveDown);
+
+    match next.transition_picker.unwrap().state {
+        TransitionPickerState::Loaded { highlight, .. } => {
+            assert_eq!(highlight, 1, "Down at the last row must clamp")
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+}
+
+#[test]
+fn transition_move_up_clamps_at_zero() {
+    let model = make_loaded_picker_model(vec![make_transition("1", "A", "S1", false)], 0);
+
+    let (next, _) = update(model, Msg::TransitionMoveUp);
+
+    match next.transition_picker.unwrap().state {
+        TransitionPickerState::Loaded { highlight, .. } => {
+            assert_eq!(highlight, 0, "Up at the first row must clamp")
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+}
+
+#[test]
+fn transition_move_clears_a_standing_notice() {
+    let mut model = make_transition_detail_model();
+    model.transition_picker = Some(TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions: vec![
+                make_transition("1", "A", "S1", false),
+                make_transition("2", "B", "S2", false),
+            ],
+            highlight: 0,
+            notice: Some("requires fields".to_owned()),
+        },
+    });
+
+    let (next, _) = update(model, Msg::TransitionMoveDown);
+
+    match next.transition_picker.unwrap().state {
+        TransitionPickerState::Loaded { notice, .. } => {
+            assert!(notice.is_none(), "a move must clear the standing notice")
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+}
+
+#[test]
+fn transition_move_while_loading_is_noop() {
+    let model = make_loading_picker_model();
+
+    let (next, cmds) = update(model, Msg::TransitionMoveDown);
+
+    assert!(matches!(
+        next.transition_picker,
+        Some(TransitionPicker {
+            state: TransitionPickerState::Loading
+        })
+    ));
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn transition_move_on_empty_list_is_noop() {
+    let model = make_loaded_picker_model(vec![], 0);
+
+    let (next, cmds) = update(model, Msg::TransitionMoveDown);
+
+    match next.transition_picker.unwrap().state {
+        TransitionPickerState::Loaded {
+            highlight,
+            transitions,
+            ..
+        } => {
+            assert_eq!(highlight, 0);
+            assert!(transitions.is_empty());
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+    assert!(cmds.is_empty());
+}
+
+// ---- S3/S4: Enter on the highlighted row — field-free executes, field-
+// requiring is inert with the "requires fields" notice ----
+
+#[test]
+fn apply_transition_on_field_free_row_emits_exactly_one_exec_and_sets_applying_notice() {
+    let model = make_loaded_picker_model(
+        vec![make_transition(
+            "11",
+            "Start Progress",
+            "In Progress",
+            false,
+        )],
+        0,
+    );
+
+    let (next, cmds) = update(model, Msg::ApplyTransition);
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::ExecTransition {
+            key: "PROJ-1".to_owned(),
+            transition_id: "11".to_owned(),
+        }],
+        "a field-free highlighted transition must emit exactly one ExecTransition"
+    );
+    match next
+        .transition_picker
+        .expect("the picker must stay open while applying")
+        .state
+    {
+        TransitionPickerState::Loaded { notice, .. } => {
+            assert_eq!(notice, Some("Applying…".to_owned()));
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+}
+
+#[test]
+fn apply_transition_on_field_requiring_row_emits_no_cmd_and_sets_requires_fields_notice() {
+    let model = make_loaded_picker_model(vec![make_transition("21", "Resolve", "Done", true)], 0);
+
+    let (next, cmds) = update(model, Msg::ApplyTransition);
+
+    assert!(
+        cmds.is_empty(),
+        "a field-requiring transition must never write"
+    );
+    let picker = next
+        .transition_picker
+        .expect("the picker must stay open on a field-requiring row");
+    match picker.state {
+        TransitionPickerState::Loaded { notice, .. } => {
+            assert_eq!(notice, Some("requires fields".to_owned()));
+        }
+        TransitionPickerState::Loading => panic!("expected Loaded state"),
+    }
+}
+
+#[test]
+fn apply_transition_on_empty_list_is_noop() {
+    let model = make_loaded_picker_model(vec![], 0);
+
+    let (next, cmds) = update(model, Msg::ApplyTransition);
+
+    assert!(
+        next.transition_picker.is_some(),
+        "the picker must stay open"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn apply_transition_while_loading_is_noop() {
+    let model = make_loading_picker_model();
+
+    let (next, cmds) = update(model, Msg::ApplyTransition);
+
+    assert!(matches!(
+        next.transition_picker,
+        Some(TransitionPicker {
+            state: TransitionPickerState::Loading
+        })
+    ));
+    assert!(cmds.is_empty());
+}
+
+// ---- S5: Esc cancels the picker with no Cmd ----
+
+#[test]
+fn cancel_transitions_closes_picker_with_no_cmd() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::CancelTransitions);
+
+    assert!(next.transition_picker.is_none());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn cancel_transitions_on_empty_state_closes_picker() {
+    let model = make_loaded_picker_model(vec![], 0);
+
+    let (next, cmds) = update(model, Msg::CancelTransitions);
+
+    assert!(next.transition_picker.is_none());
+    assert!(cmds.is_empty());
+}
+
+// ---- S3/S6: TransitionApplied closes the picker + exactly one
+// RefreshDetail (server-truth, no local status patch); TransitionApplyErr
+// closes the picker with an error status and zero refresh Cmds ----
+
+#[test]
+fn transition_applied_closes_picker_and_emits_exactly_one_refresh_detail() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::TransitionApplied);
+
+    assert!(next.transition_picker.is_none());
+    assert_eq!(
+        cmds,
+        vec![Cmd::RefreshDetail("PROJ-1".to_owned())],
+        "a successful transition must emit exactly one server-truth refresh, no local status patch"
+    );
+}
+
+#[test]
+fn transition_apply_err_closes_picker_sets_error_status_and_emits_no_refresh() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::TransitionApplyErr("boom".to_owned()));
+
+    assert!(next.transition_picker.is_none());
+    let status = next
+        .status
+        .expect("an execute failure must set a transient status");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "boom");
+    assert!(
+        cmds.is_empty(),
+        "an execute failure must emit zero refresh Cmds"
+    );
+}
+
+#[test]
+fn transition_apply_err_surfaces_reauth_guidance() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+    let guidance = crate::commands::reauth_message("work");
+
+    let (next, cmds) = update(model, Msg::TransitionApplyErr(guidance.clone()));
+
+    assert!(next.transition_picker.is_none());
+    let status = next.status.expect("status must be set");
+    assert_eq!(status.text, guidance);
+    assert!(cmds.is_empty());
+}
+
+// ---- S8: the picker renders a loading/empty/field-requiring-annotated
+// state ----
+
+#[test]
+fn view_renders_transition_picker_loading_state() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let model = make_loading_picker_model();
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("Transitions"), "got: {text}");
+    assert!(text.contains("Loading"), "got: {text}");
+}
+
+#[test]
+fn view_renders_transition_picker_empty_state() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let model = make_loaded_picker_model(vec![], 0);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("No transitions available"), "got: {text}");
+}
+
+#[test]
+fn view_renders_transition_picker_field_requiring_annotation() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let model = make_loaded_picker_model(vec![make_transition("21", "Resolve", "Done", true)], 0);
+
+    let buf = render_to_buffer(&model, 120, 30);
+    let text = buffer_text(&buf);
+
+    assert!(text.contains("Resolve"), "got: {text}");
+    assert!(text.contains("Done"), "got: {text}");
+    assert!(text.contains("(needs fields)"), "got: {text}");
+}
+
+// ---- S9: while the picker is open, list/detail nav, other overlays, and
+// mouse events leave the state unchanged and q does not quit ----
+
+#[test]
+fn list_and_detail_nav_keys_are_inert_while_transitions_open() {
+    fn assert_inert(msg: Msg) {
+        let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+        let (next, cmds) = update(model, msg);
+
+        assert!(
+            next.transition_picker.is_some(),
+            "the picker must remain open"
+        );
+        assert_eq!(next.screen, Screen::Detail, "screen must be unchanged");
+        assert!(cmds.is_empty(), "a leaked msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::Down);
+    assert_inert(Msg::Up);
+    assert_inert(Msg::Back);
+    assert_inert(Msg::FocusNextLink);
+    assert_inert(Msg::FocusNextComment);
+    assert_inert(Msg::FocusPrevComment);
+    assert_inert(Msg::OpenSearch);
+    assert_inert(Msg::OpenProjects);
+    assert_inert(Msg::LoadMore);
+    assert_inert(Msg::EditFocusedComment);
+    assert_inert(Msg::DeleteFocusedComment);
+    assert_inert(Msg::ReplyToFocusedComment);
+    assert_inert(Msg::OpenCompose);
+    assert_inert(Msg::ComposeInput('x'));
+    assert_inert(Msg::ConfirmDeleteYes);
+}
+
+#[test]
+fn quit_does_not_quit_while_transitions_open() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::Quit);
+
+    assert!(next.transition_picker.is_some(), "picker must stay open");
+    assert!(
+        !cmds.contains(&Cmd::Quit),
+        "q must not quit while the picker is open"
+    );
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn mouse_resolved_msgs_are_inert_while_transitions_open() {
+    fn assert_inert(msg: Msg) {
+        let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+        let (next, cmds) = update(model, msg);
+
+        assert!(
+            next.transition_picker.is_some(),
+            "the picker must remain open"
+        );
+        assert!(cmds.is_empty(), "a leaked mouse msg must emit no Cmd");
+    }
+
+    assert_inert(Msg::CardClicked(0));
+    assert_inert(Msg::LinkClicked("https://example.com".to_owned()));
+    assert_inert(Msg::SelStart((0, 0)));
+    assert_inert(Msg::SelDrag((0, 0)));
+    assert_inert(Msg::SelEnd(Some("x".to_owned())));
+    assert_inert(Msg::ProjectClicked(0));
+}
+
+// ---- compose/confirm stay byte-for-byte unchanged while the picker is
+// open (regression guard: no cross-overlay leakage) ----
+
+#[test]
+fn open_compose_is_inert_while_transitions_open() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::OpenCompose);
+
+    assert!(next.compose.is_none());
+    assert!(next.transition_picker.is_some());
+    assert!(cmds.is_empty());
+}
+
+#[test]
+fn delete_focused_comment_is_inert_while_transitions_open() {
+    let model = make_loaded_picker_model(vec![make_transition("11", "A", "B", false)], 0);
+
+    let (next, cmds) = update(model, Msg::DeleteFocusedComment);
+
+    assert!(next.confirm.is_none());
+    assert!(next.transition_picker.is_some());
+    assert!(cmds.is_empty());
+}
+
+// ---- the pure transition_picker_content builder (BDR 0018 S1-S2, S8) ----
+
+#[test]
+fn transition_picker_content_loading_shows_localized_loading() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let picker = TransitionPicker {
+        state: TransitionPickerState::Loading,
+    };
+
+    let content = view::transition_picker_content(&picker);
+
+    assert_eq!(content.title, "Transitions");
+    assert_eq!(content.body.len(), 1);
+    assert!(line_text(&content.body[0]).contains("Loading"));
+    assert!(content.hint.is_none());
+}
+
+#[test]
+fn transition_picker_content_empty_shows_localized_empty_state_and_esc_hint() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let picker = TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions: vec![],
+            highlight: 0,
+            notice: None,
+        },
+    };
+
+    let content = view::transition_picker_content(&picker);
+
+    let body_text = line_text(&content.body[0]);
+    assert!(
+        body_text.contains("No transitions available"),
+        "got: {body_text}"
+    );
+    assert_eq!(content.hint, Some("Esc cancel".to_owned()));
+}
+
+#[test]
+fn transition_picker_content_loaded_lists_names_target_statuses_and_hint() {
+    let _lock = LANG_MUTEX.lock().unwrap();
+    set_language("en");
+    let picker = TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions: vec![
+                make_transition("11", "Start Progress", "In Progress", false),
+                make_transition("21", "Resolve", "Done", true),
+            ],
+            highlight: 0,
+            notice: None,
+        },
+    };
+
+    let content = view::transition_picker_content(&picker);
+
+    assert_eq!(content.body.len(), 2);
+    let row0 = line_text(&content.body[0]);
+    let row1 = line_text(&content.body[1]);
+    assert!(
+        row0.contains("Start Progress") && row0.contains("In Progress"),
+        "got: {row0}"
+    );
+    assert!(
+        row1.contains("Resolve") && row1.contains("Done"),
+        "got: {row1}"
+    );
+    assert!(
+        row1.contains("(needs fields)"),
+        "a field-requiring row must be annotated; got: {row1}"
+    );
+    assert!(
+        !row0.contains("(needs fields)"),
+        "a field-free row must not be annotated; got: {row0}"
+    );
+    assert_eq!(
+        content.hint,
+        Some("↑↓ move · ⏎ apply · Esc cancel".to_owned())
+    );
+}
+
+#[test]
+fn transition_picker_content_highlights_the_selected_row() {
+    let picker = TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions: vec![
+                make_transition("11", "Start Progress", "In Progress", false),
+                make_transition("21", "Done", "Done", false),
+            ],
+            highlight: 1,
+            notice: None,
+        },
+    };
+
+    let content = view::transition_picker_content(&picker);
+
+    let highlighted_style = content.body[1].spans[0].style;
+    let plain_style = content.body[0].spans[0].style;
+    assert!(
+        highlighted_style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "the highlighted row must carry the REVERSED selection style: {highlighted_style:?}"
+    );
+    assert!(
+        !plain_style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "a non-highlighted row must not carry REVERSED: {plain_style:?}"
+    );
+}
+
+#[test]
+fn transition_picker_content_carries_the_notice_as_status() {
+    let picker = TransitionPicker {
+        state: TransitionPickerState::Loaded {
+            transitions: vec![make_transition("11", "A", "B", false)],
+            highlight: 0,
+            notice: Some("Applying…".to_owned()),
+        },
+    };
+
+    let content = view::transition_picker_content(&picker);
+
+    assert_eq!(content.status, Some("Applying…".to_owned()));
+}
+
+// ---- shell keymap: 's' opens the picker; the picker keymap owns
+// arrows/j/k/Enter/Esc exclusively ----
+
+#[test]
+fn map_key_in_normal_mode_s_opens_transitions() {
+    assert!(matches!(
+        map_key_in_normal_mode(KeyCode::Char('s'), KeyModifiers::NONE),
+        Some(Msg::OpenTransitions)
+    ));
+}
+
+#[test]
+fn map_key_in_transition_mode_up_and_k_move_up() {
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Up, KeyModifiers::NONE),
+        Some(Msg::TransitionMoveUp)
+    ));
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Char('k'), KeyModifiers::NONE),
+        Some(Msg::TransitionMoveUp)
+    ));
+}
+
+#[test]
+fn map_key_in_transition_mode_down_and_j_move_down() {
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Down, KeyModifiers::NONE),
+        Some(Msg::TransitionMoveDown)
+    ));
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Char('j'), KeyModifiers::NONE),
+        Some(Msg::TransitionMoveDown)
+    ));
+}
+
+#[test]
+fn map_key_in_transition_mode_enter_applies() {
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Enter, KeyModifiers::NONE),
+        Some(Msg::ApplyTransition)
+    ));
+}
+
+#[test]
+fn map_key_in_transition_mode_esc_cancels() {
+    assert!(matches!(
+        map_key_in_transition_mode(KeyCode::Esc, KeyModifiers::NONE),
+        Some(Msg::CancelTransitions)
+    ));
+}
+
+#[test]
+fn map_key_in_transition_mode_other_keys_are_noop() {
+    assert!(map_key_in_transition_mode(KeyCode::Tab, KeyModifiers::NONE).is_none());
+    assert!(map_key_in_transition_mode(KeyCode::Char('q'), KeyModifiers::NONE).is_none());
+    assert!(map_key_in_transition_mode(KeyCode::Char('c'), KeyModifiers::NONE).is_none());
 }

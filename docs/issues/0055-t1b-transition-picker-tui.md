@@ -2,7 +2,7 @@
 type: Issue
 title: "T1b — transition picker TUI: 's' opens a modal fetched from the workflow, Enter applies a field-free transition, the detail reloads from the server"
 description: On the browse detail, 's' opens a transition-picker modal (reusing the C3a modal primitive) that dispatches list_transitions on open (loading state). j/k/arrows move a highlight; Enter on a field-free transition emits transition_issue then a server-truth RefreshDetail; Enter on a field-requiring transition shows a localized "requires fields" hint and does not write; Esc cancels. Empty transitions show a localized empty state. Fetch/execute failures close the picker with a localized error (401 = re-auth). The picker owns all input while open (no leakage, q no quit).
-status: todo
+status: done
 labels: [tui, transition, workflow, write, modal, mutation, parity]
 blocked_by: 0054
 tracker:
@@ -43,3 +43,18 @@ Scope: `src/tui/model.rs`, `src/tui/view.rs`, `src/tui/shell.rs`,
   available", and transition error/status strings.
 - **Tests:** headless update() for BDR 0018 S1–S9 + a wiremock spawn test for the
   fetch + execute paths.
+
+**Delivered 2026-07-16.** `transition_picker: Option<TransitionPicker>` with
+state `Loading | Loaded{transitions, highlight, notice}`; `s` opens it +
+`Cmd::LoadTransitions`; move clamps + clears notice; Enter on a field-free row →
+one `Cmd::ExecTransition` (field-requiring → localized "requires fields" notice,
+picker stays); `TransitionApplied` → close + one server-truth
+`Cmd::RefreshDetail`; fetch/exec errors close + localized status (401 reauth);
+Esc cancels. The picker is a **third overlay** alongside compose and confirm —
+mutually exclusive, with `leaks_through_open_transitions` + `is_reply_msg`
+extended so it owns input (q no quit) while its async replies pass through. TEA
+purity kept: the `ModalContent` is built by `transition_picker_content` in
+view.rs (model.rs stays ratatui-free); `modal.rs` and the T1a client seam
+untouched. Reviewer: approved, 8/8 ACs, confidence 0.95. Deferred to the
+C4-close chrome slice: a "Reply to @X"-style richer picker chrome / mouse-click
+row activation.

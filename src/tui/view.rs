@@ -12,12 +12,12 @@ use unicode_width::UnicodeWidthStr;
 use super::modal;
 use super::model::{
     footer_mode, header_line, Compose, ComposeStatus, FooterMode, Model, Screen, Selection,
-    StatusKind, StatusMsg,
+    StatusKind, StatusMsg, TransitionPicker, TransitionPickerState,
 };
 use super::panel;
 use super::theme;
 use crate::i18n::t;
-use crate::models::{Attachment, Issue, IssueComment, IssueRow, ProjectRow};
+use crate::models::{Attachment, Issue, IssueComment, IssueRow, ProjectRow, Transition};
 use crate::render::{
     adf_to_rich, due_day_delta, relative_due, today_days_now, RichLine, RichSpan, RichStyle,
 };
@@ -614,6 +614,9 @@ pub fn view_detail(model: &Model, frame: &mut Frame) {
     if model.confirm.is_some() {
         modal::render_modal(frame, area, &confirm_modal_content());
     }
+    if let Some(picker) = &model.transition_picker {
+        modal::render_modal(frame, area, &transition_picker_content(picker));
+    }
 }
 
 /// Renders the comment compose over the detail through the C3a modal
@@ -673,6 +676,85 @@ pub(super) fn confirm_modal_content() -> modal::ModalContent {
                 label: t("No"),
             },
         ],
+    }
+}
+
+/// The transition picker's content (ADR 0027 §3, BDR 0018 S1-S2, S8): built
+/// entirely in `view.rs`, mirroring `confirm_modal_content`'s in-view
+/// `ModalContent` construction, so `model.rs` stays free of ratatui types
+/// (`ModalContent::body` is `Vec<Line<'static>>`), matching the documented
+/// pure-core boundary (ADR 0007 §6). Pure — no rendering, no I/O — so it is
+/// headlessly unit-tested.
+pub(super) fn transition_picker_content(picker: &TransitionPicker) -> modal::ModalContent {
+    match &picker.state {
+        TransitionPickerState::Loading => modal::ModalContent {
+            title: t("Transitions"),
+            body: vec![Line::from(t(LOADING_NOTICE))],
+            hint: None,
+            status: None,
+            buttons: vec![],
+        },
+        TransitionPickerState::Loaded {
+            transitions,
+            highlight,
+            notice,
+        } => transition_list_content(transitions, *highlight, notice.as_deref()),
+    }
+}
+
+/// The picker's loaded-list content (BDR 0018 S2, S4, S8): the localized
+/// empty state with no transitions; otherwise one row per transition — the
+/// highlighted row styled like the focused comment/link
+/// (`theme::selection_highlight`) — plus the move/apply/cancel hint and the
+/// standing notice (the "requires fields"/"Applying…" status).
+fn transition_list_content(
+    transitions: &[Transition],
+    highlight: usize,
+    notice: Option<&str>,
+) -> modal::ModalContent {
+    if transitions.is_empty() {
+        return modal::ModalContent {
+            title: t("Transitions"),
+            body: vec![Line::from(t("No transitions available"))],
+            hint: Some(t("Esc cancel")),
+            status: None,
+            buttons: vec![],
+        };
+    }
+    let body = transitions
+        .iter()
+        .enumerate()
+        .map(|(i, transition)| transition_row_line(transition, i == highlight))
+        .collect();
+    modal::ModalContent {
+        title: t("Transitions"),
+        body,
+        hint: Some(t("↑↓ move · ⏎ apply · Esc cancel")),
+        status: notice.map(str::to_owned),
+        buttons: vec![],
+    }
+}
+
+/// One transition row: `{name} → {to_status}`, suffixed with the localized
+/// "(needs fields)" annotation and dimmed when `requires_fields` (ADR 0027
+/// §2); the highlighted row additionally carries the same REVERSED
+/// selection style `highlight_line` patches onto a focused comment card.
+fn transition_row_line(transition: &Transition, is_highlighted: bool) -> Line<'static> {
+    let mut text = format!("{} → {}", transition.name, transition.to_status);
+    if transition.requires_fields {
+        text.push(' ');
+        text.push_str(&t("(needs fields)"));
+    }
+    let style = if transition.requires_fields {
+        Style::default().add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+    };
+    let line = Line::from(Span::styled(text, style));
+    if is_highlighted {
+        highlight_line(line)
+    } else {
+        line
     }
 }
 

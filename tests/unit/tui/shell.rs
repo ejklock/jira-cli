@@ -1128,3 +1128,335 @@ async fn reply_comment_non_2xx_non_401_maps_to_comment_mutation_err() {
         "a non-2xx, non-401 reply_comment response must still map to CommentMutationErr, never panic"
     );
 }
+
+// ---- t1b-transition-picker-tui / ADR 0027 §3-§4, BDR 0018 S1-S3, S6-S7 —
+// list_transitions's/exec_transition's reply mapping mirrors submit_comment's:
+// 2xx -> Ok, Unauthorized (401) -> the typed ClientError the spawn wrapper
+// turns into the E2 re-auth guidance ----
+
+fn build_transitions_payload(transitions: Vec<(&str, &str, &str, bool)>) -> serde_json::Value {
+    let entries: Vec<serde_json::Value> = transitions
+        .into_iter()
+        .map(|(id, name, to_status, requires_fields)| {
+            let fields = if requires_fields {
+                serde_json::json!({ "resolution": { "required": true } })
+            } else {
+                serde_json::json!({})
+            };
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "to": { "name": to_status },
+                "fields": fields,
+            })
+        })
+        .collect();
+    serde_json::json!({ "transitions": entries })
+}
+
+#[tokio::test]
+async fn list_transitions_2xx_parses_the_domain_type() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_transitions_payload(vec![
+                ("11", "Start Progress", "In Progress", false),
+                ("21", "Resolve", "Done", true),
+            ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = list_transitions(&instance, "PROJ-1").await;
+
+    let transitions = result.expect("a 2xx list_transitions response must be Ok");
+    assert_eq!(
+        transitions,
+        vec![
+            Transition {
+                id: "11".to_owned(),
+                name: "Start Progress".to_owned(),
+                to_status: "In Progress".to_owned(),
+                requires_fields: false,
+            },
+            Transition {
+                id: "21".to_owned(),
+                name: "Resolve".to_owned(),
+                to_status: "Done".to_owned(),
+                requires_fields: true,
+            },
+        ]
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn list_transitions_401_maps_to_typed_unauthorized() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = list_transitions(&instance, "PROJ-1").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_load_transitions_2xx_replies_transitions_loaded() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(build_transitions_payload(vec![(
+                "11",
+                "Start Progress",
+                "In Progress",
+                false,
+            )])),
+        )
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_load_transitions("PROJ-1".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    match reply {
+        Msg::TransitionsLoaded(transitions) => {
+            assert_eq!(transitions.len(), 1);
+            assert_eq!(transitions[0].id, "11");
+        }
+        _ => panic!("expected Msg::TransitionsLoaded, got a different Msg"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_load_transitions_401_replies_transitions_load_err_with_reauth_guidance() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_load_transitions("PROJ-1".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    match reply {
+        Msg::TransitionsLoadErr(reason) => assert_eq!(reason, reauth_message("test")),
+        _ => panic!("expected Msg::TransitionsLoadErr, got a different Msg"),
+    }
+}
+
+#[tokio::test]
+async fn exec_transition_2xx_is_ok() {
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .and(body_json(
+            serde_json::json!({ "transition": { "id": "11" } }),
+        ))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = exec_transition(&instance, "PROJ-1", "11").await;
+
+    assert!(result.is_ok(), "a 2xx transition_issue response must be Ok");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn exec_transition_401_maps_to_typed_unauthorized() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+
+    let result = exec_transition(&instance, "PROJ-1", "11").await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => assert_eq!(instance, "test"),
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_exec_transition_2xx_replies_transition_applied() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_exec_transition("PROJ-1".to_owned(), "11".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(matches!(reply, Msg::TransitionApplied));
+}
+
+#[tokio::test]
+async fn spawn_exec_transition_401_replies_transition_apply_err_with_reauth_guidance() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_exec_transition("PROJ-1".to_owned(), "11".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    match reply {
+        Msg::TransitionApplyErr(reason) => assert_eq!(reason, reauth_message("test")),
+        _ => panic!("expected Msg::TransitionApplyErr, got a different Msg"),
+    }
+}
+
+#[tokio::test]
+async fn exec_transition_non_2xx_non_401_maps_to_transition_apply_err() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/rest/api/3/issue/PROJ-1/transitions"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let instance = crate::store::instances::Instance {
+        name: "test".to_owned(),
+        base_url: server.uri(),
+        email: "test@example.com".to_owned(),
+        token: "token".to_owned(),
+        account_id: None,
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+
+    spawn_exec_transition("PROJ-1".to_owned(), "11".to_owned(), instance, tx);
+
+    let reply = rx
+        .recv()
+        .await
+        .expect("the spawn must send exactly one reply");
+    assert!(
+        matches!(reply, Msg::TransitionApplyErr(_)),
+        "a non-2xx, non-401 transition_issue response must still map to TransitionApplyErr, never panic"
+    );
+}

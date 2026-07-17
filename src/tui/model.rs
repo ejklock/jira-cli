@@ -1,6 +1,6 @@
 use crate::commands::MINE_JQL;
 use crate::i18n::t;
-use crate::models::{Issue, IssueComment, IssueRow, ProjectRow};
+use crate::models::{Issue, IssueComment, IssueRow, ProjectRow, Transition};
 use crate::render::{adf_to_plain_text, adf_to_rich};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +147,12 @@ pub struct Model {
     /// never lets one open while the other is). `None` on every other screen
     /// and whenever no confirm is open.
     pub confirm: Option<ConfirmDelete>,
+    /// The open transition picker (ADR 0027 §3, BDR 0018): `Some` only while
+    /// `Screen::Detail` shows the picker modal over the dimmed thread,
+    /// mutually exclusive with `compose`/`confirm` (the input-leakage guard
+    /// never lets more than one overlay open at a time). `None` on every
+    /// other screen and whenever no picker is open.
+    pub transition_picker: Option<TransitionPicker>,
 }
 
 impl Model {
@@ -168,6 +174,30 @@ impl Model {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfirmDelete {
     pub comment_id: String,
+}
+
+/// The open transition picker's state (ADR 0027 §3, BDR 0018): plain data
+/// only — no ratatui/crossterm/tokio/io types (ADR 0007 §6) — so the
+/// `ModalContent` it renders as is built entirely in `view.rs`
+/// (`transition_picker_content`), mirroring `confirm_modal_content`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionPicker {
+    pub state: TransitionPickerState,
+}
+
+/// The picker's fetch/list state (ADR 0027 §3, BDR 0018 S1-S2): `Loading`
+/// while the transitions fetch is in flight; `Loaded` once it lands, holding
+/// the fetched transitions, the highlighted index, and an optional notice —
+/// the localized "requires fields" hint (S4) or the in-flight "Applying…"
+/// status (S3), cleared on every highlight move.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransitionPickerState {
+    Loading,
+    Loaded {
+        transitions: Vec<Transition>,
+        highlight: usize,
+        notice: Option<String>,
+    },
 }
 
 /// The comment compose's draft state (ADR 0024 §3, ADR 0026 §3): `buffer` is
@@ -378,6 +408,37 @@ pub enum Msg {
     /// `author_account_id` (defensive, mirrors the edit id-guard) or no
     /// focused comment at all is a no-op.
     ReplyToFocusedComment,
+    /// `s` on the Detail screen (ADR 0027 §3, BDR 0018 S1): opens the
+    /// transition picker in the `Loading` state and dispatches the
+    /// transitions fetch; a no-op off `Screen::Detail` or with no loaded
+    /// issue.
+    OpenTransitions,
+    /// The transitions fetch landed (BDR 0018 S2): populates the picker with
+    /// the fetched list, highlighting the first row.
+    TransitionsLoaded(Vec<Transition>),
+    /// The transitions fetch failed (BDR 0018 S7): the message (already
+    /// mapped to the E2 re-auth guidance for a 401), closes the picker.
+    TransitionsLoadErr(String),
+    /// Up/`k` moves the picker's highlight up, clamped at the first row (BDR
+    /// 0018).
+    TransitionMoveUp,
+    /// Down/`j` moves the picker's highlight down, clamped at the last row
+    /// (BDR 0018).
+    TransitionMoveDown,
+    /// Enter on the picker's highlighted transition (ADR 0027 §2, BDR 0018
+    /// S3-S4): a field-free transition emits `Cmd::ExecTransition`; a
+    /// field-requiring transition sets the "requires fields" notice and
+    /// writes nothing.
+    ApplyTransition,
+    /// Esc cancels the open picker with no write (BDR 0018 S5).
+    CancelTransitions,
+    /// The transition execute succeeded (ADR 0027 §4, BDR 0018 S3): closes
+    /// the picker; the caller emits the server-truth `Cmd::RefreshDetail`.
+    TransitionApplied,
+    /// The transition execute failed (BDR 0018 S6): the message (already
+    /// mapped to the E2 re-auth guidance for a 401), closes the picker with
+    /// no refresh.
+    TransitionApplyErr(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -441,6 +502,18 @@ pub enum Cmd {
         mention_display: String,
         body: String,
     },
+    /// The transition picker's fetch effect (ADR 0027 §3, BDR 0018 S1):
+    /// reads the available workflow transitions for `key`'s current status
+    /// via the `list_transitions` seam.
+    LoadTransitions(String),
+    /// The transition picker's execute effect (ADR 0027 §3-§4, BDR 0018 S3):
+    /// executes `transition_id` on `key` via the `transition_issue` seam.
+    /// Callers only ever emit this for a field-free highlighted transition
+    /// (`update_apply_transition`'s gate).
+    ExecTransition {
+        key: String,
+        transition_id: String,
+    },
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
@@ -462,6 +535,9 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         return (model, vec![]);
     }
     if model.confirm.is_some() && leaks_through_open_confirm(&msg) {
+        return (model, vec![]);
+    }
+    if model.transition_picker.is_some() && leaks_through_open_transitions(&msg) {
         return (model, vec![]);
     }
     match msg {
@@ -510,6 +586,15 @@ pub fn update(model: Model, msg: Msg) -> (Model, Vec<Cmd>) {
         Msg::ConfirmDeleteYes => update_confirm_delete_yes(model),
         Msg::ConfirmDeleteNo => update_confirm_delete_no(model),
         Msg::ReplyToFocusedComment => update_reply_to_focused_comment(model),
+        Msg::OpenTransitions => update_open_transitions(model),
+        Msg::TransitionsLoaded(transitions) => update_transitions_loaded(model, transitions),
+        Msg::TransitionsLoadErr(reason) => update_transitions_load_err(model, reason),
+        Msg::TransitionMoveUp => update_transition_move(model, -1),
+        Msg::TransitionMoveDown => update_transition_move(model, 1),
+        Msg::ApplyTransition => update_apply_transition(model),
+        Msg::CancelTransitions => update_cancel_transitions(model),
+        Msg::TransitionApplied => update_transition_applied(model),
+        Msg::TransitionApplyErr(reason) => update_transition_apply_err(model, reason),
     }
 }
 
@@ -542,6 +627,10 @@ fn is_reply_msg(msg: &Msg) -> bool {
             | Msg::CommentMutationOk
             | Msg::CommentMutationErr(_)
             | Msg::MyselfLoaded(_)
+            | Msg::TransitionsLoaded(_)
+            | Msg::TransitionsLoadErr(_)
+            | Msg::TransitionApplied
+            | Msg::TransitionApplyErr(_)
     )
 }
 
@@ -572,6 +661,25 @@ fn leaks_through_open_compose(msg: &Msg) -> bool {
 fn leaks_through_open_confirm(msg: &Msg) -> bool {
     let confirm_owned = matches!(msg, Msg::ConfirmDeleteYes | Msg::ConfirmDeleteNo);
     !confirm_owned && !is_reply_msg(msg)
+}
+
+/// While the transition picker is open, only its own `Msg`s and background
+/// replies may reach `update`'s reducers (ADR 0027 §3, BDR 0018 S9): every
+/// other key/mouse-resolved `Msg` — list/detail nav, search, links,
+/// selection, Projects, comment focus/compose/confirm — is inert, so
+/// nothing behind the dimmed backdrop changes and `q` cannot quit while the
+/// picker is open. Mirrors `leaks_through_open_confirm`'s contract; a
+/// re-triggered `OpenTransitions` while already open is likewise inert
+/// (re-opening isn't a supported gesture — Esc first).
+fn leaks_through_open_transitions(msg: &Msg) -> bool {
+    let transitions_owned = matches!(
+        msg,
+        Msg::TransitionMoveUp
+            | Msg::TransitionMoveDown
+            | Msg::ApplyTransition
+            | Msg::CancelTransitions
+    );
+    !transitions_owned && !is_reply_msg(msg)
 }
 
 fn update_down(model: Model) -> (Model, Vec<Cmd>) {
@@ -780,6 +888,7 @@ fn back_from_detail(model: Model) -> (Model, Vec<Cmd>) {
         detail_focused_link: None,
         detail_focused_comment: None,
         selection: None,
+        transition_picker: None,
         ..model
     };
     (next, vec![])
@@ -1556,6 +1665,198 @@ fn set_not_your_comment_status(model: Model) -> Model {
         }),
         ..model
     }
+}
+
+/// `s` opens the transition picker only on `Screen::Detail` with a loaded
+/// issue (ADR 0027 §3, BDR 0018 S1): a no-op on List/Projects, or on a
+/// Detail screen still loading, which has no issue key to fetch transitions
+/// for. Opens in the `Loading` state and emits exactly one
+/// `Cmd::LoadTransitions(key)`.
+fn update_open_transitions(model: Model) -> (Model, Vec<Cmd>) {
+    if model.screen != Screen::Detail {
+        return (model, vec![]);
+    }
+    let Some(issue) = model.detail.as_ref() else {
+        return (model, vec![]);
+    };
+    let key = issue.key.clone();
+    let next = Model {
+        transition_picker: Some(TransitionPicker {
+            state: TransitionPickerState::Loading,
+        }),
+        ..model
+    };
+    (next, vec![Cmd::LoadTransitions(key)])
+}
+
+/// The transitions fetch landed (BDR 0018 S2): populates the picker with
+/// the fetched list, highlighting the first row — an empty list still
+/// populates `Loaded`, so the view renders the localized empty state (S8).
+/// Only applies while the picker is still `Loading`; a late reply after the
+/// picker was cancelled/closed is a no-op.
+fn update_transitions_loaded(model: Model, transitions: Vec<Transition>) -> (Model, Vec<Cmd>) {
+    if !is_transition_picker_loading(&model) {
+        return (model, vec![]);
+    }
+    let next = Model {
+        transition_picker: Some(TransitionPicker {
+            state: TransitionPickerState::Loaded {
+                transitions,
+                highlight: 0,
+                notice: None,
+            },
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+fn is_transition_picker_loading(model: &Model) -> bool {
+    matches!(
+        model.transition_picker.as_ref().map(|p| &p.state),
+        Some(TransitionPickerState::Loading)
+    )
+}
+
+/// A transitions-fetch failure (BDR 0018 S7): closes the picker and
+/// surfaces `reason` on the transient status row (a 401 is already mapped
+/// to the E2 re-auth guidance by the spawn).
+fn update_transitions_load_err(model: Model, reason: String) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        transition_picker: None,
+        status: Some(StatusMsg {
+            text: reason,
+            kind: StatusKind::Error,
+        }),
+        ..model
+    };
+    (next, vec![])
+}
+
+/// Moves the picker's highlight by `delta` (BDR 0018: `j`/`k`/arrows),
+/// clamped within the loaded transitions' bounds, and clears any standing
+/// notice (a stale "requires fields"/"Applying…" hint from a prior
+/// highlight). A no-op while `Loading` or with an empty list.
+fn update_transition_move(model: Model, delta: isize) -> (Model, Vec<Cmd>) {
+    let Some((transitions, highlight)) = loaded_transitions(&model) else {
+        return (model, vec![]);
+    };
+    if transitions.is_empty() {
+        return (model, vec![]);
+    }
+    let next_highlight = clamp_highlight(highlight, delta, transitions.len());
+    (
+        set_transition_notice(model, transitions, next_highlight, None),
+        vec![],
+    )
+}
+
+fn clamp_highlight(highlight: usize, delta: isize, len: usize) -> usize {
+    let moved = highlight as isize + delta;
+    moved.clamp(0, len as isize - 1) as usize
+}
+
+/// The picker's loaded transitions and current highlight, or `None` while
+/// `Loading` or with no picker open — the shared precondition
+/// `update_transition_move`/`update_apply_transition` both read.
+fn loaded_transitions(model: &Model) -> Option<(Vec<Transition>, usize)> {
+    let picker = model.transition_picker.as_ref()?;
+    match &picker.state {
+        TransitionPickerState::Loaded {
+            transitions,
+            highlight,
+            ..
+        } => Some((transitions.clone(), *highlight)),
+        TransitionPickerState::Loading => None,
+    }
+}
+
+/// Replaces the open picker's `Loaded` state with `transitions`/`highlight`
+/// unchanged and `notice` — the single seam `update_transition_move` and
+/// `update_apply_transition` both write the picker's list state through.
+fn set_transition_notice(
+    model: Model,
+    transitions: Vec<Transition>,
+    highlight: usize,
+    notice: Option<String>,
+) -> Model {
+    Model {
+        transition_picker: Some(TransitionPicker {
+            state: TransitionPickerState::Loaded {
+                transitions,
+                highlight,
+                notice,
+            },
+        }),
+        ..model
+    }
+}
+
+/// Enter on the picker's highlighted transition (ADR 0027 §2, BDR 0018
+/// S3-S4): a FIELD-FREE transition emits exactly one `Cmd::ExecTransition`
+/// and sets the localized "Applying…" notice; a FIELD-REQUIRING transition
+/// emits NO Cmd and sets the localized "requires fields" notice, leaving the
+/// picker open. A no-op while `Loading`, with an empty list, or with no
+/// loaded issue (defensive — the picker only ever opens with one).
+fn update_apply_transition(model: Model) -> (Model, Vec<Cmd>) {
+    let Some((transitions, highlight)) = loaded_transitions(&model) else {
+        return (model, vec![]);
+    };
+    let Some(transition) = transitions.get(highlight).cloned() else {
+        return (model, vec![]);
+    };
+    let Some(issue) = model.detail.as_ref() else {
+        return (model, vec![]);
+    };
+    if transition.requires_fields {
+        let next = set_transition_notice(model, transitions, highlight, Some(t("requires fields")));
+        return (next, vec![]);
+    }
+    let cmd = Cmd::ExecTransition {
+        key: issue.key.clone(),
+        transition_id: transition.id,
+    };
+    let next = set_transition_notice(model, transitions, highlight, Some(t("Applying…")));
+    (next, vec![cmd])
+}
+
+/// Esc cancels the open picker with no write (BDR 0018 S5).
+fn update_cancel_transitions(model: Model) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        transition_picker: None,
+        ..model
+    };
+    (next, vec![])
+}
+
+/// A transition execute succeeded (ADR 0027 §4, BDR 0018 S3): closes the
+/// picker and emits exactly one server-truth `Cmd::RefreshDetail` for the
+/// open issue — never a locally patched status.
+fn update_transition_applied(model: Model) -> (Model, Vec<Cmd>) {
+    let cmds = match model.detail.as_ref() {
+        Some(issue) => vec![Cmd::RefreshDetail(issue.key.clone())],
+        None => vec![],
+    };
+    let next = Model {
+        transition_picker: None,
+        ..model
+    };
+    (next, cmds)
+}
+
+/// A transition execute failure (BDR 0018 S6): closes the picker and
+/// surfaces `reason` on the transient status row (a 401 is already mapped
+/// to the E2 re-auth guidance by the spawn), emitting no refresh.
+fn update_transition_apply_err(model: Model, reason: String) -> (Model, Vec<Cmd>) {
+    let next = Model {
+        transition_picker: None,
+        status: Some(StatusMsg {
+            text: reason,
+            kind: StatusKind::Error,
+        }),
+        ..model
+    };
+    (next, vec![])
 }
 
 #[cfg(test)]
