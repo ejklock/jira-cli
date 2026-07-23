@@ -805,6 +805,10 @@ fn dispatch_cmd(
             spawn_exec_transition(key, transition_id, instance.clone(), tx.clone());
             model
         }
+        Cmd::OpenAttachment { url, filename } => {
+            spawn_open_attachment(url, filename, instance.clone());
+            model
+        }
     }
 }
 
@@ -1169,11 +1173,61 @@ async fn run_search_page(
 }
 
 fn spawn_opener(url: &str) {
+    os_open(url);
+}
+
+/// Launches the OS opener on `target` — a URL or a local file path, both
+/// accepted identically by `open`/`xdg-open`. macOS `open`, else `xdg-open`
+/// (no Windows `start` branch). The single seam `spawn_opener` and
+/// `spawn_open_attachment` both route through, so the two callers can never
+/// diverge on which binary is spawned.
+fn os_open(target: &str) {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(url).spawn();
+    let _ = std::process::Command::new("open").arg(target).spawn();
 
     #[cfg(not(target_os = "macos"))]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+}
+
+/// Spawns the image-attachment viewer effect (ADR 0029 §3, BDR 0020 S8):
+/// downloads `url`'s bytes via the D2a `download_attachment` seam, writes
+/// them to a temp file under `filename`'s basename, and launches the OS
+/// opener on that path. Fire-and-forget, mirroring `spawn_opener`'s
+/// best-effort discipline: no reply `Msg`, every failure silently returns.
+fn spawn_open_attachment(url: String, filename: String, instance: Instance) {
+    tokio::spawn(async move {
+        let Ok(client) = GouqiJiraClient::new(&instance) else {
+            return;
+        };
+        let Ok(bytes) = client.download_attachment(&url).await else {
+            return;
+        };
+        let Some(path) = write_attachment_temp_file(&filename, bytes.as_ref()) else {
+            return;
+        };
+        os_open(&path.to_string_lossy());
+    });
+}
+
+/// The fallback basename `write_attachment_temp_file` uses when `filename`
+/// carries no usable file-name component (e.g. empty, or all directory
+/// separators).
+const FALLBACK_ATTACHMENT_NAME: &str = "attachment";
+
+/// Writes `bytes` to a temp file named after `filename`'s basename (ADR 0029
+/// §3): strips any directory components via `Path::file_name` so a
+/// server-supplied name can never write outside the OS temp dir, falling
+/// back to [`FALLBACK_ATTACHMENT_NAME`] when the basename is empty. `None` on
+/// a write failure.
+fn write_attachment_temp_file(filename: &str, bytes: &[u8]) -> Option<std::path::PathBuf> {
+    let safe_name = std::path::Path::new(filename)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| FALLBACK_ATTACHMENT_NAME.to_owned());
+    let path = std::env::temp_dir().join(safe_name);
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
 }
 
 fn copy_to_clipboard(key: &str) {
