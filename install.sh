@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPO="ejklock/active-collab-cli"
-BIN_NAME="active-collab"
+REPO="ejklock/jira-cli"
+BIN_NAME="jira"
 
 _os="$(uname -s)"
 case "${_os}" in
