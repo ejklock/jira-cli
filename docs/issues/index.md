@@ -64,6 +64,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 | [0055](/issues/0055-t1b-transition-picker-tui.md) | T1b | transition picker TUI: 's' opens a workflow-fetched modal, Enter applies a field-free transition, server-truth refresh | done | 0054 |
 | [0056](/issues/0056-c4d-detail-footer-action-hints.md) | C4d | detail footer action-key hints ([ ] focus · e edit · d delete · r reply · s status) | done | 0053, 0055 |
 | [0057](/issues/0057-c4e-confirm-modal-mouse-click.md) | C4e | mouse-click activation of the delete-confirm Sim/Não buttons | done | 0052 |
+| [0058](/issues/0058-sk1-jira-skill-command.md) | SK1 | `jira skill` command: pure src/skill.rs registry + skill_output, include_str! the canonical SKILL.md, 'skill' joins KNOWN_COMMANDS | open | — |
+| [0059](/issues/0059-sk2-install-skill-installer.md) | SK2 | install-skill.sh: thin per-harness pointers to `jira skill jira` (--harness/--scope) + fix install.sh fork bug | open | 0058 |
 
 ## Phase 2 — browse TUI (delivered)
 
@@ -164,6 +166,23 @@ duplication gate on every `Issue`-struct-touching change (observation 55).
   [0051](/issues/0051-c4a-comment-focus-edit.md) (focus + edit own) +
   [0052](/issues/0052-c4b-delete-confirm-modal.md) (delete via Sim/Não confirm) +
   [0053](/issues/0053-c4c-reply-mention.md) (reply = mentioned new comment) **done**.
+
+## Agent-skill distribution parity program (2026-07-22)
+
+Goal: bring the fork base's agent-skill-served-by-the-CLI feature to `jira-cli`
+(ActiveCollab ADR 0057-0059), so the curated `--json` contract
+([ADR 0004](/adr/0004-agent-json-output-contract.md)) gains an on-demand agent
+skill served by the binary and thin per-harness pointers that cannot drift from
+it. Recorded in [ADR 0028](/adr/0028-agent-skill-served-by-jira-skill-command.md)
++ [BDR 0019](/bdr/0019-jira-skill-command-behaviors.md). Skill name: `jira`; all
+six harnesses (claude/codex/opencode/pi/copilot/cursor).
+
+- **SK1** — [0058](/issues/0058-sk1-jira-skill-command.md): the `jira skill`
+  command (pure `src/skill.rs`, `include_str!` the canonical SKILL.md, `"skill"`
+  joins `KNOWN_COMMANDS`). **open**
+- **SK2** — [0059](/issues/0059-sk2-install-skill-installer.md): `install-skill.sh`
+  thin per-harness pointers with `--harness`/`--scope project|global`, plus the
+  `install.sh` fork-bug fix (wrong REPO/BIN_NAME). **open** (blocked by SK1)
 
 ## Parked (not in the parity program)
 
