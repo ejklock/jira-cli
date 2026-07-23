@@ -60,6 +60,9 @@ flowchart TD
     commands --> agent_json["agent_json\npure --json shaping"]
     commands --> i18n["i18n (en · pt-BR)"]
     main --> skill["skill\npure agent-skill registry\n(SkillEntry · embedded SKILL.md via include_str!)"]
+    main --> download["download\n--download-attachments orchestration\n(dedupe_filename · download_all · human/json output)"]
+    download --> client
+    download --> config
     cli --> tui_shell
     subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
         tui_model["model.rs\npure core: Model · Msg · Cmd · update\n+ FooterMode · StatusMsg · Identity\n(no crossterm/ratatui/tokio/io)"]
@@ -156,6 +159,15 @@ Detail → project list → Projects → mine (single-source `MINE_JQL`).
   store, no network).
 - **`client` is a clean trait seam** so a Phase-2 Jira Server/DC (REST v2) adapter
   is additive, not a rewrite.
+- **`download` orchestrates `jira get --download-attachments`**
+  ([ADR 0029 §2](/adr/0029-attachments-authenticated-download-seam-download-attachments-and-external-image-viewer.md),
+  [BDR 0020 S4-S7](/bdr/0020-attachment-download-and-external-image-viewer-behaviors.md)):
+  it fetches every attachment through `client`'s same-origin
+  `download_attachment` seam and writes each to `config::jira_config_dir()`'s
+  `downloads/<KEY>/` (or `--download-dir`), disambiguating duplicate
+  filenames with a pure `dedupe_filename` before any write. `main.rs` wires
+  the flag on the shared `DisplayArgs` for both `get` and `current`; download
+  mode is download-only and never also renders the full issue.
 
 ## Read data flow (local-first)
 

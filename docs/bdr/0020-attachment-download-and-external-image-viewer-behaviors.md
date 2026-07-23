@@ -67,7 +67,8 @@ open-URL-in-browser behavior.
 | Symbol | Signature | Realizes |
 |---|---|---|
 | `JiraClient::download_attachment` | `async fn download_attachment(&self, url: &str) -> ClientResult<bytes::Bytes>` | S1–S3 |
-| `config::resolve_download_dir` | `fn resolve_download_dir(issue_key: &str) -> PathBuf` | S4 |
+| `config::jira_config_dir` | `fn jira_config_dir() -> PathBuf` | S4 (the `~/.config/jira/` root) |
+| `download::download_dir_for` | `fn download_dir_for(root: &Path, issue_key: &str) -> PathBuf` | S4 (`<root>/downloads/<KEY>/`) |
 | `download::dedupe_filename` | `fn dedupe_filename(taken: &[String], filename: &str) -> String` | S6 |
 
 **CLI surface:**
