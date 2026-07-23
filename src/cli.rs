@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub const KNOWN_COMMANDS: [&str; 8] = [
-    "setup", "get", "current", "mine", "list", "search", "browse", "comment",
+pub const KNOWN_COMMANDS: [&str; 9] = [
+    "setup", "get", "current", "mine", "list", "search", "browse", "comment", "skill",
 ];
 
 /// Fetch Jira issues from one or more configured instances.
@@ -31,6 +31,8 @@ pub enum Command {
     Browse(BrowseArgs),
     /// Post a comment to an issue (non-interactive, one-shot).
     Comment(CommentArgs),
+    /// Print an embedded agent skill (get the --json read contract).
+    Skill(SkillArgs),
 }
 
 /// Wrapper that holds the setup subcommand.
@@ -154,6 +156,13 @@ pub struct CommentArgs {
     /// Print curated minified JSON write result for agent/LLM consumption.
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillArgs {
+    /// Skill name to print, or `list`. Prints the single skill when omitted.
+    #[arg(value_name = "NAME")]
+    pub name: Option<String>,
 }
 
 /// Mirror of Python `_normalize_argv`.

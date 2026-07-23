@@ -6,6 +6,7 @@ mod config;
 mod i18n;
 mod models;
 mod render;
+mod skill;
 mod store;
 mod timing;
 mod tui;
@@ -97,7 +98,16 @@ async fn dispatch(command: Command) -> i32 {
         Command::Search(args) => dispatch_search(args).await,
         Command::Browse(args) => dispatch_browse(args).await,
         Command::Comment(args) => dispatch_comment(args).await,
+        Command::Skill(args) => dispatch_skill(args),
     }
+}
+
+fn dispatch_skill(args: cli::SkillArgs) -> i32 {
+    skill::skill_output(
+        args.name.as_deref(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
 }
 
 async fn dispatch_setup(cmd: cli::SetupCmd) -> i32 {
