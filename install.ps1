@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Install the active-collab CLI for Windows.
+    Install the jira CLI for Windows.
 .PARAMETER Version
     Release tag to install (e.g. "v0.1.0"). Defaults to the latest release.
 .EXAMPLE
-    irm https://raw.githubusercontent.com/ejklock/active-collab-cli/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/ejklock/jira-cli/main/install.ps1 | iex
 .EXAMPLE
     .\install.ps1 -Version v0.1.0
 #>
@@ -15,15 +15,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Repo   = "ejklock/active-collab-cli"
-$Asset  = "active-collab-windows-x86_64.exe"
-$BinDir = Join-Path $env:LOCALAPPDATA "Programs\active-collab"
-$Dest   = Join-Path $BinDir "active-collab.exe"
+$Repo   = "ejklock/jira-cli"
+$Asset  = "jira-windows-x86_64.exe"
+$BinDir = Join-Path $env:LOCALAPPDATA "Programs\jira"
+$Dest   = Join-Path $BinDir "jira.exe"
 
 if ($Version -eq "") {
     $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
     try {
-        $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "active-collab-installer" }
+        $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "jira-installer" }
         $Version = $release.tag_name
     } catch {
         Write-Error "Could not determine the latest release tag: $_"

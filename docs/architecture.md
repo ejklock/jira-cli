@@ -59,6 +59,7 @@ flowchart TD
     commands --> render["render\ndomain string rendering (human)\n+ ADF → plain text"]
     commands --> agent_json["agent_json\npure --json shaping"]
     commands --> i18n["i18n (en · pt-BR)"]
+    main --> skill["skill\npure agent-skill registry\n(SkillEntry · embedded SKILL.md via include_str!)"]
     cli --> tui_shell
     subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
         tui_model["model.rs\npure core: Model · Msg · Cmd · update\n+ FooterMode · StatusMsg · Identity\n(no crossterm/ratatui/tokio/io)"]
@@ -145,6 +146,14 @@ Detail → project list → Projects → mine (single-source `MINE_JQL`).
   JSON contract and the human text never drift
   ([ADR 0004](/adr/0004-agent-json-output-contract.md)); a field rename/drop fails
   a unit test.
+- **`skill` is pure** and network-free, mirroring the `agent_json` purity
+  discipline: `jira skill [name]` serves the embedded agent skill contract
+  from a `&[SkillEntry]` registry, its `jira` entry's body sourced from the
+  single canonical `.claude/skills/jira/SKILL.md` via `include_str!` so the
+  command and the file can never drift ([ADR 0028](/adr/0028-agent-skill-served-by-jira-skill-command.md),
+  [BDR 0019](/bdr/0019-jira-skill-command-behaviors.md)). `"skill"` is a
+  `KNOWN_COMMANDS` entry, dispatched directly from `main.rs` (no TUI, no
+  store, no network).
 - **`client` is a clean trait seam** so a Phase-2 Jira Server/DC (REST v2) adapter
   is additive, not a rewrite.
 
