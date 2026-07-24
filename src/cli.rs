@@ -112,6 +112,12 @@ pub struct DisplayArgs {
     /// Omit the comments section.
     #[arg(long)]
     pub no_comments: bool,
+    /// Download every attachment to the config downloads dir (or --download-dir).
+    #[arg(long)]
+    pub download_attachments: bool,
+    /// Target directory for --download-attachments (default: ~/.config/jira/downloads/<KEY>/).
+    #[arg(long, value_name = "DIR")]
+    pub download_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Args, Debug)]

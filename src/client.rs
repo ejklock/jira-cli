@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use gouqi::core::SearchApiVersion;
 use gouqi::{Credentials, SearchOptions};
 use std::fmt;
+use url::Url;
 
 /// The client's typed error surface — never a raw `gouqi::Error` crosses this
 /// boundary. `Unauthorized` is the single case callers may match on by type
@@ -76,6 +77,13 @@ pub trait JiraClient: Send + Sync {
     /// the issue to the transition's target status. Callers are responsible
     /// for only invoking this on a field-free transition (ADR 0027 §2).
     async fn transition_issue(&self, key: &str, transition_id: &str) -> ClientResult<()>;
+    /// Fetch attachment bytes from `url` using this instance's Basic-auth
+    /// credentials (ADR 0029 §1, BDR 0020 S1). A same-origin guard compares
+    /// `url`'s scheme, host, and port against the instance base_url BEFORE
+    /// any network call, so credentials never leave the instance host (BDR
+    /// 0020 S2). A same-origin 401 surfaces as the typed
+    /// `ClientError::Unauthorized` (BDR 0020 S3).
+    async fn download_attachment(&self, url: &str) -> ClientResult<bytes::Bytes>;
 }
 
 /// Builds the paragraph `content` array shared by [`plain_text_to_adf`] and
@@ -165,6 +173,10 @@ struct CommentIdResponse {
 pub struct GouqiJiraClient {
     jira: gouqi::r#async::Jira,
     instance_name: String,
+    base_url: String,
+    http: reqwest::Client,
+    email: String,
+    token: String,
 }
 
 impl GouqiJiraClient {
@@ -181,6 +193,10 @@ impl GouqiJiraClient {
         Ok(Self {
             jira,
             instance_name: instance.name.clone(),
+            base_url: instance.base_url.clone(),
+            http: reqwest::Client::new(),
+            email: instance.email.clone(),
+            token: instance.token.clone(),
         })
     }
 
@@ -348,6 +364,67 @@ impl JiraClient for GouqiJiraClient {
             })?;
         Ok(())
     }
+
+    async fn download_attachment(&self, url: &str) -> ClientResult<bytes::Bytes> {
+        let target = parse_download_url(url)?;
+        let base = parse_download_url(&self.base_url)?;
+        if !same_origin(&target, &base) {
+            return Err(ClientError::Other(anyhow!(
+                "download_attachment: url '{url}' is not same-origin as instance '{}'",
+                self.instance_name
+            )));
+        }
+        self.fetch_attachment_bytes(target, url).await
+    }
+}
+
+impl GouqiJiraClient {
+    /// Perform the authenticated GET once the same-origin guard has already
+    /// passed. `raw_url` is kept only for error messages.
+    async fn fetch_attachment_bytes(
+        &self,
+        target: Url,
+        raw_url: &str,
+    ) -> ClientResult<bytes::Bytes> {
+        let resp = self
+            .http
+            .get(target)
+            .basic_auth(&self.email, Some(&self.token))
+            .send()
+            .await
+            .map_err(|e| ClientError::Other(anyhow!("download_attachment({raw_url}): {e}")))?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ClientError::Unauthorized {
+                instance: self.instance_name.clone(),
+            });
+        }
+
+        let resp = resp
+            .error_for_status()
+            .map_err(|e| ClientError::Other(anyhow!("download_attachment({raw_url}): {e}")))?;
+
+        resp.bytes()
+            .await
+            .map_err(|e| ClientError::Other(anyhow!("download_attachment({raw_url}): {e}")))
+    }
+}
+
+/// Parse `raw` as a URL for [`GouqiJiraClient::download_attachment`]'s
+/// same-origin guard. A parse failure is reported as `ClientError::Other`
+/// rather than panicking — an attacker-controlled or malformed `url` must
+/// never reach the network layer.
+fn parse_download_url(raw: &str) -> ClientResult<Url> {
+    Url::parse(raw).map_err(|e| ClientError::Other(anyhow!("invalid url '{raw}': {e}")))
+}
+
+/// True iff `a` and `b` share scheme, host, and port (explicit or the
+/// scheme's known default) — the same-origin comparison BDR 0020 S2
+/// requires to run before any network call.
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
 }
 
 /// Map a gouqi `rep::SearchResults` page to our curated `SearchResult` domain type.

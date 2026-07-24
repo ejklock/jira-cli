@@ -3,6 +3,7 @@ mod cli;
 mod client;
 mod commands;
 mod config;
+mod download;
 mod i18n;
 mod models;
 mod render;
@@ -20,9 +21,10 @@ use cli::{
     bare_no_command_action, command_surface, extract_issue_key, BareNoCommandAction, Cli, Command,
     Surface,
 };
+use client::{ClientError, GouqiJiraClient, JiraClient};
 use commands::{
-    parse_issue_ref, pick_instance, setup_add, setup_list, setup_remove, setup_test, CommentBody,
-    GetOpts, SetupAddFields,
+    parse_issue_ref, pick_instance, reauth_message, setup_add, setup_list, setup_remove,
+    setup_test, CommentBody, GetOpts, SetupAddFields,
 };
 use std::io::IsTerminal;
 use std::process;
@@ -293,6 +295,19 @@ fn stdin_is_tty() -> bool {
 }
 
 async fn dispatch_get(args: cli::GetArgs) -> i32 {
+    if args.display.download_attachments {
+        return match parse_issue_ref(&args.ref_) {
+            Some(key) => dispatch_download_attachments(&key, &args.display).await,
+            None => {
+                eprintln!(
+                    "Error: '{}' is not a valid issue key or Jira browse URL.",
+                    args.ref_
+                );
+                2
+            }
+        };
+    }
+
     let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
     if command_surface(is_tty, args.display.json) == Surface::Interactive {
         if let Some(key) = parse_issue_ref(&args.ref_) {
@@ -344,6 +359,79 @@ async fn dispatch_get_interactive(instance_filter: Option<&str>, key: String) ->
     .await
 }
 
+/// Resolve the issue key `jira current --download-attachments` operates on
+/// from the current git branch, mirroring `current_core`'s two distinct
+/// error messages (no branch vs. no key in the branch name).
+fn resolve_current_branch_key(branch: Option<&str>) -> Result<String, i32> {
+    let branch_name = branch.ok_or_else(|| {
+        eprintln!("Error: not in a git repository / no current branch.");
+        2
+    })?;
+    extract_issue_key(branch_name).ok_or_else(|| {
+        eprintln!("Error: no issue key in branch '{branch_name}'.");
+        2
+    })
+}
+
+/// Shared `--download-attachments` implementation for `get` and `current`
+/// (ADR 0029 §2, BDR 0020 S4-S7): fetches `key`, downloads every attachment
+/// via the D2a seam to `display.download_dir` (or the default config
+/// downloads dir), and reports the saved paths. Download-only — never also
+/// renders the full issue.
+async fn dispatch_download_attachments(key: &str, display: &cli::DisplayArgs) -> i32 {
+    let ResolvedInstance { instance, .. } =
+        match resolve_single_instance(display.instance.as_deref()) {
+            Ok(r) => r,
+            Err(code) => return code,
+        };
+    let client = match GouqiJiraClient::new(&instance) {
+        Ok(c) => c,
+        Err(e) => {
+            render::print_error(&format!("Error building Jira client: {e}"));
+            return 1;
+        }
+    };
+    let issue = match client.get_issue(key).await {
+        Ok(i) => i,
+        Err(ClientError::Unauthorized { instance }) => {
+            eprintln!("{}", reauth_message(&instance));
+            return 1;
+        }
+        Err(ClientError::Other(e)) => {
+            render::print_error(&format!("Error fetching issue '{key}': {e}"));
+            return 1;
+        }
+    };
+
+    let dir = display
+        .download_dir
+        .clone()
+        .unwrap_or_else(|| download::download_dir_for(&config::jira_config_dir(), &issue.key));
+
+    match download::download_all(&client, &issue, &dir).await {
+        Ok(saved) => {
+            print_download_result(&issue.key, &saved, display.json);
+            0
+        }
+        Err(e) => {
+            render::print_error(&format!("Error downloading attachments: {e}"));
+            1
+        }
+    }
+}
+
+fn print_download_result(issue_key: &str, saved: &[download::SavedAttachment], json: bool) {
+    if json {
+        println!("{}", download::saved_to_json(issue_key, saved));
+        return;
+    }
+    if saved.is_empty() {
+        println!("{}", download::no_attachments_message(issue_key));
+    } else {
+        println!("{}", download::format_saved_human(saved));
+    }
+}
+
 /// Interactive surface for `current` (ADR 0025, BDR 0016 S9): resolves the
 /// issue key from the git branch with the same `extract_issue_key` seam
 /// `current_core` uses, so interactive and agent mode never diverge on which
@@ -352,6 +440,14 @@ async fn dispatch_get_interactive(instance_filter: Option<&str>, key: String) ->
 /// modes, unchanged.
 async fn dispatch_current(args: cli::DisplayArgs) -> i32 {
     let branch = current_git_branch();
+
+    if args.download_attachments {
+        return match resolve_current_branch_key(branch.as_deref()) {
+            Ok(key) => dispatch_download_attachments(&key, &args).await,
+            Err(code) => code,
+        };
+    }
+
     let is_tty = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
     if command_surface(is_tty, args.json) == Surface::Interactive {
         if let Some(key) = branch.as_deref().and_then(extract_issue_key) {

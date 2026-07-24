@@ -60,6 +60,9 @@ flowchart TD
     commands --> agent_json["agent_json\npure --json shaping"]
     commands --> i18n["i18n (en · pt-BR)"]
     main --> skill["skill\npure agent-skill registry\n(SkillEntry · embedded SKILL.md via include_str!)"]
+    main --> download["download\n--download-attachments orchestration\n(dedupe_filename · download_all · human/json output)"]
+    download --> client
+    download --> config
     cli --> tui_shell
     subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
         tui_model["model.rs\npure core: Model · Msg · Cmd · update\n+ FooterMode · StatusMsg · Identity\n(no crossterm/ratatui/tokio/io)"]
@@ -130,6 +133,24 @@ projects (`JiraClient::list_projects`), Enter swaps the list JQL to the
 project and reuses the entire list machinery; back pops
 Detail → project list → Projects → mine (single-source `MINE_JQL`).
 
+A Ctrl/Cmd-click on the Detail screen is the single activation point for both
+a description inline link and an attachment link — `update_link_clicked`
+routes `href` through the pure classifier `resolve_open` (ADR 0029 §3, BDR
+0020 S8-S9), which never itself performs I/O:
+
+```mermaid
+flowchart TD
+    click["Ctrl/Cmd-click href\n(Msg::LinkClicked)"] --> resolve["resolve_open(issue, href)\n(pure, model.rs)"]
+    resolve -->|"no attachment matches href\n(description inline link)"| browserCmd["Cmd::OpenUrl(href)"]
+    resolve -->|"matches attachment,\nmime_type not image/*"| browserCmd
+    resolve -->|"matches attachment,\nmime_type is image/*"| viewerCmd["Cmd::OpenAttachment{url, filename}"]
+    browserCmd --> spawnOpener["shell.rs: spawn_opener\nos_open (open / xdg-open)"]
+    viewerCmd --> spawnAttachment["shell.rs: spawn_open_attachment"]
+    spawnAttachment --> download["client::download_attachment(url)\n(D2a same-origin seam)"]
+    download --> tempFile["write bytes to a temp file"]
+    tempFile --> spawnOpener
+```
+
 **Boundaries / fitness:**
 
 - **`client` (the gouqi-backed `JiraClient` impl) is the only outbound-network
@@ -156,6 +177,30 @@ Detail → project list → Projects → mine (single-source `MINE_JQL`).
   store, no network).
 - **`client` is a clean trait seam** so a Phase-2 Jira Server/DC (REST v2) adapter
   is additive, not a rewrite.
+- **`download` orchestrates `jira get --download-attachments`**
+  ([ADR 0029 §2](/adr/0029-attachments-authenticated-download-seam-download-attachments-and-external-image-viewer.md),
+  [BDR 0020 S4-S7](/bdr/0020-attachment-download-and-external-image-viewer-behaviors.md)):
+  it fetches every attachment through `client`'s same-origin
+  `download_attachment` seam and writes each to `config::jira_config_dir()`'s
+  `downloads/<KEY>/` (or `--download-dir`), disambiguating duplicate
+  filenames with a pure `dedupe_filename` before any write. `main.rs` wires
+  the flag on the shared `DisplayArgs` for both `get` and `current`; download
+  mode is download-only and never also renders the full issue.
+- **The browse TUI's external image viewer reuses the same download seam**
+  ([ADR 0029 §3](/adr/0029-attachments-authenticated-download-seam-download-attachments-and-external-image-viewer.md),
+  [BDR 0020 S8-S9](/bdr/0020-attachment-download-and-external-image-viewer-behaviors.md)):
+  a Ctrl/Cmd-click on an attachment link is the single activation point
+  (`update_link_clicked`) — the pure classifier `resolve_open(issue, href)`
+  matches `href` against `issue.attachments` and inspects the matched
+  attachment's `mime_type`. An `image/*` match emits `Cmd::OpenAttachment`,
+  whose I/O lives only in `shell.rs`'s `spawn_open_attachment`: download via
+  `client::download_attachment`, write to a temp file, launch the OS opener
+  (`open`/`xdg-open`). Every other case — a non-image attachment, one with no
+  `mime_type`, or a description inline link — emits the existing
+  `Cmd::OpenUrl`, unchanged. Attachments are not on the keyboard link-focus
+  axis (that stays description-links-only); the routing decision is pure,
+  the effect is fire-and-forget, mirroring `spawn_opener`'s best-effort
+  contract.
 
 ## Read data flow (local-first)
 

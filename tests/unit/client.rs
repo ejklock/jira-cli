@@ -1595,3 +1595,156 @@ async fn transition_issue_400_does_not_map_to_ok() {
     }
     server.verify().await;
 }
+
+// --- download_attachment (ADR 0029 §1, BDR 0020 S1-S3) ---
+
+/// AC1: a same-origin GET returns the served body bytes verbatim.
+#[tokio::test]
+async fn download_attachment_same_origin_returns_body_bytes_verbatim() {
+    let server = MockServer::start().await;
+    let body = b"\x89PNG-fake-binary-content".to_vec();
+    Mock::given(method("GET"))
+        .and(path("/secure/attachment/200/screenshot.png"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let url = format!("{}/secure/attachment/200/screenshot.png", server.uri());
+    let bytes = client.download_attachment(&url).await.unwrap();
+
+    assert_eq!(bytes.as_ref(), body.as_slice());
+    server.verify().await;
+}
+
+/// AC1: the same-origin GET carries the instance's Basic-auth credentials.
+#[tokio::test]
+async fn download_attachment_attaches_basic_auth_header() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure/attachment/200/screenshot.png"))
+        .and(header(
+            "Authorization",
+            "Basic dXNlckBleGFtcGxlLmNvbTp0ZXN0LWFwaS10b2tlbg==",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"data".to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let url = format!("{}/secure/attachment/200/screenshot.png", server.uri());
+    client.download_attachment(&url).await.unwrap();
+
+    server.verify().await;
+}
+
+/// AC2: a cross-origin url is rejected with a typed error and the
+/// cross-origin server records ZERO requests — the same-origin guard runs
+/// before any network call.
+#[tokio::test]
+async fn download_attachment_cross_origin_url_rejected_with_zero_requests() {
+    let instance_server = MockServer::start().await;
+    let other_server = MockServer::start().await;
+
+    let instance = make_instance(&instance_server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let cross_origin_url = format!(
+        "{}/secure/attachment/200/screenshot.png",
+        other_server.uri()
+    );
+    let result = client.download_attachment(&cross_origin_url).await;
+
+    assert!(
+        result.is_err(),
+        "a cross-origin url must be rejected: {result:?}"
+    );
+    let reqs = other_server.received_requests().await.unwrap();
+    assert!(
+        reqs.is_empty(),
+        "the cross-origin server must receive zero requests, not: {reqs:?}"
+    );
+}
+
+/// AC3: a same-origin content url that responds 401 surfaces the typed
+/// `ClientError::Unauthorized` carrying the instance name.
+#[tokio::test]
+async fn download_attachment_401_maps_to_typed_unauthorized_with_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure/attachment/200/screenshot.png"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let url = format!("{}/secure/attachment/200/screenshot.png", server.uri());
+    let result = client.download_attachment(&url).await;
+
+    match result {
+        Err(ClientError::Unauthorized { instance }) => {
+            assert_eq!(instance, "test-instance");
+        }
+        other => panic!("expected ClientError::Unauthorized, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// AC2: a non-401, non-2xx same-origin response must never be a false Ok —
+/// it stays `Other`.
+#[tokio::test]
+async fn download_attachment_404_does_not_map_to_ok() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/secure/attachment/missing.png"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = make_instance(&server.uri());
+    let client = GouqiJiraClient::new(&instance).unwrap();
+    let url = format!("{}/secure/attachment/missing.png", server.uri());
+    let result = client.download_attachment(&url).await;
+
+    match result {
+        Err(ClientError::Other(_)) => {}
+        other => panic!("expected ClientError::Other for 404, got: {other:?}"),
+    }
+    server.verify().await;
+}
+
+/// Pure unit test for the `same_origin` helper: same scheme+host+port is
+/// true, and differing scheme, host, or port each flip it to false.
+#[test]
+fn same_origin_compares_scheme_host_and_port() {
+    let base = Url::parse("https://example.atlassian.net").unwrap();
+
+    assert!(same_origin(
+        &Url::parse("https://example.atlassian.net/secure/attachment/1").unwrap(),
+        &base
+    ));
+    assert!(
+        !same_origin(
+            &Url::parse("http://example.atlassian.net/x").unwrap(),
+            &base
+        ),
+        "differing scheme must not be same-origin"
+    );
+    assert!(
+        !same_origin(&Url::parse("https://evil.example.net/x").unwrap(), &base),
+        "differing host must not be same-origin"
+    );
+    assert!(
+        !same_origin(
+            &Url::parse("https://example.atlassian.net:8443/x").unwrap(),
+            &base
+        ),
+        "differing port must not be same-origin"
+    );
+}

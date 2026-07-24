@@ -248,3 +248,104 @@ fn back_from_list_with_project_origin_still_returns_to_projects() {
     assert_eq!(next.screen, Screen::Projects);
     assert!(cmds.is_empty());
 }
+
+// ---- D1: image-attachment routing (ADR 0029 §3, BDR 0020 S8-S9) ----
+
+const ATTACHMENT_URL: &str = "https://test.atlassian.net/rest/api/3/attachment/content/10001";
+const ATTACHMENT_FILENAME: &str = "screenshot.png";
+
+fn issue_with_attachment(mime_type: Option<&str>) -> Issue {
+    Issue {
+        attachments: vec![crate::test_support::attachment(
+            ATTACHMENT_FILENAME,
+            ATTACHMENT_URL,
+            mime_type,
+            Some(2048),
+        )],
+        ..crate::test_support::issue("PROJ-1")
+    }
+}
+
+fn detail_model_with_issue(issue: Issue) -> Model {
+    Model {
+        detail: Some(issue),
+        ..make_detail_model(vec![], ListOrigin::Mine, "project = PROJ")
+    }
+}
+
+#[test]
+fn resolve_open_returns_view_image_for_a_matching_image_attachment() {
+    let issue = issue_with_attachment(Some("image/png"));
+
+    let action = resolve_open(&issue, ATTACHMENT_URL);
+
+    match action {
+        OpenAction::ViewImage { url, filename } => {
+            assert_eq!(url, ATTACHMENT_URL);
+            assert_eq!(filename, ATTACHMENT_FILENAME);
+        }
+        OpenAction::Browser(_) => panic!("expected ViewImage for an image/* attachment"),
+    }
+}
+
+#[test]
+fn resolve_open_returns_browser_for_a_matching_non_image_attachment() {
+    let issue = issue_with_attachment(Some("application/pdf"));
+
+    let action = resolve_open(&issue, ATTACHMENT_URL);
+
+    assert!(matches!(action, OpenAction::Browser(url) if url == ATTACHMENT_URL));
+}
+
+#[test]
+fn resolve_open_returns_browser_for_a_matching_attachment_with_no_mime_type() {
+    let issue = issue_with_attachment(None);
+
+    let action = resolve_open(&issue, ATTACHMENT_URL);
+
+    assert!(matches!(action, OpenAction::Browser(url) if url == ATTACHMENT_URL));
+}
+
+#[test]
+fn resolve_open_returns_browser_for_an_href_matching_no_attachment() {
+    let issue = crate::test_support::issue("PROJ-1");
+    let href = "https://example.com/some/description/link";
+
+    let action = resolve_open(&issue, href);
+
+    assert!(matches!(action, OpenAction::Browser(url) if url == href));
+}
+
+#[test]
+fn update_link_clicked_on_detail_with_image_attachment_emits_open_attachment() {
+    let model = detail_model_with_issue(issue_with_attachment(Some("image/png")));
+
+    let (next, cmds) = update_link_clicked(model, ATTACHMENT_URL.to_owned());
+
+    assert_eq!(
+        cmds,
+        vec![Cmd::OpenAttachment {
+            url: ATTACHMENT_URL.to_owned(),
+            filename: ATTACHMENT_FILENAME.to_owned(),
+        }]
+    );
+    assert_eq!(next.screen, Screen::Detail);
+}
+
+#[test]
+fn update_link_clicked_on_detail_with_non_image_attachment_emits_open_url() {
+    let model = detail_model_with_issue(issue_with_attachment(Some("application/pdf")));
+
+    let (_, cmds) = update_link_clicked(model, ATTACHMENT_URL.to_owned());
+
+    assert_eq!(cmds, vec![Cmd::OpenUrl(ATTACHMENT_URL.to_owned())]);
+}
+
+#[test]
+fn update_link_clicked_off_detail_emits_no_cmd() {
+    let model = make_list_model(&["PROJ-1"], ListOrigin::Mine, "project = PROJ");
+
+    let (_, cmds) = update_link_clicked(model, ATTACHMENT_URL.to_owned());
+
+    assert!(cmds.is_empty());
+}

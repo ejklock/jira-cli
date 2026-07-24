@@ -520,6 +520,15 @@ pub enum Cmd {
         key: String,
         transition_id: String,
     },
+    /// A Ctrl/Cmd-clicked image attachment's viewer effect (ADR 0029 §3, BDR
+    /// 0020 S8): the shell downloads `url`'s bytes via the D2a
+    /// `download_attachment` seam, writes them to a temp file named
+    /// `filename`, and launches the OS viewer on it — fire-and-forget,
+    /// mirroring `Cmd::OpenUrl`'s shape for a non-image attachment.
+    OpenAttachment {
+        url: String,
+        filename: String,
+    },
 }
 
 /// The `Cmd`s to dispatch right after constructing a fresh `Model` (BDR 0008
@@ -844,16 +853,65 @@ fn update_select_focused_link(model: Model) -> (Model, Vec<Cmd>) {
     }
 }
 
-/// A Ctrl/Super-click resolved to a link's href (ADR 0018 §4, BDR 0010 S5):
-/// emits `Cmd::OpenUrl` with no state change on the Detail screen, mirroring
-/// `update_select_focused_link`'s Cmd contract; a no-op on any other screen
+/// A Ctrl/Super-click resolved to a link's href (ADR 0018 §4, BDR 0010 S5;
+/// ADR 0029 §3, BDR 0020 S8-S9): on the Detail screen with a loaded issue,
+/// routes `href` through [`resolve_open`] — an image attachment emits
+/// `Cmd::OpenAttachment`, everything else (a non-image attachment, an
+/// attachment with no `mime_type`, or a description inline link) emits the
+/// existing `Cmd::OpenUrl`; with no issue loaded yet, falls back to
+/// `Cmd::OpenUrl(href)` unclassified. A no-op on any other screen
 /// (`resolve_click` only ever resolves this on Detail, but this stays a pure
-/// guard rather than trusting the caller).
+/// guard rather than trusting the caller). Still a pure reducer — no state
+/// change either way.
 fn update_link_clicked(model: Model, href: String) -> (Model, Vec<Cmd>) {
     if model.screen != Screen::Detail {
         return (model, vec![]);
     }
-    (model, vec![Cmd::OpenUrl(href)])
+    let cmd = match model.detail.as_ref() {
+        Some(issue) => open_action_cmd(resolve_open(issue, &href)),
+        None => Cmd::OpenUrl(href),
+    };
+    (model, vec![cmd])
+}
+
+/// The routing decision for a Ctrl/Cmd-clicked href on the Detail screen
+/// (ADR 0029 §3, BDR 0020 S8-S9): `ViewImage` for an attachment whose
+/// `mime_type` starts with `"image/"`; `Browser` for every other case — a
+/// non-image attachment, an attachment with no `mime_type`, or an href
+/// matching no attachment (a description inline link).
+enum OpenAction {
+    Browser(String),
+    ViewImage { url: String, filename: String },
+}
+
+/// Classifies `href` against `issue.attachments` (ADR 0029 §3, BDR 0020
+/// S8-S9): pure — no I/O. Matches strictly on `Attachment.mime_type`, never
+/// on the filename's extension.
+fn resolve_open(issue: &Issue, href: &str) -> OpenAction {
+    let Some(attachment) = issue.attachments.iter().find(|a| a.url == href) else {
+        return OpenAction::Browser(href.to_owned());
+    };
+    let is_image = attachment
+        .mime_type
+        .as_deref()
+        .is_some_and(|m| m.starts_with("image/"));
+    if !is_image {
+        return OpenAction::Browser(href.to_owned());
+    }
+    OpenAction::ViewImage {
+        url: attachment.url.clone(),
+        filename: attachment.filename.clone(),
+    }
+}
+
+/// Maps an [`OpenAction`] to its `Cmd` — the single seam `update_link_clicked`
+/// routes through so the two `Cmd` shapes can never drift on which action
+/// maps to which effect.
+fn open_action_cmd(action: OpenAction) -> Cmd {
+    match action {
+        OpenAction::Browser(url) => Cmd::OpenUrl(url),
+        OpenAction::ViewImage { url, filename } => Cmd::OpenAttachment { url, filename },
+    }
 }
 
 /// Back pops the axis by `(screen, list_origin)` (ADR 0021 §5, BDR 0013 S4;
