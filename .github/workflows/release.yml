@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset-name: jira-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset-name: jira-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset-name: jira-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset-name: jira-windows-x86_64.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          mv target/${{ matrix.target }}/release/jira dist/${{ matrix.asset-name }}
+
+      - name: Stage artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Move-Item target\${{ matrix.target }}\release\jira.exe dist\${{ matrix.asset-name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset-name }}
+          path: dist/${{ matrix.asset-name }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*

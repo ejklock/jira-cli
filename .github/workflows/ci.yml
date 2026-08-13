@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        # --test-threads=1 is mandatory: locale-dependent tests (i18n / setup
+        # messages) share the process-global LANG via a mutex and flake when run
+        # in parallel. This matches the project's authoritative local invocation.
+        run: cargo test --quiet -- --test-threads=1
+
+      - name: Comment policy gate
+        run: cargo test --test comment_policy
+
+      - name: Release build gate
+        run: cargo build --release
