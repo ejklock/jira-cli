@@ -1,6 +1,6 @@
 ---
-name: jira
-description: Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI. Use when an agent or script needs to fetch an issue by key or URL, list the logged-in user's open issues, read the issue for the current git branch, or run a JQL search, and wants structured JSON instead of the interactive terminal UI. Covers `jira get`, `jira current`, `jira mine`, and `jira search` with `--json` — the curated minified schemas, the round-trippable `ref`, and the cache / `--no-comments` / `--refresh` flags. Also covers posting a comment with `jira comment`.
+name: jira-ticket
+description: Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI. Use when an agent or script needs to fetch an issue by key or URL, list the logged-in user's open issues, read the issue for the current git branch, or run a JQL search, and wants structured JSON instead of the interactive terminal UI. Covers `jira get`, `jira current`, `jira mine`, and `jira search` with `--json` — the curated minified schemas, the round-trippable `ref`, and the cache / `--no-comments` / `--refresh` flags. Also covers posting a comment with `jira comment`. Also covers downloading every issue attachment to local disk with `--download-attachments`.
 ---
 
 # jira --json — agent read contract
@@ -88,9 +88,40 @@ jira get PROJ-123 --json               # → the full issue object for that ref
 | `--no-comments` | omit the `comments` array (emits `[]`) | `get`, `current` |
 | `--refresh` | ignore the cache and re-fetch | `get`, `current` |
 | `--instance <name>` | limit to one configured instance | `get`, `current`, `mine`, `search` |
+| `--download-attachments` | download every attachment on the issue to local disk instead of rendering it | `get`, `current` |
+| `--download-dir <DIR>` | override the default download directory for `--download-attachments` | `get`, `current` |
 
 The `get`/`current` JSON path is **cache-aware** and honours `--refresh` and
 `--no-comments`. The human (non-`--json`) output of every command is unchanged.
+
+## Downloading attachments for local analysis (`--download-attachments`)
+
+`--download-attachments` fetches every attachment on the issue over the CLI's
+authenticated seam and writes each to disk. An agent can then `Read` the file
+directly instead of following a remote URL. The flag downloads only — it never
+also renders the issue:
+
+```bash
+jira get PROJ-123 --download-attachments --json
+```
+
+Without `--download-dir`, files land in a stable, predictable per-issue path:
+`~/.config/jira/downloads/<ISSUE-KEY>/`. A duplicate filename on the same
+issue gets a disambiguating suffix, such as `report (2).pdf`, before it
+overwrites another file.
+
+A single failed download aborts the whole request and exits non-zero. The
+command never reports partial success for a batch of attachments.
+
+With `--json`, the command prints a curated result instead of the issue
+schema:
+
+```json
+{"issue_key":"PROJ-123","saved":[{"filename":"spec.pdf","path":"/home/user/.config/jira/downloads/PROJ-123/spec.pdf","bytes":45210}]}
+```
+
+Human mode prints one `saved <path> (<bytes>)` line per saved file. An issue
+with no attachments prints a no-op message and exits 0.
 
 ## Writing a comment — `jira comment`
 
@@ -122,3 +153,20 @@ On failure it is `{"ok":false,"error":"..."}` — never a false success.
 - Need the raw upstream Jira REST payload (structured ADF, all fields)? Use the
   Jira Cloud REST API directly; this CLI's `--json` is the **curated contract**,
   not a passthrough.
+
+## Sandboxed environments
+
+The CLI stores its SQLite database at `~/.config/jira/jira.db` by default. In
+a sandboxed agent environment, that config directory can be read-only.
+
+- Set `JIRA_DB` to point the CLI at a writable SQLite file instead of the
+  default path.
+- When the default config directory is read-only, copy the existing database
+  to a writable path first, then point `JIRA_DB` at the copy:
+
+```bash
+cp ~/.config/jira/jira.db /tmp/jira.db && JIRA_DB=/tmp/jira.db jira get PROJ-123 --json
+```
+
+- A fresh, empty database has no configured instances. Every command fails
+  with `no instances configured` until you run `jira setup add` against it.

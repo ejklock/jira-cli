@@ -35,3 +35,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 * [0027 — Status transition write enablement — GET/POST on the Jira transitions endpoints only, field-free transitions in v1](0027-status-transition-write-enablement.md) - Accepted
 * [0028 — The agent skill is served by a `jira skill` CLI command; per-harness integrations are thin pointers to it](0028-agent-skill-served-by-jira-skill-command.md) - Accepted
 * [0029 — Attachments: authenticated download seam, --download-attachments, and external image viewer](0029-attachments-authenticated-download-seam-download-attachments-and-external-image-viewer.md) - Accepted
+* [0030 — Rename the agent skill identifier from `jira` to `jira-ticket`](0030-rename-agent-skill-to-jira-ticket.md) - Accepted

@@ -169,9 +169,11 @@ flowchart TD
   a unit test.
 - **`skill` is pure** and network-free, mirroring the `agent_json` purity
   discipline: `jira skill [name]` serves the embedded agent skill contract
-  from a `&[SkillEntry]` registry, its `jira` entry's body sourced from the
-  single canonical `.claude/skills/jira/SKILL.md` via `include_str!` so the
-  command and the file can never drift ([ADR 0028](/adr/0028-agent-skill-served-by-jira-skill-command.md),
+  from a `&[SkillEntry]` registry, its `jira-ticket` entry's body sourced from
+  the single canonical `.claude/skills/jira-ticket/SKILL.md` via
+  `include_str!` so the command and the file can never drift
+  ([ADR 0028](/adr/0028-agent-skill-served-by-jira-skill-command.md),
+  [ADR 0030](/adr/0030-rename-agent-skill-to-jira-ticket.md),
   [BDR 0019](/bdr/0019-jira-skill-command-behaviors.md)). `"skill"` is a
   `KNOWN_COMMANDS` entry, dispatched directly from `main.rs` (no TUI, no
   store, no network).
