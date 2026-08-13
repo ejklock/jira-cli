@@ -6,10 +6,10 @@ usage() {
 Usage: install-skill.sh --harness <name> [--scope project|global] [--dir <path>] [--force]
        install-skill.sh -h | --help
 
-Installs the jira agent-skill thin-pointer stub for one or more agent
-harnesses. Each stub only tells the agent to run `jira skill jira` to load
-the full Jira Cloud --json read contract from the CLI; it carries no --json
-schema fields, so it can never drift from the contract.
+Installs the jira-ticket agent-skill thin-pointer stub for one or more agent
+harnesses. Each stub only tells the agent to run `jira skill jira-ticket` to
+load the full Jira Cloud --json read contract from the CLI; it carries no
+--json schema fields, so it can never drift from the contract.
 
 Options:
   --harness <name>   Harness to install for. One of:
@@ -33,17 +33,17 @@ EOF
 skill_md_body() {
   cat <<'EOF'
 ---
-name: jira
-description: Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI. Use when an agent or script needs to fetch an issue by key or URL, list the logged-in user's open issues, read the issue for the current git branch, or run a JQL search, and wants structured JSON instead of the interactive terminal UI. Covers `jira get`, `jira current`, `jira mine`, and `jira search` with `--json` — the curated minified schemas, the round-trippable `ref`, and the cache / `--no-comments` / `--refresh` flags. Also covers posting a comment with `jira comment`.
+name: jira-ticket
+description: Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI. Use when an agent or script needs to fetch an issue by key or URL, list the logged-in user's open issues, read the issue for the current git branch, or run a JQL search, and wants structured JSON instead of the interactive terminal UI. Covers `jira get`, `jira current`, `jira mine`, and `jira search` with `--json` — the curated minified schemas, the round-trippable `ref`, and the cache / `--no-comments` / `--refresh` flags. Also covers posting a comment with `jira comment`. Also covers downloading every issue attachment to local disk with `--download-attachments`.
 ---
 
-# jira (thin pointer)
+# jira-ticket (thin pointer)
 
 The full, authoritative Jira Cloud `--json` read contract is served by the CLI itself.
 
 Run:
 
-    jira skill jira
+    jira skill jira-ticket
 
 and follow its output. It documents the curated minified JSON schemas for
 `jira get`, `jira current`, `jira mine`, and `jira search` with `--json`, the
@@ -54,14 +54,14 @@ EOF
 skill_mdc_body() {
   cat <<'EOF'
 ---
-description: Read Jira Cloud issue/assignment/JQL data as JSON via the `jira` CLI (get/current/mine/search --json), non-interactively. Run `jira skill jira` for the full contract.
+description: Read Jira Cloud issue/assignment/JQL data as JSON via the `jira` CLI (get/current/mine/search --json), non-interactively. Also downloads issue attachments to local disk with --download-attachments. Run `jira skill jira-ticket` for the full contract.
 globs:
 alwaysApply: false
 ---
 
-# jira (thin pointer)
+# jira-ticket (thin pointer)
 
-The full Jira Cloud `--json` read contract is served by the CLI. Run `jira skill jira`
+The full Jira Cloud `--json` read contract is served by the CLI. Run `jira skill jira-ticket`
 and follow its output — it documents the `--json` schemas for get/current/mine/search,
 the round-trippable `ref`, and the cache flags.
 EOF
@@ -88,20 +88,20 @@ unsupported_under_global() {
 
 install_harness_project() {
   case "$1" in
-    claude) write_stub "${_dir}/.claude/skills/jira/SKILL.md" skill_md_body ;;
-    codex) write_stub "${_dir}/.codex/skills/jira/SKILL.md" skill_md_body ;;
-    opencode) write_stub "${_dir}/.opencode/skills/jira/SKILL.md" skill_md_body ;;
-    pi) write_stub "${_dir}/.pi/skills/jira/SKILL.md" skill_md_body ;;
-    copilot) write_stub "${_dir}/.github/skills/jira/SKILL.md" skill_md_body ;;
-    cursor) write_stub "${_dir}/.cursor/rules/jira.mdc" skill_mdc_body ;;
+    claude) write_stub "${_dir}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    codex) write_stub "${_dir}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    opencode) write_stub "${_dir}/.opencode/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    pi) write_stub "${_dir}/.pi/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    copilot) write_stub "${_dir}/.github/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    cursor) write_stub "${_dir}/.cursor/rules/jira-ticket.mdc" skill_mdc_body ;;
   esac
 }
 
 install_harness_global() {
   case "$1" in
-    claude) write_stub "${HOME}/.claude/skills/jira/SKILL.md" skill_md_body ;;
-    pi) write_stub "${HOME}/.pi/agent/skills/jira/SKILL.md" skill_md_body ;;
-    codex) write_stub "${HOME}/.codex/skills/jira/SKILL.md" skill_md_body ;;
+    claude) write_stub "${HOME}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    pi) write_stub "${HOME}/.pi/agent/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    codex) write_stub "${HOME}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
     opencode|copilot|cursor) unsupported_under_global "$1" ;;
   esac
 }

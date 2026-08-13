@@ -45,14 +45,14 @@ fn run_install_home(home: &Path, harness: &str, extra_args: &[&str]) -> Output {
 }
 
 const SKILL_MD_HARNESSES: &[(&str, &str)] = &[
-    ("claude", ".claude/skills/jira/SKILL.md"),
-    ("codex", ".codex/skills/jira/SKILL.md"),
-    ("opencode", ".opencode/skills/jira/SKILL.md"),
-    ("pi", ".pi/skills/jira/SKILL.md"),
-    ("copilot", ".github/skills/jira/SKILL.md"),
+    ("claude", ".claude/skills/jira-ticket/SKILL.md"),
+    ("codex", ".codex/skills/jira-ticket/SKILL.md"),
+    ("opencode", ".opencode/skills/jira-ticket/SKILL.md"),
+    ("pi", ".pi/skills/jira-ticket/SKILL.md"),
+    ("copilot", ".github/skills/jira-ticket/SKILL.md"),
 ];
 
-const CURSOR_PATH: &str = ".cursor/rules/jira.mdc";
+const CURSOR_PATH: &str = ".cursor/rules/jira-ticket.mdc";
 
 #[test]
 fn installs_all_six_harness_stubs() {
@@ -70,7 +70,7 @@ fn installs_all_six_harness_stubs() {
         assert!(full.is_file(), "expected {} to exist", full.display());
         let contents = std::fs::read_to_string(&full).unwrap();
         assert!(
-            contents.contains("jira skill jira"),
+            contents.contains("jira skill jira-ticket"),
             "{} should contain the pointer command, got:\n{contents}",
             full.display()
         );
@@ -84,7 +84,7 @@ fn installs_all_six_harness_stubs() {
     );
     let cursor_contents = std::fs::read_to_string(&cursor_full).unwrap();
     assert!(
-        cursor_contents.contains("jira skill jira"),
+        cursor_contents.contains("jira skill jira-ticket"),
         "cursor stub should contain the pointer command, got:\n{cursor_contents}"
     );
 
@@ -107,8 +107,8 @@ fn skill_stub_has_required_frontmatter() {
             full.display()
         );
         assert!(
-            contents.contains("name: jira"),
-            "{} frontmatter should declare name: jira",
+            contents.contains("name: jira-ticket"),
+            "{} frontmatter should declare name: jira-ticket",
             full.display()
         );
         assert!(
@@ -167,7 +167,7 @@ fn existing_file_not_clobbered() {
     let first = run_install(&tmp, "all", &[]);
     assert!(first.status.success());
 
-    let claude_path = tmp.join(".claude/skills/jira/SKILL.md");
+    let claude_path = tmp.join(".claude/skills/jira-ticket/SKILL.md");
     let sentinel = "CANONICAL CONTENT DO NOT OVERWRITE";
     std::fs::write(&claude_path, sentinel).unwrap();
 
@@ -200,7 +200,7 @@ fn existing_file_not_clobbered() {
         overwritten, sentinel,
         "--force must overwrite the existing target"
     );
-    assert!(overwritten.contains("jira skill jira"));
+    assert!(overwritten.contains("jira skill jira-ticket"));
 
     std::fs::remove_dir_all(&tmp).ok();
 }
@@ -276,7 +276,7 @@ fn project_scope_defaults_without_dir_or_scope_on_non_tty() {
         "non-TTY run must not emit the interactive scope prompt, got stdout:\n{stdout}"
     );
 
-    let claude_stub = cwd.join(".claude/skills/jira/SKILL.md");
+    let claude_stub = cwd.join(".claude/skills/jira-ticket/SKILL.md");
     assert!(
         claude_stub.is_file(),
         "expected project-scope install under cwd, got: {}",
@@ -299,16 +299,16 @@ fn global_scope_all_writes_supported_harnesses_under_home() {
     );
 
     let expected = [
-        ".claude/skills/jira/SKILL.md",
-        ".pi/agent/skills/jira/SKILL.md",
-        ".codex/skills/jira/SKILL.md",
+        ".claude/skills/jira-ticket/SKILL.md",
+        ".pi/agent/skills/jira-ticket/SKILL.md",
+        ".codex/skills/jira-ticket/SKILL.md",
     ];
     for rel_path in expected {
         let full = home.join(rel_path);
         assert!(full.is_file(), "expected {} to exist", full.display());
         let contents = std::fs::read_to_string(&full).unwrap();
         assert!(
-            contents.contains("jira skill jira"),
+            contents.contains("jira skill jira-ticket"),
             "{} should contain the pointer command, got:\n{contents}",
             full.display()
         );
@@ -329,9 +329,9 @@ fn global_scope_all_skips_unsupported_harnesses() {
     );
 
     for rel_path in [
-        ".opencode/skills/jira/SKILL.md",
-        ".github/skills/jira/SKILL.md",
-        ".cursor/rules/jira.mdc",
+        ".opencode/skills/jira-ticket/SKILL.md",
+        ".github/skills/jira-ticket/SKILL.md",
+        ".cursor/rules/jira-ticket.mdc",
     ] {
         let full = home.join(rel_path);
         assert!(

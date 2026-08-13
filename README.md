@@ -179,7 +179,7 @@ current git branch.
 ### skill — print the agent skill contract
 
 ```sh
-jira skill jira   # print the full --json read contract
+jira skill jira-ticket   # print the full --json read contract
 ```
 
 ---
@@ -225,7 +225,7 @@ The full contract lives in **one place** — inside the binary — and `jira` pr
 it on demand:
 
 ```sh
-jira skill jira   # print the full jira contract
+jira skill jira-ticket   # print the full jira-ticket contract
 ```
 
 ### Install the skill into your agent harness
@@ -238,12 +238,12 @@ curl -fsSL https://raw.githubusercontent.com/ejklock/jira-cli/main/install-skill
 
 | Harness | Project file (`--scope project`, default) | User-level file (`--scope global`) |
 |---|---|---|
-| Claude Code | `.claude/skills/jira/SKILL.md` | `~/.claude/skills/jira/SKILL.md` |
-| pi | `.pi/skills/jira/SKILL.md` | `~/.pi/agent/skills/jira/SKILL.md` |
-| Codex CLI | `.codex/skills/jira/SKILL.md` | `~/.codex/skills/jira/SKILL.md` |
-| OpenCode | `.opencode/skills/jira/SKILL.md` | — (install per-project) |
-| GitHub Copilot | `.github/skills/jira/SKILL.md` | — (install per-project) |
-| Cursor | `.cursor/rules/jira.mdc` | — (install per-project) |
+| Claude Code | `.claude/skills/jira-ticket/SKILL.md` | `~/.claude/skills/jira-ticket/SKILL.md` |
+| pi | `.pi/skills/jira-ticket/SKILL.md` | `~/.pi/agent/skills/jira-ticket/SKILL.md` |
+| Codex CLI | `.codex/skills/jira-ticket/SKILL.md` | `~/.codex/skills/jira-ticket/SKILL.md` |
+| OpenCode | `.opencode/skills/jira-ticket/SKILL.md` | — (install per-project) |
+| GitHub Copilot | `.github/skills/jira-ticket/SKILL.md` | — (install per-project) |
+| Cursor | `.cursor/rules/jira-ticket.mdc` | — (install per-project) |
 
 ---
 

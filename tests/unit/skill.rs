@@ -9,11 +9,11 @@ fn buffers() -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn named_skill_prints_full_body_byte_for_byte() {
     let (mut out, mut err) = buffers();
-    let code = skill_output(Some("jira"), &mut out, &mut err);
+    let code = skill_output(Some("jira-ticket"), &mut out, &mut err);
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        include_str!("../../.claude/skills/jira/SKILL.md").as_bytes()
+        include_str!("../../.claude/skills/jira-ticket/SKILL.md").as_bytes()
     );
     assert!(err.is_empty());
 }
@@ -25,7 +25,7 @@ fn list_prints_name_tab_first_sentence_description() {
     let (mut out, mut err) = buffers();
     let code = skill_output(Some("list"), &mut out, &mut err);
     assert_eq!(code, 0);
-    let expected = format!("jira\t{}\n", REGISTRY[0].description);
+    let expected = format!("jira-ticket\t{}\n", REGISTRY[0].description);
     assert_eq!(out, expected.as_bytes());
     assert!(err.is_empty());
 }
@@ -35,7 +35,7 @@ fn list_prints_name_tab_first_sentence_description() {
 #[test]
 fn bare_with_single_registered_skill_prints_same_body_as_named() {
     let (mut named_out, mut named_err) = buffers();
-    skill_output(Some("jira"), &mut named_out, &mut named_err);
+    skill_output(Some("jira-ticket"), &mut named_out, &mut named_err);
 
     let (mut bare_out, mut bare_err) = buffers();
     let code = skill_output(None, &mut bare_out, &mut bare_err);
@@ -57,6 +57,18 @@ fn unknown_skill_errors_and_leaves_stdout_empty() {
     assert!(err_text.contains("unknown skill: nope"));
 }
 
+// --- ADR 0030: the retired name `jira` is unknown now, no alias ---
+
+#[test]
+fn retired_name_jira_is_now_unknown() {
+    let (mut out, mut err) = buffers();
+    let code = skill_output(Some("jira"), &mut out, &mut err);
+    assert_eq!(code, 2);
+    assert!(out.is_empty());
+    let err_text = String::from_utf8(err).unwrap();
+    assert!(err_text.contains("unknown skill: jira"));
+}
+
 // --- edge case: empty-string name behaves as unknown, not as bare/list ---
 
 #[test]
@@ -74,8 +86,8 @@ fn empty_string_name_is_treated_as_unknown() {
 #[test]
 fn named_skill_body_has_no_extra_trailing_newline() {
     let (mut out, mut err) = buffers();
-    skill_output(Some("jira"), &mut out, &mut err);
+    skill_output(Some("jira-ticket"), &mut out, &mut err);
     let printed = String::from_utf8(out).unwrap();
-    let source = include_str!("../../.claude/skills/jira/SKILL.md");
+    let source = include_str!("../../.claude/skills/jira-ticket/SKILL.md");
     assert_eq!(printed.len(), source.len());
 }

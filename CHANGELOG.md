@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the agent skill identifier from `jira` to `jira-ticket`
+  ([ADR 0030](docs/adr/0030-rename-agent-skill-to-jira-ticket.md)). `jira
+  skill jira-ticket` prints the contract; `jira skill jira` now exits 2
+  (unknown skill) — there is no back-compat alias. Existing installs must
+  re-run `install-skill.sh --force` to rewrite stub paths under
+  `skills/jira-ticket/` (`.cursor/rules/jira-ticket.mdc` for Cursor).
+
+### Added
+
+- Sandbox note in the canonical `SKILL.md`: documents the `JIRA_DB`
+  environment override for a read-only config directory, plus the
+  copy-to-writable-path workaround.
+- The skill body now documents `--download-attachments` and
+  `--download-dir`, including fail-fast semantics: one failed download
+  aborts the whole request and exits non-zero. The separate `--json`
+  result object is `{issue_key, saved[]}`, not the issue schema.
+
 ## [0.1.0] - 2026-06-29
 
 ### Added

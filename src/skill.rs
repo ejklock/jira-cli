@@ -9,12 +9,12 @@ pub struct SkillEntry {
 }
 
 const REGISTRY: &[SkillEntry] = &[SkillEntry {
-    name: "jira",
+    name: "jira-ticket",
     description: "Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI.",
-    body: include_str!("../.claude/skills/jira/SKILL.md"),
+    body: include_str!("../.claude/skills/jira-ticket/SKILL.md"),
 }];
 
-/// Serve `jira skill [name]` (ADR 0028, BDR 0019): `list` prints every
+/// Serve `jira skill [name]` (ADR 0028, BDR 0019, ADR 0030): `list` prints every
 /// registered skill as `name<TAB>description`; a known `name` prints that
 /// skill's full body; an unknown `name` errors to `err` and returns `2`;
 /// omitted `name` prints the single registered skill's body, or falls back
