@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (unknown skill) — there is no back-compat alias. Existing installs must
   re-run `install-skill.sh --force` to rewrite stub paths under
   `skills/jira-ticket/` (`.cursor/rules/jira-ticket.mdc` for Cursor).
+- `install-skill.sh` now removes a stale pre-rename `jira` skill stub when
+  it finds one, for both project and global installs. It only removes
+  files containing the thin-pointer marker, so an unrelated skill named
+  `jira` stays untouched.
 
 ### Added
 
