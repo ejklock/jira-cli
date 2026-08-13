@@ -14,6 +14,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset-name: jira-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset-name: jira-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
             asset-name: jira-macos-x86_64
