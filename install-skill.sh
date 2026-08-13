@@ -24,6 +24,8 @@ Options:
   --force            Overwrite an existing target file
   -h, --help         Show this help and exit
 
+Also removes a stale pre-rename `jira` stub for the target harness, if found.
+
 When neither --scope nor --dir is given and stdin is a TTY, you are
 prompted to choose project or global (default project). A non-TTY run
 (e.g. curl | sh) defaults to project with no prompt.
@@ -81,6 +83,18 @@ write_stub() {
   echo "wrote: ${_target}"
 }
 
+remove_legacy_stub() {
+  _legacy="$1"
+
+  # The 'jira skill' marker is present in every generation of the thin-pointer
+  # stub body, so it distinguishes our stub from an unrelated user file.
+  if [ -f "${_legacy}" ] && grep -q 'jira skill' "${_legacy}"; then
+    rm -f "${_legacy}"
+    rmdir "$(dirname "${_legacy}")" 2>/dev/null || :
+    echo "removed legacy stub: ${_legacy}"
+  fi
+}
+
 unsupported_under_global() {
   echo "global scope is not supported for ${1} (no standard user-level skills directory); install per-project instead" >&2
   return 2
@@ -88,20 +102,20 @@ unsupported_under_global() {
 
 install_harness_project() {
   case "$1" in
-    claude) write_stub "${_dir}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    codex) write_stub "${_dir}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    opencode) write_stub "${_dir}/.opencode/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    pi) write_stub "${_dir}/.pi/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    copilot) write_stub "${_dir}/.github/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    cursor) write_stub "${_dir}/.cursor/rules/jira-ticket.mdc" skill_mdc_body ;;
+    claude) remove_legacy_stub "${_dir}/.claude/skills/jira/SKILL.md"; write_stub "${_dir}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    codex) remove_legacy_stub "${_dir}/.codex/skills/jira/SKILL.md"; write_stub "${_dir}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    opencode) remove_legacy_stub "${_dir}/.opencode/skills/jira/SKILL.md"; write_stub "${_dir}/.opencode/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    pi) remove_legacy_stub "${_dir}/.pi/skills/jira/SKILL.md"; write_stub "${_dir}/.pi/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    copilot) remove_legacy_stub "${_dir}/.github/skills/jira/SKILL.md"; write_stub "${_dir}/.github/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    cursor) remove_legacy_stub "${_dir}/.cursor/rules/jira.mdc"; write_stub "${_dir}/.cursor/rules/jira-ticket.mdc" skill_mdc_body ;;
   esac
 }
 
 install_harness_global() {
   case "$1" in
-    claude) write_stub "${HOME}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    pi) write_stub "${HOME}/.pi/agent/skills/jira-ticket/SKILL.md" skill_md_body ;;
-    codex) write_stub "${HOME}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    claude) remove_legacy_stub "${HOME}/.claude/skills/jira/SKILL.md"; write_stub "${HOME}/.claude/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    pi) remove_legacy_stub "${HOME}/.pi/agent/skills/jira/SKILL.md"; write_stub "${HOME}/.pi/agent/skills/jira-ticket/SKILL.md" skill_md_body ;;
+    codex) remove_legacy_stub "${HOME}/.codex/skills/jira/SKILL.md"; write_stub "${HOME}/.codex/skills/jira-ticket/SKILL.md" skill_md_body ;;
     opencode|copilot|cursor) unsupported_under_global "$1" ;;
   esac
 }
