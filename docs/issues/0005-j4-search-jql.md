@@ -2,7 +2,7 @@
 type: Issue
 title: "J4 — search: arbitrary JQL"
 description: Run a user-supplied JQL query through the shared listing engine and render the matches.
-status: open
+status: done
 tracker:
 tags: [search, jql]
 timestamp: 2026-06-29T00:00:00Z

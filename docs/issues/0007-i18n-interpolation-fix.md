@@ -2,7 +2,7 @@
 type: Issue
 title: "i18n: fix format-then-translate so interpolated chrome translates"
 description: Replace the t(&format!(...)) call sites with a translate-then-substitute tf() primitive so interpolated chrome (instance errors, setup remove, setup language) actually renders in pt-BR. No new catalog keys.
-status: open
+status: done
 tracker:
 tags: [i18n, pt-BR, interpolation, debt]
 timestamp: 2026-06-30T00:00:00Z

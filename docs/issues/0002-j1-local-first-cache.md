@@ -2,7 +2,7 @@
 type: Issue
 title: "J1 — local-first cache read: offline get + --refresh"
 description: Serve a cached issue from SQLite with no network; --refresh forces a safe re-fetch.
-status: open
+status: done
 tracker:
 tags: [cache, offline, refresh]
 timestamp: 2026-06-29T00:00:00Z

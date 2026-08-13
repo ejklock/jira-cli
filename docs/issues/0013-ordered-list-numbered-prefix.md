@@ -2,7 +2,7 @@
 type: Issue
 title: "ADF orderedList renders a numbered prefix (latent debt fix)"
 description: The ADF flattener threads an `ordered` flag into flatten_list_item but ignores it (_ordered), so orderedList items render with a '- ' bullet like bulletList. Make orderedList items render a 1-based numbered prefix (1. 2. 3.), bulletList unchanged.
-status: open
+status: done
 tracker:
 tags: [render, adf, debt]
 timestamp: 2026-06-30T00:00:00Z

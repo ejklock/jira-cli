@@ -2,7 +2,7 @@
 type: Issue
 title: "SK1 — `jira skill` command: pure src/skill.rs registry + skill_output, include_str! the canonical SKILL.md, 'skill' joins KNOWN_COMMANDS"
 description: Add the on-demand agent-skill read command. A pure src/skill.rs holds a registry &[SkillEntry { name, description, body }] with one entry (name "jira", body include_str!("../.claude/skills/jira/SKILL.md")) and skill_output(args, &mut impl Write) -> i32. `jira skill list` prints name<TAB>first-sentence; `jira skill jira` prints the full body (exit 0); `jira skill` with one entry prints that body; an unknown name errors to stderr and exits 2. "skill" joins KNOWN_COMMANDS (8->9) so normalize_argv does not rewrite it; a Command::Skill variant dispatches to skill_output in main.rs. Unit-tested without network (byte-equality vs include_str!, list format, unknown->2, no-arg single). No store, no HTTP, never launches the TUI.
-status: open
+status: done
 labels: [cli, agent, skill, distribution, parity]
 blocked_by:
 tracker:

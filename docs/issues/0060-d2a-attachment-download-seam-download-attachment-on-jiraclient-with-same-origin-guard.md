@@ -2,7 +2,7 @@
 type: Issue
 title: "D2a — attachment download seam: download_attachment on JiraClient with same-origin guard"
 description: Add async download_attachment(url) -> Bytes to the JiraClient trait and implement it on GouqiJiraClient with a reqwest Basic-auth GET, guarded by a same-origin check that rejects cross-origin URLs before any network call. Wiremock-tested. The shared seam D2b and D1 build on.
-status: Proposed
+status: done
 timestamp: 2026-07-23T21:29:38Z
 ---
 

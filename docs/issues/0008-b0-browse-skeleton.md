@@ -2,7 +2,7 @@
 type: Issue
 title: "B0 — browse TUI walking skeleton: command + raw-mode shell + quit"
 description: Wire `jira browse`, add ratatui + crossterm, enter/exit the alternate screen + raw mode, draw a placeholder frame, quit on q, and guard non-TTY. The tracer bullet that proves the terminal lifecycle before any data screen.
-status: open
+status: done
 tracker:
 tags: [tui, browse, phase2, skeleton]
 timestamp: 2026-06-30T00:00:00Z

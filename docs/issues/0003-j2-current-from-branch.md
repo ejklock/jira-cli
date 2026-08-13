@@ -2,7 +2,7 @@
 type: Issue
 title: "J2 — current: issue from the git branch"
 description: Parse a Jira issue key from the current git branch and read that issue through the get path.
-status: open
+status: done
 tracker:
 tags: [current, git]
 timestamp: 2026-06-29T00:00:00Z

@@ -2,7 +2,7 @@
 type: Issue
 title: D2b — jira get --download-attachments writes every attachment to the config downloads dir
 description: Add a --download-attachments flag (and optional --download-dir) to jira get/current that downloads every attachment via the D2a seam and writes it to ~/.config/jira/downloads/<ISSUE-KEY>/, deduping filenames, with human 'saved <path>' output and a curated --json listing.
-status: Proposed
+status: done
 timestamp: 2026-07-23T21:29:38Z
 ---
 

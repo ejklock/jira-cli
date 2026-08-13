@@ -2,7 +2,7 @@
 type: Issue
 title: "SK2 — install-skill.sh: thin per-harness pointers to `jira skill jira` with --harness <name>|all and --scope project|global; fix install.sh fork bug"
 description: Add install-skill.sh that writes a thin `jira skill jira` pointer stub per agent harness (claude/codex/opencode/pi/copilot/cursor), single-homed in heredocs, carrying no --json schema fields. --harness <name>|all selects harnesses; --scope project (default, under --dir, default .) vs --scope global (user-level $HOME paths for claude/pi/codex only; opencode/copilot/cursor unsupported-under-global). --dir is incompatible with --scope global (exit 2); a named unsupported harness under global exits 2, `all` under global skips them and exits 0; --force overwrites; a TTY with neither --scope nor --dir prompts (default project), a non-TTY defaults to project. ALSO fix the fork bug in install.sh (REPO ejklock/active-collab-cli -> the jira-cli repo, BIN_NAME active-collab -> jira). Shell integration tests cover the path map, scope policy, conflict, and force.
-status: open
+status: done
 labels: [cli, agent, skill, installer, distribution, parity, bugfix]
 blocked_by: [0058]
 tracker:

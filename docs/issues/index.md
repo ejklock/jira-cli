@@ -5,29 +5,21 @@ Vertical slices for `jira-cli` v1 (the Jira Cloud read CLI), tracing to
 Each slice delivers one user-observable behavior end-to-end, demoable on a real
 Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 
-## Open
-
-* [0001 — J0 — walking skeleton: fork scaffold + setup + get PROJ-123 end-to-end](0001-j0-skeleton-setup-get.md) - open
-* [0002 — J1 — local-first cache read: offline get + --refresh](0002-j1-local-first-cache.md) - open
-* [0003 — J2 — current: issue from the git branch](0003-j2-current-from-branch.md) - open
-* [0004 — J3 — mine/list: open issues assigned to me (JQL)](0004-j3-mine-list.md) - open
-* [0005 — J4 — search: arbitrary JQL](0005-j4-search-jql.md) - open
-* [0006 — J5 — i18n: English + Brazilian Portuguese CLI output](0006-j5-i18n.md) - open
-* [0007 — i18n: fix format-then-translate so interpolated chrome translates](0007-i18n-interpolation-fix.md) - open
-* [0008 — B0 — browse TUI walking skeleton: command + raw-mode shell + quit](0008-b0-browse-skeleton.md) - open
-* [0013 — ADF orderedList renders a numbered prefix (latent debt fix)](0013-ordered-list-numbered-prefix.md) - open
-* [0058 — SK1 — `jira skill` command: pure src/skill.rs registry + skill_output, include_str! the canonical SKILL.md, 'skill' joins KNOWN_COMMANDS](0058-sk1-jira-skill-command.md) - open
-* [0059 — SK2 — install-skill.sh: thin per-harness pointers to `jira skill jira` with --harness <name>|all and --scope project|global; fix install.sh fork bug](0059-sk2-install-skill-installer.md) - open
-* [0060 — D2a — attachment download seam: download_attachment on JiraClient with same-origin guard](0060-d2a-attachment-download-seam-download-attachment-on-jiraclient-with-same-origin-guard.md) - Proposed
-* [0061 — D2b — jira get --download-attachments writes every attachment to the config downloads dir](0061-d2b-jira-get-download-attachments-writes-every-attachment-to-the-config-downloads-dir.md) - Proposed
-* [0062 — D1 — browse TUI opens an image attachment in the OS viewer](0062-d1-browse-tui-opens-an-image-attachment-in-the-os-viewer.md) - Proposed
-
 ## Closed
 
+* [0001 — J0 — walking skeleton: fork scaffold + setup + get PROJ-123 end-to-end](0001-j0-skeleton-setup-get.md) - done
+* [0002 — J1 — local-first cache read: offline get + --refresh](0002-j1-local-first-cache.md) - done
+* [0003 — J2 — current: issue from the git branch](0003-j2-current-from-branch.md) - done
+* [0004 — J3 — mine/list: open issues assigned to me (JQL)](0004-j3-mine-list.md) - done
+* [0005 — J4 — search: arbitrary JQL](0005-j4-search-jql.md) - done
+* [0006 — J5 — i18n: English + Brazilian Portuguese CLI output](0006-j5-i18n.md) - done
+* [0007 — i18n: fix format-then-translate so interpolated chrome translates](0007-i18n-interpolation-fix.md) - done
+* [0008 — B0 — browse TUI walking skeleton: command + raw-mode shell + quit](0008-b0-browse-skeleton.md) - done
 * [0009 — B1 — browse TUI: navigable issue list (mine)](0009-b1-browse-list.md) - done
 * [0010 — B2 — browse TUI: issue detail on Enter (cache-or-fetch, scroll, back)](0010-b2-browse-detail.md) - done
 * [0011 — B3 — browse TUI: interactive JQL search](0011-b3-browse-search.md) - done
 * [0012 — B4 — browse TUI: read affordances (open link, copy key)](0012-b4-browse-affordances.md) - done
+* [0013 — ADF orderedList renders a numbered prefix (latent debt fix)](0013-ordered-list-numbered-prefix.md) - done
 * [0014 — i18n: translate human-render field labels (get + browse detail)](0014-i18n-human-detail-field-labels.md) - done
 * [0015 — Split src/tui.rs into a src/tui/ submodule (model / view / shell)](0015-split-tui-into-submodule.md) - done
 * [0016 — Consolidate the 4 per-module LANG_MUTEX statics into one crate-wide test lock](0016-consolidate-lang-mutex.md) - done
@@ -72,3 +64,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 * [0055 — T1b — transition picker TUI: 's' opens a modal fetched from the workflow, Enter applies a field-free transition, the detail reloads from the server](0055-t1b-transition-picker-tui.md) - done
 * [0056 — C4d — detail footer action-key hints: advertise the comment-focus/edit/delete/reply and status keys in the browse-detail footer](0056-c4d-detail-footer-action-hints.md) - done
 * [0057 — C4e — mouse-click activation of the delete-confirm Sim/Não buttons: wire the modal's ButtonTarget click geometry (ADR 0024 §2d) into shell mouse resolution](0057-c4e-confirm-modal-mouse-click.md) - done
+* [0058 — SK1 — `jira skill` command: pure src/skill.rs registry + skill_output, include_str! the canonical SKILL.md, 'skill' joins KNOWN_COMMANDS](0058-sk1-jira-skill-command.md) - done
+* [0059 — SK2 — install-skill.sh: thin per-harness pointers to `jira skill jira` with --harness <name>|all and --scope project|global; fix install.sh fork bug](0059-sk2-install-skill-installer.md) - done
+* [0060 — D2a — attachment download seam: download_attachment on JiraClient with same-origin guard](0060-d2a-attachment-download-seam-download-attachment-on-jiraclient-with-same-origin-guard.md) - done
+* [0061 — D2b — jira get --download-attachments writes every attachment to the config downloads dir](0061-d2b-jira-get-download-attachments-writes-every-attachment-to-the-config-downloads-dir.md) - done
+* [0062 — D1 — browse TUI opens an image attachment in the OS viewer](0062-d1-browse-tui-opens-an-image-attachment-in-the-os-viewer.md) - done

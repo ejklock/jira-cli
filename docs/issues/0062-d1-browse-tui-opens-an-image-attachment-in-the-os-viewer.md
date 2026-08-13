@@ -2,7 +2,7 @@
 type: Issue
 title: D1 — browse TUI opens an image attachment in the OS viewer
 description: In the browse TUI, pressing the open key on a focused image/* attachment downloads it via the D2a seam to a temp file and launches the OS viewer (open/xdg-open/start); a non-image attachment keeps its open-URL-in-browser behavior.
-status: Proposed
+status: done
 timestamp: 2026-07-23T21:29:38Z
 ---
 

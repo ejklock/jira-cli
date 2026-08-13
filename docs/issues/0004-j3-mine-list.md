@@ -2,7 +2,7 @@
 type: Issue
 title: "J3 — mine/list: open issues assigned to me (JQL)"
 description: List open issues assigned to the authenticated user via JQL, rendered as a table or the curated --json list.
-status: open
+status: done
 tracker:
 tags: [mine, list, jql]
 timestamp: 2026-06-29T00:00:00Z

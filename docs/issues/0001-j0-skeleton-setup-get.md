@@ -2,7 +2,7 @@
 type: Issue
 title: "J0 — walking skeleton: fork scaffold + setup + get PROJ-123 end-to-end"
 description: Fork the AC crate, swap the API layer, and ship setup (add/list/remove/test) + get <KEY|URL> against Jira Cloud, end-to-end and demoable.
-status: open
+status: done
 tracker:
 tags: [skeleton, setup, get, jira]
 timestamp: 2026-06-29T00:00:00Z
