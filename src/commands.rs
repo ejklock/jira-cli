@@ -646,6 +646,18 @@ pub async fn search_core(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
+    search_core_limited(jql, instance, DEFAULT_SEARCH_LIMIT, json, out, err).await
+}
+
+/// `search_core` with an explicit cap on the number of issues requested.
+pub async fn search_core_limited(
+    jql: Option<&str>,
+    instance: &Instance,
+    limit: u64,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
     let trimmed = jql.map(str::trim).unwrap_or("");
     if trimmed.is_empty() {
         writeln!(err, "{}", t("Error: search requires a JQL query.")).ok();
@@ -660,7 +672,7 @@ pub async fn search_core(
         }
     };
 
-    match client.search(trimmed, DEFAULT_SEARCH_LIMIT).await {
+    match client.search(trimmed, limit).await {
         Ok(result) => {
             render_mine_output(json, trimmed, &result.issues, out);
             0

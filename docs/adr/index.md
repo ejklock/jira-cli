@@ -36,3 +36,5 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 * [0028 — The agent skill is served by a `jira skill` CLI command; per-harness integrations are thin pointers to it](0028-agent-skill-served-by-jira-skill-command.md) - Accepted
 * [0029 — Attachments: authenticated download seam, --download-attachments, and external image viewer](0029-attachments-authenticated-download-seam-download-attachments-and-external-image-viewer.md) - Accepted
 * [0030 — Rename the agent skill identifier from `jira` to `jira-ticket`](0030-rename-agent-skill-to-jira-ticket.md) - Accepted
+* [0031 — jira mcp serves the CLI as three MCP tools over stdio](0031-jira-mcp-serves-the-cli-as-three-mcp-tools-over-stdio.md) - Proposed
+* [0032 — Agent plugins for four harnesses ship from this repository](0032-agent-plugins-for-four-harnesses-ship-from-this-repository.md) - Proposed

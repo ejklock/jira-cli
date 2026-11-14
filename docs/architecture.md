@@ -63,6 +63,10 @@ flowchart TD
     main --> download["download\n--download-attachments orchestration\n(dedupe_filename · download_all · human/json output)"]
     download --> client
     download --> config
+    main --> mcp["mcp (rmcp stdio server)\njira_read · jira_write · jira_download_attachments\nflat schemas · typed operation enums"]
+    mcp --> commands
+    mcp -. "crate-root helpers: download_core · open_store_to ·\nresolve_single_instance_to · ResolvedInstance ·\nissue_key_or_report · current_git_branch" .-> main
+    mcp --> store
     cli --> tui_shell
     subgraph tui["tui (browse, Phase 2)\nread-only Elm/TEA shell"]
         tui_model["model.rs\npure core: Model · Msg · Cmd · update\n+ FooterMode · StatusMsg · Identity\n(no crossterm/ratatui/tokio/io)"]
@@ -177,6 +181,19 @@ flowchart TD
   [BDR 0019](/bdr/0019-jira-skill-command-behaviors.md)). `"skill"` is a
   `KNOWN_COMMANDS` entry, dispatched directly from `main.rs` (no TUI, no
   store, no network).
+- **`mcp` is a second adapter over the same command cores**
+  ([ADR 0031](/adr/0031-jira-mcp-serves-the-cli-as-three-mcp-tools-over-stdio.md)):
+  `jira mcp` serves `jira_read`, `jira_write` and `jira_download_attachments`
+  over stdio with `rmcp`. Each operation runs the existing `get_core`,
+  `current_core`, `mine_core`, `search_core`, `comment_core` or the download
+  core with `json = true` into in-memory writers, so a tool result is the
+  command's `--json` output and stdout carries only protocol frames. The tool
+  schemas are flat (a derived top-level `oneOf` is flattened into one object
+  with an `operation` enum) and the arguments parse into typed operation enums
+  with `deny_unknown_fields`; a unit test keeps the two in step. The MCP layer
+  calls cores, never `client` directly, so the write surface stays confined.
+  Each agent session spawns its own `jira mcp`, which is why `store` opens the
+  database in WAL mode.
 - **`client` is a clean trait seam** so a Phase-2 Jira Server/DC (REST v2) adapter
   is additive, not a rewrite.
 - **`download` orchestrates `jira get --download-attachments`**
@@ -235,6 +252,29 @@ The cache makes reads **local-first**: a cached `get` succeeds with the network
 disabled (NFR-2); `--refresh` forces the fetch arm. The list commands
 (`mine`/`search`) issue a JQL request to `/rest/api/3/search/jql` and render the
 result page; per-issue caching of list results is deferred (PRD open question).
+
+## MCP data flow
+
+```mermaid
+sequenceDiagram
+    actor Agent as Agent harness
+    participant MCP as mcp (rmcp, stdio)
+    participant Core as commands cores / download core
+    participant Store as store (WAL)
+    participant API as client (gouqi)
+    participant Jira as Jira Cloud
+
+    Agent->>MCP: tools/call jira_read {operation: get, ref}
+    MCP->>MCP: parse into typed operation (invalid_params on mismatch)
+    MCP->>Core: get_core(json = true, in-memory writers)
+    Core->>Store: cache read / write
+    Core->>API: GET issue (cache miss or refresh)
+    API->>Jira: request
+    Jira-->>API: payload
+    API-->>Core: Issue
+    Core-->>MCP: exit code + json line
+    MCP-->>Agent: text result (isError when the exit is non-zero)
+```
 
 ## Quality gates
 

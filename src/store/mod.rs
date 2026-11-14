@@ -9,6 +9,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 pub struct Store {
     conn: Connection,
@@ -67,12 +68,30 @@ fn set_file_mode_600(_path: &Path) -> Result<()> {
 }
 
 fn apply_pragmas(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        "PRAGMA journal_mode=DELETE;\
-         PRAGMA busy_timeout=5000;\
-         PRAGMA foreign_keys=ON;",
+    // The timeout goes first so every later statement of the open, the journal
+    // switch's own lock wait included, waits for a peer instead of failing.
+    conn.busy_timeout(Duration::from_millis(5000))?;
+    tolerate_busy_wal_switch(
+        conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)),
     )?;
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     Ok(())
+}
+
+/// SQLite reports SQLITE_BUSY for the journal-mode switch without waiting on
+/// the busy handler while another connection holds a write lock, such as a
+/// peer switching the same file. The connection carries on in the current mode
+/// and uses WAL once any opener has switched the file, since the mode persists.
+fn tolerate_busy_wal_switch(result: rusqlite::Result<String>) -> Result<()> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == rusqlite::ErrorCode::DatabaseBusy =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
@@ -144,12 +163,15 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Whole seconds since the Unix epoch at `at`; a clock set before the epoch reads as 0.
+pub(crate) fn epoch_secs_at(at: std::time::SystemTime) -> u64 {
+    at.duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 pub(crate) fn now_iso() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs();
+    let secs = epoch_secs_at(std::time::SystemTime::now());
     let (year, month, day, hour, min, sec) = secs_to_utc_parts(secs);
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -158,23 +180,15 @@ pub(crate) fn now_iso() -> String {
 }
 
 pub(crate) fn now_epoch_secs() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs() as i64
+    epoch_secs_at(std::time::SystemTime::now()) as i64
 }
 
 /// Returns the current wall-clock time in GMT-3 (Brazil / America/Sao_Paulo) as
 /// `YYYY-MM-DDTHH:MM:SS` with no trailing Z — it is not UTC.
 /// Used only for footer display; storage timestamps keep using now_iso() (UTC, Z-suffixed).
 pub(crate) fn now_brt_iso() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
     const BRT_OFFSET_SECS: u64 = 3 * 3600;
-    let utc_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs();
+    let utc_secs = epoch_secs_at(std::time::SystemTime::now());
     // Shift epoch backwards by 3 hours so secs_to_utc_parts produces BRT wall-clock fields.
     let brt_secs = utc_secs.saturating_sub(BRT_OFFSET_SECS);
     let (year, month, day, hour, min, sec) = secs_to_utc_parts(brt_secs);

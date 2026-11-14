@@ -276,7 +276,8 @@ fn list_alias_passes_through_unchanged() {
 #[test]
 fn known_commands_includes_skill() {
     assert!(KNOWN_COMMANDS.contains(&"skill"));
-    assert_eq!(KNOWN_COMMANDS.len(), 9);
+    assert!(KNOWN_COMMANDS.contains(&"mcp"));
+    assert_eq!(KNOWN_COMMANDS.len(), 10);
 }
 
 #[test]

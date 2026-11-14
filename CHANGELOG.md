@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `jira mcp` serves the CLI as an MCP server over stdio
+  ([ADR 0031](docs/adr/0031-jira-mcp-serves-the-cli-as-three-mcp-tools-over-stdio.md)).
+  Three tools, each operation an adapter over the existing `--json` command
+  core: `jira_read` (`get`, `current`, `mine`, `search`), `jira_write`
+  (`comment`) and `jira_download_attachments` (`download`). Tool results are
+  byte-identical to the matching `--json` output; a core failure is a tool
+  result with `isError`, and a malformed call is an `invalid_params` error.
+- The SQLite store opens in WAL mode with a busy timeout, so parallel
+  `jira mcp` processes (one per agent session) share one database without lock
+  errors. An existing database switches to WAL on its first open.
+
 - Sandbox note in the canonical `SKILL.md`: documents the `JIRA_DB`
   environment override for a read-only config directory, plus the
   copy-to-writable-path workaround.

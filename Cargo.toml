@@ -18,6 +18,8 @@ futures = "0.3"
 gouqi = { version = "0.20", features = ["async"] }
 ratatui = "0.29"
 regex = "1"
+rmcp = { version = "3.9.0", features = ["server", "macros", "schemars", "transport-io"] }
+schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -27,5 +29,6 @@ unicode-width = "0.1"
 url = "2"
 
 [dev-dependencies]
+rmcp = { version = "3.9.0", features = ["client", "transport-child-process"] }
 tempfile = "3"
 wiremock = "0.6"

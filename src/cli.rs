@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub const KNOWN_COMMANDS: [&str; 9] = [
-    "setup", "get", "current", "mine", "list", "search", "browse", "comment", "skill",
+pub const KNOWN_COMMANDS: [&str; 10] = [
+    "setup", "get", "current", "mine", "list", "search", "browse", "comment", "skill", "mcp",
 ];
 
 /// Fetch Jira issues from one or more configured instances.
@@ -33,6 +33,11 @@ pub enum Command {
     Comment(CommentArgs),
     /// Print an embedded agent skill (get the --json read contract).
     Skill(SkillArgs),
+    /// Serve the CLI as MCP tools over stdio.
+    #[command(
+        long_about = "Serve the CLI as MCP tools over stdio, for an agent harness to spawn.\n\nTools:\n  jira_read                  get, current, mine, search (read-only)\n  jira_write                 comment\n  jira_download_attachments  download\n\nEach tool returns the matching command's --json output."
+    )]
+    Mcp,
 }
 
 /// Wrapper that holds the setup subcommand.
@@ -201,8 +206,10 @@ pub fn normalize_argv(argv: &[String], current_branch: Option<&str>) -> Vec<Stri
 /// The key regex `[A-Z][A-Z0-9]+-\d+` matches regardless of any branch prefix
 /// (`feature/PROJ-123-foo`, `bugfix/ABC-9`, bare `PROJ-123`). First match wins.
 pub fn extract_issue_key(branch: &str) -> Option<String> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"[A-Z][A-Z0-9]+-\d+").expect("valid regex"));
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| Regex::new(r"[A-Z][A-Z0-9]+-\d+").ok())
+        .as_ref()?;
     re.find(branch).map(|m| m.as_str().to_owned())
 }
 

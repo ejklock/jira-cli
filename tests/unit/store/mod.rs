@@ -172,3 +172,134 @@ fn foreign_keys_pragma_is_applied() {
         .unwrap();
     assert_eq!(val, 1);
 }
+
+fn journal_mode_of(store: &Store) -> String {
+    store
+        .conn()
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn open_leaves_the_database_in_wal_journal_mode() {
+    let (_dir, store) = open_test_store();
+    assert_eq!(journal_mode_of(&store), "wal");
+}
+
+#[test]
+fn opening_a_store_already_in_wal_mode_keeps_it_and_its_rows() {
+    let dir = TempDir::new().unwrap();
+    let config = Config {
+        db_path: dir.path().join("shared.db"),
+        task_cache_ttl_hours: 24,
+    };
+    {
+        let first = Store::open(&config).unwrap();
+        first
+            .conn()
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ('language', 'en')",
+                [],
+            )
+            .unwrap();
+    }
+    let second = Store::open(&config).unwrap();
+    assert_eq!(journal_mode_of(&second), "wal");
+    let value: String = second
+        .conn()
+        .query_row("SELECT value FROM settings WHERE key='language'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(value, "en");
+}
+
+#[test]
+fn existing_delete_mode_store_switches_to_wal_keeping_its_rows() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("legacy.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);\
+             INSERT INTO settings (key, value) VALUES ('language', 'pt-BR');",
+        )
+        .unwrap();
+    }
+    let store = Store::open(&Config {
+        db_path,
+        task_cache_ttl_hours: 24,
+    })
+    .unwrap();
+    assert_eq!(journal_mode_of(&store), "wal");
+    let value: String = store
+        .conn()
+        .query_row("SELECT value FROM settings WHERE key='language'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(value, "pt-BR");
+}
+
+#[test]
+fn concurrent_opens_of_a_delete_mode_store_all_succeed_and_end_in_wal() {
+    for _ in 0..30 {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch("CREATE TABLE seed (id INTEGER);")
+                .unwrap();
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let db_path = db_path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Store::open(&Config {
+                        db_path,
+                        task_cache_ttl_hours: 24,
+                    })
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                })
+            })
+            .collect();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), Ok(()));
+        }
+        let store = Store::open(&Config {
+            db_path,
+            task_cache_ttl_hours: 24,
+        })
+        .unwrap();
+        assert_eq!(journal_mode_of(&store), "wal");
+    }
+}
+
+#[test]
+fn a_busy_wal_switch_is_tolerated_and_other_errors_are_not() {
+    let busy =
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY), None);
+    assert!(tolerate_busy_wal_switch(Err(busy)).is_ok());
+    assert!(tolerate_busy_wal_switch(Ok("wal".to_owned())).is_ok());
+    assert!(tolerate_busy_wal_switch(Err(rusqlite::Error::InvalidQuery)).is_err());
+}
+
+#[test]
+fn epoch_secs_at_reads_a_pre_epoch_clock_as_zero() {
+    let before_epoch = std::time::UNIX_EPOCH - std::time::Duration::from_secs(10);
+    assert_eq!(epoch_secs_at(before_epoch), 0);
+}
+
+#[test]
+fn epoch_secs_at_counts_whole_seconds_after_the_epoch() {
+    let after_epoch = std::time::UNIX_EPOCH + std::time::Duration::from_millis(5_900);
+    assert_eq!(epoch_secs_at(after_epoch), 5);
+}
