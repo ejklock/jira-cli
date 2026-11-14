@@ -1,0 +1,11 @@
+{
+  "name": "jira-cli",
+  "description": "Read Jira Cloud issues, your assignments and JQL searches as JSON through the jira CLI: the jira-cli MCP server and the jira-ticket skill. Unofficial; not affiliated with Atlassian.",
+  "owner": { "name": "Evaldo Klock" },
+  "plugins": [
+    {
+      "name": "jira-cli",
+      "source": "./plugins/jira-cli"
+    }
+  ]
+}

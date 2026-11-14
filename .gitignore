@@ -4,3 +4,4 @@ status-cache.json
 .codegraph/
 .cursor/
 .claude/settings.local.json
+node_modules/

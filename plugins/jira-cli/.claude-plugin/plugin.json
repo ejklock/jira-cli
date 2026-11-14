@@ -1,0 +1,11 @@
+{
+  "name": "jira-cli",
+  "version": "0.1.0",
+  "description": "Read Jira Cloud issues, your assignments and JQL searches as JSON through the jira CLI: the jira-cli MCP server and the jira-ticket skill. Unofficial; not affiliated with Atlassian.",
+  "author": { "name": "Evaldo Klock" },
+  "license": "MIT",
+  "repository": "https://github.com/ejklock/jira-cli",
+  "keywords": ["jira", "jira-cloud", "mcp", "issues", "jql"],
+  "homepage": "https://github.com/ejklock/jira-cli",
+  "mcpServers": "./mcp.json"
+}
