@@ -1,5 +1,5 @@
 use super::*;
-use crate::i18n::LANG_MUTEX;
+use crate::test_support::lock_language;
 
 #[test]
 fn supported_contains_en_and_pt_br() {
@@ -91,8 +91,7 @@ fn resolve_db_pt_br_hyphen_normalizes_to_pt_br() {
 
 #[test]
 fn set_and_current_language_round_trip() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     assert_eq!(current_language(), "pt_BR");
     set_language("en");
     assert_eq!(current_language(), "en");
@@ -100,8 +99,7 @@ fn set_and_current_language_round_trip() {
 
 #[test]
 fn t_returns_input_unchanged_under_en() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     assert_eq!(t("Hello"), "Hello");
     assert_eq!(
         t("Error: no instances configured."),
@@ -113,8 +111,7 @@ fn t_returns_input_unchanged_under_en() {
 
 #[test]
 fn t_translates_known_keys_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     assert_eq!(t("Task"), "Tarefa");
     assert_eq!(t("Title"), "Título");
     assert_eq!(t("Assignee"), "Responsável");
@@ -138,8 +135,7 @@ fn t_translates_known_keys_under_pt_br() {
 
 #[test]
 fn t_returns_identity_for_unknown_key_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     assert_eq!(t("Some unlisted key"), "Some unlisted key");
     assert_eq!(t(""), "");
     set_language("en");
@@ -276,8 +272,7 @@ fn pt_br_catalog_completeness_all_oracle_keys_present() {
 
 #[test]
 fn tf_translates_and_substitutes_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let result = tf("Error: instance '{name}' not found.", &[("name", "foo")]);
     assert_eq!(result, "Erro: instância 'foo' não encontrada.");
     set_language("en");
@@ -285,8 +280,7 @@ fn tf_translates_and_substitutes_under_pt_br() {
 
 #[test]
 fn tf_unknown_placeholder_left_intact_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let result = tf("Error: instance '{name}' not found.", &[]);
     assert_eq!(result, "Erro: instância '{name}' não encontrada.");
     set_language("en");
@@ -294,8 +288,7 @@ fn tf_unknown_placeholder_left_intact_under_pt_br() {
 
 #[test]
 fn tf_unknown_template_falls_back_with_substitution_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let result = tf("Unknown template {token} here.", &[("token", "val")]);
     assert_eq!(result, "Unknown template val here.");
     set_language("en");
@@ -303,8 +296,7 @@ fn tf_unknown_template_falls_back_with_substitution_under_pt_br() {
 
 #[test]
 fn tf_substitutes_under_en_identity() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let result = tf("Language set to '{code}'.", &[("code", "pt_BR")]);
     assert_eq!(result, "Language set to 'pt_BR'.");
     set_language("en");
@@ -312,8 +304,7 @@ fn tf_substitutes_under_en_identity() {
 
 #[test]
 fn tf_single_pass_value_with_token_not_reinterpreted() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     // The value for "a" contains a {b} token; single-pass means {b} is not
     // substituted in a second pass — the result keeps the literal "{b}" text.
     let result = tf("Hello {a}!", &[("a", "{b}"), ("b", "SHOULD_NOT_APPEAR")]);
@@ -323,8 +314,7 @@ fn tf_single_pass_value_with_token_not_reinterpreted() {
 
 #[test]
 fn tf_multiple_placeholders_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let known_str = "alpha, beta";
     let result = tf(
         "Error: instance '{name}' not found. Known: {known}",
@@ -339,8 +329,7 @@ fn tf_multiple_placeholders_under_pt_br() {
 
 #[test]
 fn tf_multiple_placeholders_under_en() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let known_str = "alpha, beta";
     let result = tf(
         "Error: instance '{name}' not found. Known: {known}",

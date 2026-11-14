@@ -326,16 +326,76 @@ fn instances_key_single_instance_equals_name() {
 fn task_list_cache_row_exactly_at_max_age_reads_some() {
     let (_dir, store) = make_store();
     let cache = TaskListCache::new(store.conn());
-    let now = crate::store::now_epoch_secs();
+    let fetched_at = 1_000_000;
     cache
-        .write_with_fetched_at("browse", "acme", r#"["data"]"#, now)
+        .write_with_fetched_at("browse", "acme", r#"["data"]"#, fetched_at)
         .unwrap();
-    // age is 0, which is <= max_age_secs=0, so it should be a hit
-    let result = cache.read("browse", "acme", 0).unwrap();
+    let result = cache.read_at("browse", "acme", 0, fetched_at).unwrap();
     assert!(
         result.is_some(),
         "row with age=0 and max_age=0 must be a hit"
     );
+}
+
+#[test]
+fn task_list_cache_row_one_second_past_zero_max_age_is_a_miss() {
+    let (_dir, store) = make_store();
+    let cache = TaskListCache::new(store.conn());
+    let fetched_at = 1_000_000;
+    cache
+        .write_with_fetched_at("browse", "acme", r#"["data"]"#, fetched_at)
+        .unwrap();
+    let result = cache.read_at("browse", "acme", 0, fetched_at + 1).unwrap();
+    assert!(result.is_none(), "age 1 with max_age 0 must be a miss");
+}
+
+#[test]
+fn task_list_cache_read_at_decides_freshness_around_max_age() {
+    let (_dir, store) = make_store();
+    let cache = TaskListCache::new(store.conn());
+    let fetched_at = 1_000_000;
+    cache
+        .write_with_fetched_at("browse", "acme", r#"["data"]"#, fetched_at)
+        .unwrap();
+    let hit = |now: i64| cache.read_at("browse", "acme", 3600, now).unwrap();
+    assert!(hit(fetched_at + 3599).is_some(), "age 3599 must be a hit");
+    assert!(hit(fetched_at + 3600).is_some(), "age == max_age is a hit");
+    assert!(hit(fetched_at + 3601).is_none(), "age 3601 must be a miss");
+}
+
+#[test]
+fn task_list_cache_row_fetched_after_now_reads_some() {
+    let (_dir, store) = make_store();
+    let cache = TaskListCache::new(store.conn());
+    let fetched_at = 1_000_000;
+    cache
+        .write_with_fetched_at("browse", "acme", r#"["data"]"#, fetched_at)
+        .unwrap();
+    let result = cache
+        .read_at("browse", "acme", 3600, fetched_at - 500)
+        .unwrap();
+    assert!(result.is_some(), "a row from the future must be a hit");
+}
+
+#[test]
+fn task_list_cache_read_at_without_row_is_a_miss() {
+    let (_dir, store) = make_store();
+    let cache = TaskListCache::new(store.conn());
+    let result = cache.read_at("browse", "acme", 3600, 1_000_000).unwrap();
+    assert!(result.is_none(), "no row must be a miss");
+}
+
+#[test]
+fn task_list_cache_read_matches_read_at_for_a_fresh_row() {
+    let (_dir, store) = make_store();
+    let cache = TaskListCache::new(store.conn());
+    cache.write("browse", "acme", r#"["data"]"#).unwrap();
+    let now = crate::store::now_epoch_secs();
+    assert_eq!(
+        cache.read("browse", "acme", 3600).unwrap(),
+        cache.read_at("browse", "acme", 3600, now).unwrap()
+    );
+    assert!(cache.read("browse", "acme", 3600).unwrap().is_some());
 }
 
 // S8a-A3: row older than max_age_secs reads None

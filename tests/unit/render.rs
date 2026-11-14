@@ -1,5 +1,5 @@
 use super::*;
-use crate::i18n::{set_language, t, LANG_MUTEX};
+use crate::i18n::{set_language, t};
 use crate::models::{Issue, IssueRow};
 use crate::test_support::*;
 
@@ -807,8 +807,7 @@ fn render_issue_human_empty_comments_no_comments_section() {
 
 #[test]
 fn render_issue_human_pt_br_translates_field_labels() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let issue = Issue {
         assignee: None,
         ..sample_issue()
@@ -854,8 +853,7 @@ fn render_issue_human_pt_br_translates_field_labels() {
 
 #[test]
 fn render_issue_human_en_labels_unchanged() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let mut out = Vec::new();
     render_issue_human(
         &sample_issue(),
@@ -901,8 +899,7 @@ fn days_from_civil_day_before_epoch_is_negative_one() {
 
 #[test]
 fn relative_due_buckets_by_day_delta() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let due_days = days_from_civil(2026, 7, 3);
     let cases: [(i64, &str); 7] = [
         (0, "today"),
@@ -926,8 +923,7 @@ fn relative_due_buckets_by_day_delta() {
 
 #[test]
 fn relative_due_two_days_boundary_is_plural_not_singular() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let due_days = days_from_civil(2026, 7, 3);
     let result = relative_due("2026-07-03", due_days - 2);
     assert_eq!(result.as_deref(), Some("in 2 days"));
@@ -941,8 +937,7 @@ fn relative_due_two_days_boundary_is_plural_not_singular() {
 
 #[test]
 fn relative_due_overdue_boundary_singular_only_at_exactly_one_day() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let due_days = days_from_civil(2026, 7, 3);
     assert_eq!(
         relative_due("2026-07-03", due_days + 1).as_deref(),
@@ -958,8 +953,7 @@ fn relative_due_overdue_boundary_singular_only_at_exactly_one_day() {
 
 #[test]
 fn relative_due_pt_br_translates_every_bucket() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let due_days = days_from_civil(2026, 7, 3);
     assert_eq!(
         relative_due("2026-07-03", due_days).as_deref(),
@@ -998,8 +992,7 @@ fn relative_due_unparseable_input_returns_none() {
 
 #[test]
 fn render_issue_human_emits_due_line_after_updated_when_duedate_parses() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let issue = Issue {
         duedate: Some(duedate_offset_from_today(3)),
         ..sample_issue()
@@ -1028,8 +1021,7 @@ fn render_issue_human_emits_due_line_after_updated_when_duedate_parses() {
 
 #[test]
 fn render_issue_human_pt_br_due_line_translated() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let issue = Issue {
         duedate: Some(duedate_offset_from_today(3)),
         ..sample_issue()
@@ -1052,8 +1044,7 @@ fn render_issue_human_pt_br_due_line_translated() {
 
 #[test]
 fn render_issue_human_omits_due_line_when_duedate_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let mut out = Vec::new();
     render_issue_human(
         &sample_issue(),
@@ -1072,8 +1063,7 @@ fn render_issue_human_omits_due_line_when_duedate_is_none() {
 
 #[test]
 fn render_issue_human_omits_due_line_when_duedate_unparseable() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let issue = Issue {
         duedate: Some("not-a-date".to_string()),
         ..sample_issue()
@@ -1161,8 +1151,7 @@ fn make_issue_row(
 
 #[test]
 fn render_issue_table_prints_header_with_required_columns() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let rows = vec![make_issue_row(
         "PROJ-1",
         "Task",
@@ -1217,8 +1206,7 @@ fn render_issue_table_row_contains_all_fields() {
 
 #[test]
 fn render_issue_table_unassigned_renders_as_unassigned_label() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let rows = vec![make_issue_row(
         "PROJ-5",
         "Story",
@@ -1238,8 +1226,7 @@ fn render_issue_table_unassigned_renders_as_unassigned_label() {
 
 #[test]
 fn render_issue_table_multiple_rows_each_rendered() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let rows = vec![
         make_issue_row("PROJ-1", "Task", "Open", Some("Alice"), "First task"),
         make_issue_row("PROJ-2", "Bug", "Done", None, "Second task"),
@@ -1266,8 +1253,7 @@ fn render_issue_table_multiple_rows_each_rendered() {
 
 #[test]
 fn render_issue_table_headers_remain_english_under_en() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let rows = vec![make_issue_row(
         "PROJ-1",
         "Task",
@@ -1292,8 +1278,7 @@ fn render_issue_table_headers_remain_english_under_en() {
 
 #[test]
 fn render_issue_table_headers_translated_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let rows = vec![make_issue_row(
         "PROJ-1",
         "Task",
@@ -1318,8 +1303,7 @@ fn render_issue_table_headers_translated_under_pt_br() {
 
 #[test]
 fn render_issue_table_jira_data_not_translated_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let rows = vec![make_issue_row(
         "PROJ-99",
         "Bug",
@@ -1347,8 +1331,7 @@ fn render_issue_table_jira_data_not_translated_under_pt_br() {
 
 #[test]
 fn render_issue_table_none_assignee_translated_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let rows = vec![make_issue_row(
         "PROJ-5",
         "Story",
@@ -1368,8 +1351,7 @@ fn render_issue_table_none_assignee_translated_under_pt_br() {
 
 #[test]
 fn chrome_keys_resolve_to_non_identity_translations_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     assert_eq!(t("KEY"), "CHAVE", "KEY must translate to CHAVE under pt_BR");
     assert_eq!(t("TYPE"), "TIPO", "TYPE must translate to TIPO under pt_BR");
     assert_eq!(

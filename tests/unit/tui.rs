@@ -11,7 +11,7 @@ use super::shell::{
 };
 use super::view;
 use crate::cli::{browse_tty_action, BrowseAction};
-use crate::i18n::{set_language, LANG_MUTEX};
+use crate::i18n::set_language;
 use crate::models::{IssueRow, ProjectRow, Transition};
 use crate::store::cache::{instances_key, TaskListCache};
 use crate::test_support::*;
@@ -256,6 +256,7 @@ fn browse_tty_action_non_tty_yields_tty_error() {
 
 #[tokio::test]
 async fn non_tty_browse_writes_tty_error_to_stderr() {
+    let _lang = lock_language("en");
     let conn = open_in_memory_store();
     let cache = crate::store::cache::TaskCache::new(&conn);
     let instance = make_test_instance();
@@ -385,7 +386,7 @@ fn update_up_never_emits_cmd_quit() {
 // content coverage lives in tests/unit/tui_render.rs (BDR 0007 S2-S4).
 #[test]
 fn view_renders_each_issue_as_a_card_showing_key_and_status() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let model = make_list_model(&["PROJ-1", "PROJ-2"]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -400,7 +401,7 @@ fn view_renders_each_issue_as_a_card_showing_key_and_status() {
 
 #[test]
 fn view_renders_each_issue_key() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let model = make_list_model(&["PROJ-1", "PROJ-2", "PROJ-3"]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -412,7 +413,7 @@ fn view_renders_each_issue_key() {
 
 #[test]
 fn view_empty_model_renders_no_issues_notice() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let model = make_list_model(&[]);
     let buf = render_to_buffer(&model, 120, 20);
     let text = buffer_text(&buf);
@@ -961,7 +962,7 @@ fn update_up_on_detail_decrements_scroll_clamps_at_zero() {
 
 #[test]
 fn view_detail_with_loaded_issue_shows_summary_status_and_description() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-42"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue("PROJ-42"));
@@ -989,7 +990,7 @@ fn view_detail_with_loaded_issue_shows_summary_status_and_description() {
 
 #[test]
 fn view_detail_with_none_shows_loading_notice() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-1"]);
     model.screen = Screen::Detail;
     model.detail = None;
@@ -1005,7 +1006,7 @@ fn view_detail_with_none_shows_loading_notice() {
 
 #[test]
 fn view_detail_shows_assignee() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-7"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue("PROJ-7"));
@@ -1023,7 +1024,7 @@ fn view_detail_shows_assignee() {
 
 #[test]
 fn view_detail_renders_bold_description_run_with_bold_modifier() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-11"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-11"));
@@ -1039,7 +1040,7 @@ fn view_detail_renders_bold_description_run_with_bold_modifier() {
 
 #[test]
 fn view_detail_renders_link_token_with_underlined_modifier_anchor_stays_plain() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-12"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-12"));
@@ -1065,7 +1066,7 @@ fn view_detail_renders_link_token_with_underlined_modifier_anchor_stays_plain() 
 
 #[test]
 fn view_detail_plain_description_run_carries_no_bold_or_underline() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-13"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_styled_description("PROJ-13"));
@@ -1089,8 +1090,7 @@ fn view_detail_plain_description_run_carries_no_bold_or_underline() {
 
 #[test]
 fn view_detail_pt_br_translates_labels() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let mut model = make_list_model(&["PROJ-9"]);
     model.screen = Screen::Detail;
@@ -1121,8 +1121,7 @@ fn view_detail_pt_br_translates_labels() {
 
 #[test]
 fn view_detail_en_labels_unchanged() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(&["PROJ-42"]);
     model.screen = Screen::Detail;
@@ -1386,7 +1385,7 @@ fn update_select_on_detail_with_no_focused_link_is_noop() {
 
 #[test]
 fn view_detail_highlights_focused_link_with_reversed_modifier() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-20"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_two_links("PROJ-20"));
@@ -1416,7 +1415,7 @@ fn view_detail_highlights_focused_link_with_reversed_modifier() {
 
 #[test]
 fn view_detail_non_focused_link_has_no_reversed_modifier() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-21"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_two_links("PROJ-21"));
@@ -1772,7 +1771,7 @@ fn update_load_more_on_detail_screen_is_noop() {
 
 #[test]
 fn view_list_shows_load_more_hint_when_token_pending() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-1"]);
     model.next_page_token = Some("page-2-token".to_owned());
 
@@ -1787,7 +1786,7 @@ fn view_list_shows_load_more_hint_when_token_pending() {
 
 #[test]
 fn view_list_hides_load_more_hint_on_last_page() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let model = make_list_model(&["PROJ-1"]);
 
     let buf = render_to_buffer(&model, 120, 20);
@@ -1803,7 +1802,7 @@ fn view_list_hides_load_more_hint_on_last_page() {
 
 #[test]
 fn view_with_search_active_shows_typed_query_in_buffer() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-1"]);
     model.search = Some("project = X".to_owned());
 
@@ -1822,7 +1821,7 @@ fn view_with_search_active_shows_typed_query_in_buffer() {
 
 #[test]
 fn view_with_error_and_rows_shows_banner_and_list() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-1", "PROJ-2"]);
     model.error = Some("Invalid JQL query".to_owned());
 
@@ -1841,7 +1840,7 @@ fn view_with_error_and_rows_shows_banner_and_list() {
 
 #[test]
 fn view_with_no_search_or_error_shows_normal_list() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let model = make_list_model(&["PROJ-5"]);
 
     let buf = render_to_buffer(&model, 120, 20);
@@ -1948,8 +1947,7 @@ fn update_load_failed_from_400_sets_error_and_preserves_rows() {
 
 #[test]
 fn view_list_pt_br_translates_footer_error_banner_and_more_hint() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let mut model = make_list_model(&["PROJ-1"]);
     model.next_page_token = Some("page-2-token".to_owned());
@@ -1971,8 +1969,7 @@ fn view_list_pt_br_translates_footer_error_banner_and_more_hint() {
 
 #[test]
 fn view_list_pt_br_translates_search_footer_and_error_banner() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let mut model = make_list_model(&["PROJ-1"]);
     model.search = Some("project = X".to_owned());
@@ -1997,8 +1994,7 @@ fn view_list_pt_br_translates_search_footer_and_error_banner() {
 
 #[test]
 fn view_list_en_chrome_is_identity() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(&["PROJ-1"]);
     model.next_page_token = Some("page-2-token".to_owned());
@@ -2211,7 +2207,7 @@ fn render_and_agent_json_produce_same_url_for_same_input() {
 
 #[test]
 fn view_detail_renders_comments_header_authors_and_bodies() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-30"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments(
@@ -2258,7 +2254,7 @@ fn view_detail_renders_comments_header_authors_and_bodies() {
 
 #[test]
 fn view_detail_renders_bold_comment_body_run_with_bold_modifier() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-31"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments(
@@ -2286,7 +2282,7 @@ fn view_detail_renders_bold_comment_body_run_with_bold_modifier() {
 
 #[test]
 fn view_detail_renders_link_comment_body_run_with_underlined_modifier() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-32"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments(
@@ -2325,7 +2321,7 @@ fn view_detail_renders_link_comment_body_run_with_underlined_modifier() {
 
 #[test]
 fn view_detail_with_no_comments_renders_no_comments_header() {
-    let _lock = LANG_MUTEX.lock().unwrap();
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-33"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_comments("PROJ-33", vec![]));
@@ -2350,8 +2346,7 @@ fn make_issue_with_duedate(key: &str, duedate: Option<String>) -> crate::models:
 
 #[test]
 fn view_detail_shows_due_line_after_assignee_when_duedate_parses() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-50"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_duedate(
@@ -2380,8 +2375,7 @@ fn view_detail_shows_due_line_after_assignee_when_duedate_parses() {
 
 #[test]
 fn view_detail_pt_br_shows_translated_due_line() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
     let mut model = make_list_model(&["PROJ-51"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_duedate(
@@ -2402,8 +2396,7 @@ fn view_detail_pt_br_shows_translated_due_line() {
 
 #[test]
 fn view_detail_omits_due_line_when_duedate_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-52"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_duedate("PROJ-52", None));
@@ -2421,8 +2414,7 @@ fn view_detail_omits_due_line_when_duedate_is_none() {
 
 #[test]
 fn view_detail_omits_due_line_when_duedate_unparseable() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let mut model = make_list_model(&["PROJ-53"]);
     model.screen = Screen::Detail;
     model.detail = Some(make_issue_with_duedate(
@@ -2832,8 +2824,7 @@ fn footer_mode_focused_comment_takes_precedence_over_focused_link() {
 
 #[test]
 fn view_list_footer_switches_when_entering_search() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_list_model(&["PROJ-1"]);
     let (searching, _) = update(model, Msg::OpenSearch);
@@ -2855,8 +2846,7 @@ fn view_list_footer_switches_when_entering_search() {
 
 #[test]
 fn view_footer_switches_when_opening_detail() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(&["PROJ-1"]);
     model.screen = Screen::Detail;
@@ -2879,8 +2869,7 @@ fn view_footer_switches_when_opening_detail() {
 
 #[test]
 fn view_detail_footer_switches_when_a_link_is_focused() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(&["PROJ-1"]);
     model.screen = Screen::Detail;
@@ -2926,8 +2915,7 @@ fn assert_footer_hint_advertises_bound_key(
 
 #[test]
 fn every_footer_mode_advertises_only_bound_keys() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let list_hint = view::footer_hint(FooterMode::List);
     assert_footer_hint_advertises_bound_key(&list_hint, "↑/↓", KeyCode::Down, false);
@@ -2995,8 +2983,7 @@ fn every_footer_mode_advertises_only_bound_keys() {
 
 #[test]
 fn footer_hint_pt_br_translates_detail_family_strings() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     assert_ne!(
         view::footer_hint(FooterMode::Detail),
@@ -3037,8 +3024,7 @@ fn update_clears_a_standing_status_on_the_next_key_event() {
 
 #[test]
 fn update_copy_key_sets_an_info_status_confirmation() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_list_model(&["PROJ-1"]);
     let (next, cmds) = update(model, Msg::CopyKey);
@@ -3053,8 +3039,7 @@ fn update_copy_key_sets_an_info_status_confirmation() {
 
 #[test]
 fn update_copy_key_pt_br_translates_the_status_confirmation() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let model = make_list_model(&["PROJ-1"]);
     let (next, _) = update(model, Msg::CopyKey);
@@ -3106,8 +3091,7 @@ fn update_reply_msgs_do_not_clear_a_standing_status() {
 
 #[test]
 fn update_load_failed_with_reauth_message_surfaces_guidance_in_error_and_status() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_list_model(&["PROJ-1"]);
     let guidance = crate::commands::reauth_message("work");
@@ -3139,8 +3123,7 @@ fn update_load_failed_with_reauth_message_surfaces_guidance_in_error_and_status(
 
 #[test]
 fn update_load_failed_with_reauth_message_pt_br_translates_the_guidance() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let en_guidance = crate::commands::reauth_message("work");
 
     set_language("pt_BR");
@@ -3247,6 +3230,7 @@ fn update_sel_drag_on_list_screen_is_noop() {
 #[test]
 fn update_sel_end_some_emits_exactly_one_copy_to_clipboard_sets_copied_status_and_keeps_selection()
 {
+    let _lang = lock_language("en");
     let mut model = make_detail_model_for_selection();
     model.selection = Some(Selection {
         anchor: (0, 0),
@@ -3705,8 +3689,7 @@ fn update_projects_failed_sets_error_status_and_stays_on_projects() {
 
 #[test]
 fn update_projects_failed_with_reauth_message_surfaces_the_e2_guidance() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_projects_model(vec![]);
     let guidance = crate::commands::reauth_message("work");
@@ -5293,8 +5276,7 @@ fn mouse_resolved_msgs_are_inert_while_confirm_open() {
 
 #[test]
 fn confirm_modal_content_yields_localized_title_prompt_and_buttons() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let content = view::confirm_modal_content();
     assert_eq!(content.title, "Delete comment?");
@@ -5913,6 +5895,7 @@ fn transition_move_on_empty_list_is_noop() {
 
 #[test]
 fn apply_transition_on_field_free_row_emits_exactly_one_exec_and_sets_applying_notice() {
+    let _lang = lock_language("en");
     let model = make_loaded_picker_model(
         vec![make_transition(
             "11",
@@ -5947,6 +5930,7 @@ fn apply_transition_on_field_free_row_emits_exactly_one_exec_and_sets_applying_n
 
 #[test]
 fn apply_transition_on_field_requiring_row_emits_no_cmd_and_sets_requires_fields_notice() {
+    let _lang = lock_language("en");
     let model = make_loaded_picker_model(vec![make_transition("21", "Resolve", "Done", true)], 0);
 
     let (next, cmds) = update(model, Msg::ApplyTransition);
@@ -6070,8 +6054,7 @@ fn transition_apply_err_surfaces_reauth_guidance() {
 
 #[test]
 fn view_renders_transition_picker_loading_state() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let model = make_loading_picker_model();
 
     let buf = render_to_buffer(&model, 120, 30);
@@ -6083,8 +6066,7 @@ fn view_renders_transition_picker_loading_state() {
 
 #[test]
 fn view_renders_transition_picker_empty_state() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let model = make_loaded_picker_model(vec![], 0);
 
     let buf = render_to_buffer(&model, 120, 30);
@@ -6095,8 +6077,7 @@ fn view_renders_transition_picker_empty_state() {
 
 #[test]
 fn view_renders_transition_picker_field_requiring_annotation() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let model = make_loaded_picker_model(vec![make_transition("21", "Resolve", "Done", true)], 0);
 
     let buf = render_to_buffer(&model, 120, 30);
@@ -6205,8 +6186,7 @@ fn delete_focused_comment_is_inert_while_transitions_open() {
 
 #[test]
 fn transition_picker_content_loading_shows_localized_loading() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let picker = TransitionPicker {
         state: TransitionPickerState::Loading,
     };
@@ -6221,8 +6201,7 @@ fn transition_picker_content_loading_shows_localized_loading() {
 
 #[test]
 fn transition_picker_content_empty_shows_localized_empty_state_and_esc_hint() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let picker = TransitionPicker {
         state: TransitionPickerState::Loaded {
             transitions: vec![],
@@ -6243,8 +6222,7 @@ fn transition_picker_content_empty_shows_localized_empty_state_and_esc_hint() {
 
 #[test]
 fn transition_picker_content_loaded_lists_names_target_statuses_and_hint() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let picker = TransitionPicker {
         state: TransitionPickerState::Loaded {
             transitions: vec![
