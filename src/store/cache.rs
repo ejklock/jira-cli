@@ -284,6 +284,18 @@ impl<'a> TaskListCache<'a> {
         instances_key: &str,
         max_age_secs: i64,
     ) -> Result<Option<String>> {
+        self.read_at(scope, instances_key, max_age_secs, now_epoch_secs())
+    }
+
+    /// Visible for testing: decide freshness at an explicit instant so tests
+    /// do not depend on the wall clock.
+    pub(crate) fn read_at(
+        &self,
+        scope: &str,
+        instances_key: &str,
+        max_age_secs: i64,
+        now: i64,
+    ) -> Result<Option<String>> {
         let row: Option<(String, i64)> = self
             .conn
             .query_row(
@@ -297,7 +309,7 @@ impl<'a> TaskListCache<'a> {
         match row {
             None => Ok(None),
             Some((list_json, fetched_at)) => {
-                let age = now_epoch_secs() - fetched_at;
+                let age = now - fetched_at;
                 if age <= max_age_secs {
                     Ok(Some(list_json))
                 } else {

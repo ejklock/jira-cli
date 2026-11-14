@@ -8,9 +8,9 @@ use super::theme;
 use super::view;
 use super::*;
 
-use crate::i18n::{set_language, LANG_MUTEX};
+use crate::i18n::set_language;
 use crate::models::{IssueRow, ProjectRow};
-use crate::test_support::{duedate_offset_from_today, project_row};
+use crate::test_support::{duedate_offset_from_today, lock_language, project_row};
 use ratatui::{
     backend::TestBackend,
     layout::Rect,
@@ -306,8 +306,7 @@ fn view_detail_header_with_no_identities_renders_empty_row_without_panic() {
 
 #[test]
 fn view_list_header_shows_refreshing_indicator_while_revalidating() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(single_identity());
     model.revalidating = true;
@@ -329,8 +328,7 @@ fn view_list_header_shows_refreshing_indicator_while_revalidating() {
 
 #[test]
 fn view_list_header_omits_refreshing_indicator_when_not_revalidating() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_list_model(single_identity());
     assert!(!model.revalidating);
@@ -348,8 +346,7 @@ fn view_list_header_omits_refreshing_indicator_when_not_revalidating() {
 
 #[test]
 fn view_list_header_refreshing_indicator_pt_br_translates() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let mut model = make_list_model(single_identity());
     model.revalidating = true;
@@ -395,8 +392,7 @@ fn view_detail_footer_uses_theme_footer_style() {
 
 #[test]
 fn view_list_footer_hint_text_is_unchanged() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_list_model(vec![]);
     let buf = render_to_buffer(&model, 120, 20);
@@ -412,8 +408,7 @@ fn view_list_footer_hint_text_is_unchanged() {
 
 #[test]
 fn view_detail_footer_hint_text_is_unchanged() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_detail_model(vec![]);
     let buf = render_to_buffer(&model, 120, 30);
@@ -432,8 +427,7 @@ fn view_detail_footer_hint_text_is_unchanged() {
 
 #[test]
 fn footer_hint_en_exact_strings_per_mode() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     assert_eq!(
         view::footer_hint(FooterMode::List),
@@ -461,8 +455,7 @@ fn footer_hint_en_exact_strings_per_mode() {
 
 #[test]
 fn footer_hint_pt_br_exact_strings_per_mode() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     assert_eq!(
         view::footer_hint(FooterMode::List),
@@ -492,8 +485,7 @@ fn footer_hint_pt_br_exact_strings_per_mode() {
 
 #[test]
 fn view_list_status_row_renders_info_confirmation_above_footer() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(vec![]);
     model.status = Some(StatusMsg {
@@ -516,8 +508,7 @@ fn view_list_status_row_renders_info_confirmation_above_footer() {
 
 #[test]
 fn view_list_status_row_renders_error_style_for_a_fetch_error() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_list_model(vec![]);
     model.status = Some(StatusMsg {
@@ -554,8 +545,7 @@ fn view_list_with_no_status_reserves_no_status_row_and_layout_stays_collapsed() 
 
 #[test]
 fn view_list_status_row_clears_on_the_next_key_event_and_layout_collapses_back() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let with_status = {
         let mut model = make_list_model(vec![]);
@@ -589,8 +579,7 @@ fn view_list_status_row_clears_on_the_next_key_event_and_layout_collapses_back()
 
 #[test]
 fn view_detail_status_row_renders_above_the_footer() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.status = Some(StatusMsg {
@@ -619,8 +608,7 @@ fn view_detail_status_row_renders_above_the_footer() {
 
 #[test]
 fn view_detail_footer_shows_comment_affordances_when_a_comment_is_focused() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail_focused_comment = Some(0);
@@ -641,8 +629,7 @@ fn view_detail_footer_shows_comment_affordances_when_a_comment_is_focused() {
 
 #[test]
 fn view_detail_footer_shows_base_hints_when_no_comment_is_focused() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_detail_model(vec![]);
 
@@ -735,8 +722,7 @@ fn theme_due_near_matches_adr_0014_palette() {
 
 #[test]
 fn view_list_renders_issue_as_bordered_card_with_due_status_and_project() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row(
         "PROJ-1",
@@ -774,8 +760,7 @@ fn view_list_renders_issue_as_bordered_card_with_due_status_and_project() {
 
 #[test]
 fn view_list_card_omits_absent_project_and_status_segments() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row("PROJ-2", "No project set", "", None, None);
     // selected=1 with a single row (index 0) so this card renders unselected —
@@ -802,8 +787,7 @@ fn view_list_card_omits_absent_project_and_status_segments() {
 
 #[test]
 fn view_list_due_yesterday_renders_overdue_in_red() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row(
         "PROJ-3",
@@ -828,8 +812,7 @@ fn view_list_due_yesterday_renders_overdue_in_red() {
 
 #[test]
 fn view_list_due_today_renders_amber() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row(
         "PROJ-4",
@@ -855,8 +838,7 @@ fn view_list_due_today_renders_amber() {
 
 #[test]
 fn view_list_due_in_five_days_renders_default_style() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row(
         "PROJ-5",
@@ -884,8 +866,7 @@ fn view_list_due_in_five_days_renders_default_style() {
 
 #[test]
 fn view_list_no_duedate_renders_no_due_date_in_default_style() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row("PROJ-6", "No due date issue", "Open", None, None);
     // selected=1 with a single row (index 0) so this card renders unselected —
@@ -909,8 +890,7 @@ fn view_list_no_duedate_renders_no_due_date_in_default_style() {
 // inside the near window ((0..=2), not (0..=1)) — kills the boundary mutant.
 #[test]
 fn view_list_due_in_exactly_two_days_renders_near_amber() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let row = make_card_row(
         "PROJ-8",
@@ -940,8 +920,7 @@ fn view_list_due_in_exactly_two_days_renders_near_amber() {
 // from pt_BR (t() fell back to the untranslated English text).
 #[test]
 fn view_list_no_duedate_pt_br_translates_to_sem_data() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let row = make_card_row("PROJ-9", "No due date issue", "Open", None, None);
     let model = make_list_model_with_rows(vec![row], 1);
@@ -959,8 +938,7 @@ fn view_list_no_duedate_pt_br_translates_to_sem_data() {
 
 #[test]
 fn view_list_selected_card_carries_selected_style_on_all_four_rows() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let rows = vec![
         make_card_row("PROJ-1", "First issue", "Open", None, None),
@@ -995,8 +973,7 @@ fn view_list_selected_card_carries_selected_style_on_all_four_rows() {
 
 #[test]
 fn view_list_windowing_keeps_selected_last_card_fully_visible() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let rows: Vec<IssueRow> = (1..=10)
         .map(|n| make_card_row(&format!("PROJ-{n}"), "An issue", "Open", None, None))
@@ -1023,18 +1000,21 @@ fn view_list_windowing_keeps_selected_last_card_fully_visible() {
 
 #[test]
 fn card_meta_line_omits_absent_project() {
+    let _lang = lock_language("en");
     let row = make_card_row("PROJ-1", "Summary", "Open", None, None);
     assert_eq!(view::card_meta_line(&row, 0), "no due date · Open");
 }
 
 #[test]
 fn card_meta_line_omits_empty_status() {
+    let _lang = lock_language("en");
     let row = make_card_row("PROJ-1", "Summary", "", Some("Proj"), None);
     assert_eq!(view::card_meta_line(&row, 0), "no due date · Proj");
 }
 
 #[test]
 fn card_meta_line_includes_all_segments_when_present() {
+    let _lang = lock_language("en");
     let row = make_card_row("PROJ-1", "Summary", "Open", Some("Proj"), None);
     assert_eq!(view::card_meta_line(&row, 0), "no due date · Open · Proj");
 }
@@ -1144,8 +1124,7 @@ fn list_click_card_windowed_click_resolves_windowed_index_not_zero() {
 
 #[test]
 fn render_issue_table_and_mine_list_object_ignore_duedate_and_project() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let base = make_card_row("PROJ-1", "Fix something", "Open", None, None);
     let with_new_fields = IssueRow {
@@ -1233,8 +1212,7 @@ fn make_issue_with_numbered_comments(
 
 #[test]
 fn view_detail_renders_three_panels_with_details_meta_rows() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_description_and_two_comments("PROJ-60"));
@@ -1318,8 +1296,7 @@ fn make_issue_with_three_named_comments(key: &str) -> crate::models::Issue {
 
 #[test]
 fn view_detail_highlights_only_the_focused_comment() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_three_named_comments("PROJ-80"));
@@ -1352,8 +1329,7 @@ fn view_detail_highlights_only_the_focused_comment() {
 
 #[test]
 fn view_detail_with_no_comment_focused_highlights_no_comment() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_three_named_comments("PROJ-81"));
@@ -1378,8 +1354,7 @@ fn view_detail_with_no_comment_focused_highlights_no_comment() {
 
 #[test]
 fn view_detail_details_panel_renders_created_and_updated_rows_when_present() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -1405,8 +1380,7 @@ fn view_detail_details_panel_renders_created_and_updated_rows_when_present() {
 
 #[test]
 fn view_detail_details_panel_omits_created_and_updated_rows_when_absent() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -1446,8 +1420,7 @@ fn make_issue_with_inline_link(key: &str) -> crate::models::Issue {
 
 #[test]
 fn view_detail_description_shows_visible_url_token_styled_anchor_text_plain() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_inline_link("PROJ-63"));
@@ -1514,8 +1487,7 @@ fn make_issue_with_inline_link_and_comments(key: &str, count: usize) -> crate::m
 
 #[test]
 fn detail_link_at_on_the_url_token_column_returns_the_href() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_inline_link("PROJ-80"));
@@ -1536,8 +1508,7 @@ fn detail_link_at_on_the_url_token_column_returns_the_href() {
 
 #[test]
 fn detail_link_at_on_anchor_text_or_chrome_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_inline_link("PROJ-81"));
@@ -1582,8 +1553,7 @@ fn detail_link_at_on_anchor_text_or_chrome_is_none() {
 
 #[test]
 fn detail_link_at_finds_the_token_at_its_scrolled_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_inline_link_and_comments("PROJ-82", 20));
@@ -1621,8 +1591,7 @@ fn detail_link_at_finds_the_token_at_its_scrolled_row() {
 
 #[test]
 fn detail_link_at_on_a_wrapped_url_fragment_returns_the_complete_href() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let href = format!(
         "https://example.com/{}MARKER{}",
@@ -1702,8 +1671,7 @@ fn make_issue_with_marked_attachments(
 
 #[test]
 fn view_detail_renders_attachments_panel_after_comments_with_link_styled_rows() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut issue = make_issue_with_description_and_two_comments("PROJ-100");
     issue.attachments = vec![
@@ -1759,8 +1727,7 @@ fn view_detail_renders_attachments_panel_after_comments_with_link_styled_rows() 
 
 #[test]
 fn view_detail_attachments_header_and_footnote_translate_under_pt_br() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_attachments(
@@ -1790,8 +1757,7 @@ fn view_detail_attachments_header_and_footnote_translate_under_pt_br() {
 
 #[test]
 fn view_detail_attachments_panel_has_one_blank_row_between_rows_and_italic_dim_footnote_last() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_attachments(
@@ -1847,8 +1813,7 @@ fn view_detail_attachments_panel_has_one_blank_row_between_rows_and_italic_dim_f
 
 #[test]
 fn view_detail_scroll_to_max_offset_exposes_the_last_attachment_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_marked_attachments(
@@ -1872,8 +1837,7 @@ fn view_detail_scroll_to_max_offset_exposes_the_last_attachment_row() {
 
 #[test]
 fn detail_link_at_over_an_attachment_row_returns_its_content_url() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_attachments(
@@ -1902,8 +1866,7 @@ fn detail_link_at_over_an_attachment_row_returns_its_content_url() {
 
 #[test]
 fn detail_link_at_over_the_attachments_header_blank_row_and_footnote_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_attachments(
@@ -1948,8 +1911,7 @@ fn detail_link_at_over_the_attachments_header_blank_row_and_footnote_is_none() {
 
 #[test]
 fn detail_link_at_over_an_attachment_row_resolves_href_at_a_non_zero_scroll_offset() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_marked_attachments("PROJ-106", 20, "z.zip"));
@@ -1972,8 +1934,7 @@ fn detail_link_at_over_an_attachment_row_resolves_href_at_a_non_zero_scroll_offs
 
 #[test]
 fn view_detail_with_no_attachments_renders_no_attachments_panel() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::test_support::issue("PROJ-107"));
@@ -1995,8 +1956,7 @@ fn view_detail_with_no_attachments_renders_no_attachments_panel() {
 
 #[test]
 fn view_detail_attachments_panel_adds_lines_that_push_content_past_the_viewport() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     // 4 numbered comments compose content that fits exactly within a 40-row
     // viewport with no scrollbar (baseline); adding the Attachments panel's
@@ -2040,8 +2000,7 @@ fn view_detail_attachments_panel_adds_lines_that_push_content_past_the_viewport(
 
 #[test]
 fn view_detail_border_title_ellipsizes_a_long_summary() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let long_summary = "A".repeat(200);
     let mut model = make_detail_model(vec![]);
@@ -2068,8 +2027,7 @@ fn view_detail_border_title_ellipsizes_a_long_summary() {
 
 #[test]
 fn view_detail_border_title_falls_back_to_key_when_summary_is_empty() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -2090,8 +2048,7 @@ fn view_detail_border_title_falls_back_to_key_when_summary_is_empty() {
 
 #[test]
 fn view_detail_renders_scrollbar_when_content_exceeds_viewport() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_numbered_comments(
@@ -2113,8 +2070,7 @@ fn view_detail_renders_scrollbar_when_content_exceeds_viewport() {
 
 #[test]
 fn view_detail_renders_no_scrollbar_when_content_fits() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::test_support::issue("PROJ-71"));
@@ -2132,8 +2088,7 @@ fn view_detail_renders_no_scrollbar_when_content_fits() {
 
 #[test]
 fn view_detail_scroll_past_end_clamps_last_line_to_the_bottom_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_numbered_comments(
@@ -2152,8 +2107,8 @@ fn view_detail_scroll_past_end_clamps_last_line_to_the_bottom_row() {
         "an extreme scroll offset must clamp to the last page instead of blank overscroll; got: {text}"
     );
 
-    // header(1 row) + block top border(1 row) + block bottom border(1 row);
-    // the remaining rows are the scrolled content. The very last row must be
+    // The header takes one row, and the block's top and bottom borders take
+    // one row each; the remaining rows are the scrolled content. The very last row must be
     // the outer Comments panel's own closing border (never blank overscroll),
     // and the last comment's marker — a couple of lines above it, inside its
     // own nested card's closing border — must still be visible in the same
@@ -2345,8 +2300,7 @@ fn table_description_adf() -> String {
 
 #[test]
 fn view_detail_description_table_renders_one_line_per_row_with_bold_header() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -2389,8 +2343,7 @@ fn view_detail_description_table_renders_one_line_per_row_with_bold_header() {
 
 #[test]
 fn detail_pos_at_on_chrome_border_or_title_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_detail_model(vec![]);
     let area = Rect::new(0, 0, 60, 20);
@@ -2414,8 +2367,7 @@ fn detail_pos_at_on_chrome_border_or_title_is_none() {
 
 #[test]
 fn selection_text_over_a_word_extracts_exactly_that_word_no_chrome() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     // A description word unrelated to the issue summary/Title meta row (both
@@ -2465,8 +2417,7 @@ fn selection_text_over_a_word_extracts_exactly_that_word_no_chrome() {
 
 #[test]
 fn detail_pos_at_both_columns_of_a_double_width_glyph_map_to_the_same_char_index() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -2521,8 +2472,7 @@ fn detail_pos_at_both_columns_of_a_double_width_glyph_map_to_the_same_char_index
 
 #[test]
 fn selection_text_across_a_wrap_seam_is_contiguous_with_no_loss_or_duplication() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     // Wide enough to guarantee the leading run alone spans more than one
     // visual row, so the trailing run's first char necessarily lands on a
@@ -2575,6 +2525,7 @@ fn selection_text_across_a_wrap_seam_is_contiguous_with_no_loss_or_duplication()
 
 #[test]
 fn selection_text_is_identical_regardless_of_the_current_scroll_offset() {
+    let _lang = lock_language("en");
     let mut model = make_detail_model(vec![]);
     model.detail = Some(make_issue_with_numbered_comments(
         "PROJ-93",
@@ -2598,14 +2549,11 @@ fn selection_text_is_identical_regardless_of_the_current_scroll_offset() {
         "scrolling must never move a selection stored in logical coordinates (BDR 0011 S8)"
     );
     assert!(unscrolled.is_some());
-
-    set_language("en");
 }
 
 #[test]
 fn detail_pos_at_clamped_row_above_content_clamps_to_the_first_content_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_detail_model(vec![]);
     let area = Rect::new(0, 0, 60, 20);
@@ -2627,8 +2575,7 @@ fn detail_pos_at_clamped_row_above_content_clamps_to_the_first_content_row() {
 
 #[test]
 fn detail_pos_at_clamped_row_below_content_clamps_to_the_last_content_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_detail_model(vec![]);
     let area = Rect::new(0, 0, 60, 20);
@@ -2648,8 +2595,7 @@ fn detail_pos_at_clamped_row_below_content_clamps_to_the_last_content_row() {
 
 #[test]
 fn detail_pos_at_clamped_column_past_line_end_clamps_to_the_full_line_length() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     let area = Rect::new(0, 0, 60, 20);
@@ -2678,8 +2624,7 @@ fn detail_pos_at_clamped_column_past_line_end_clamps_to_the_full_line_length() {
 
 #[test]
 fn selection_text_spanning_two_logical_lines_joins_with_a_newline() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -2722,8 +2667,7 @@ fn selection_text_spanning_two_logical_lines_joins_with_a_newline() {
 
 #[test]
 fn render_detail_panels_highlights_exactly_the_selected_chars_reversed() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_detail_model(vec![]);
     model.detail = Some(crate::models::Issue {
@@ -2786,8 +2730,7 @@ fn render_detail_panels_highlights_exactly_the_selected_chars_reversed() {
 
 #[test]
 fn view_projects_renders_title_rows_and_footer_hint() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_projects_model(vec![
         project_row("ALPHA", "Alpha Project"),
@@ -2816,8 +2759,7 @@ fn view_projects_renders_title_rows_and_footer_hint() {
 
 #[test]
 fn view_projects_styles_the_selected_row() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let mut model = make_projects_model(vec![
         project_row("ALPHA", "Alpha Project"),
@@ -2846,8 +2788,7 @@ fn view_projects_styles_the_selected_row() {
 
 #[test]
 fn view_projects_empty_shows_localized_empty_state_en() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let model = make_projects_model(vec![]);
     let buf = render_to_buffer(&model, 80, 20);
@@ -2863,8 +2804,7 @@ fn view_projects_empty_shows_localized_empty_state_en() {
 
 #[test]
 fn view_projects_pt_br_title_hint_and_empty_state() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let model = make_projects_model(vec![]);
     let buf = render_to_buffer(&model, 80, 20);
@@ -2975,6 +2915,7 @@ fn compose_modal_dims_the_backdrop_and_boxes_at_roughly_seventy_percent() {
 
 #[test]
 fn compose_modal_renders_localized_title_typed_buffer_and_hint() {
+    let _lang = lock_language("en");
     let model = make_composing_detail_model("hello world", ComposeStatus::Idle);
 
     let buf = render_to_buffer(&model, 60, 24);
@@ -3005,6 +2946,7 @@ fn compose_modal_renders_a_multiline_buffer_as_separate_lines() {
 
 #[test]
 fn compose_modal_renders_submitting_status_inside_the_box() {
+    let _lang = lock_language("en");
     let model = make_composing_detail_model("hi", ComposeStatus::Submitting);
 
     let buf = render_to_buffer(&model, 60, 24);
@@ -3045,8 +2987,7 @@ fn compose_modal_does_not_render_when_no_compose_is_open() {
 
 #[test]
 fn confirm_button_at_hits_the_yes_and_no_buttons() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let area = Rect::new(0, 0, 60, 24);
     let content = view::confirm_modal_content();
@@ -3074,8 +3015,7 @@ fn confirm_button_at_hits_the_yes_and_no_buttons() {
 
 #[test]
 fn confirm_button_at_on_the_backdrop_or_body_is_none() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let area = Rect::new(0, 0, 60, 24);
 

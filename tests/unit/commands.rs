@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::Config;
-use crate::i18n::{set_language, LANG_MUTEX};
+use crate::i18n::set_language;
 use crate::models::{Issue, IssueComment};
 use crate::store::cache::{IssueCache, TaskCache};
 use crate::store::instances::{Instance, InstanceRepository};
@@ -78,6 +78,7 @@ fn pick_instance_by_name_returns_correct_index() {
 
 #[test]
 fn pick_instance_unknown_name_returns_err2() {
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let inst = sample_instance(&store, "work");
     let mut err = Vec::new();
@@ -101,8 +102,7 @@ fn pick_instance_multiple_no_name_returns_err2() {
 
 #[test]
 fn setup_list_empty_prints_no_instances() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = InstanceRepository::new(store.conn());
     let mut out = Vec::new();
@@ -113,8 +113,7 @@ fn setup_list_empty_prints_no_instances() {
 
 #[test]
 fn setup_list_with_instances_prints_header_and_rows() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     sample_instance(&store, "work");
     let repo = InstanceRepository::new(store.conn());
@@ -142,6 +141,7 @@ fn setup_remove_missing_instance_returns_2() {
 
 #[test]
 fn setup_remove_existing_instance_returns_0() {
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     sample_instance(&store, "work");
     let repo = InstanceRepository::new(store.conn());
@@ -158,10 +158,7 @@ fn setup_remove_existing_instance_returns_0() {
 /// Scenario 1: add happy path — valid fields + good token => stores instance + prints saved + OK
 #[tokio::test]
 async fn setup_add_happy_path_stores_instance_and_prints_saved() {
-    {
-        let _lock = LANG_MUTEX.lock().unwrap();
-        set_language("en");
-    }
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -216,6 +213,7 @@ async fn setup_add_happy_path_stores_instance_and_prints_saved() {
 /// Scenario 2: missing required field (no email) => required-fields error, exit 2, nothing stored
 #[tokio::test]
 async fn setup_add_missing_field_returns_exit2_and_stores_nothing() {
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = InstanceRepository::new(store.conn());
     let mut out = Vec::new();
@@ -296,8 +294,7 @@ async fn setup_add_bad_token_prints_connectivity_failed_and_exits_1() {
 /// Scenario 4: list empty => empty notice, exit 0 (also verified in setup_list_empty_prints_no_instances)
 #[test]
 fn setup_add_scenario4_list_empty_exit0() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = InstanceRepository::new(store.conn());
     let mut out = Vec::new();
@@ -313,8 +310,7 @@ fn setup_add_scenario4_list_empty_exit0() {
 /// Scenario 5: remove missing => not-found, exit 2
 #[test]
 fn setup_remove_missing_prints_not_found_exit2() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = InstanceRepository::new(store.conn());
     let cache = TaskCache::new(store.conn());
@@ -1101,6 +1097,7 @@ async fn current_core_branch_without_key_exits_2_with_zero_requests() {
 /// BDR 0004 Scenario 5 (no-repo): branch is None → error message, exit 2, zero requests.
 #[tokio::test]
 async fn current_core_not_in_git_repo_exits_2_with_zero_requests() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     let (_dir, store) = make_store();
@@ -1375,6 +1372,7 @@ fn save_instance_for_server(store: &Store, server: &MockServer, name: &str) -> I
 /// The wiremock-captured request must carry the exact JQL in its query string.
 #[tokio::test]
 async fn mine_core_builds_exact_jql_renders_table_and_exits_0() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     let issues = serde_json::json!([
@@ -1470,6 +1468,7 @@ fn urlencoding_decode(s: &str) -> String {
 /// BDR 0005 Scenario 5 (AC2): empty result -> stdout "No issues.", exit 0.
 #[tokio::test]
 async fn mine_core_empty_result_prints_no_issues_and_exits_0() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -1744,6 +1743,7 @@ async fn mine_core_limit_sends_max_results_in_request() {
 /// The wiremock-captured request URL must carry the exact user JQL unchanged.
 #[tokio::test]
 async fn search_core_sends_jql_verbatim_renders_table_exits_0() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
     let user_jql = "project = PROJ ORDER BY updated DESC";
 
@@ -1904,6 +1904,7 @@ async fn search_core_invalid_jql_400_exits_1_with_invalid_jql_prefix() {
 /// AC4 (BDR 0005 Scn 5 — empty): empty search result prints exactly 'No issues.' and exits 0.
 #[tokio::test]
 async fn search_core_empty_result_prints_no_issues_exits_0() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -1941,6 +1942,7 @@ async fn search_core_empty_result_prints_no_issues_exits_0() {
 /// Edge: search_core with None jql exits 2, zero network calls.
 #[tokio::test]
 async fn search_core_none_jql_exits_2_no_network() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -1972,6 +1974,7 @@ async fn search_core_none_jql_exits_2_no_network() {
 /// Edge: search_core with whitespace-only jql exits 2, zero network calls.
 #[tokio::test]
 async fn search_core_blank_jql_exits_2_no_network() {
+    let _lang = lock_language("en");
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -2000,8 +2003,7 @@ async fn search_core_blank_jql_exits_2_no_network() {
 
 #[test]
 fn setup_language_pt_br_hyphen_stores_canonical_pt_underscore_br_exits_0() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = crate::store::settings::SettingsRepository::new(store.conn());
     let mut out = Vec::new();
@@ -2025,8 +2027,7 @@ fn setup_language_pt_br_hyphen_stores_canonical_pt_underscore_br_exits_0() {
 
 #[test]
 fn setup_language_none_after_set_prints_current_language() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = crate::store::settings::SettingsRepository::new(store.conn());
 
@@ -2052,8 +2053,7 @@ fn setup_language_none_after_set_prints_current_language() {
 
 #[test]
 fn setup_language_unsupported_code_prints_error_exits_2_stores_nothing() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = crate::store::settings::SettingsRepository::new(store.conn());
     let mut out = Vec::new();
@@ -2076,8 +2076,7 @@ fn setup_language_unsupported_code_prints_error_exits_2_stores_nothing() {
 
 #[test]
 fn setup_language_en_stores_en_exits_0() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
     let (_dir, store) = make_store();
     let repo = crate::store::settings::SettingsRepository::new(store.conn());
     let mut out = Vec::new();
@@ -2133,11 +2132,9 @@ const EXPECTED_REAUTH_PT_BR: &str =
 /// `set_language`, ADR pattern for language-independent async tests): this
 /// test asserts on translated (`tf()`) output, so a concurrent test flipping
 /// the process-global language mid-fetch would flake the assertion.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn get_core_401_prints_reauth_message_and_exits_nonzero() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2176,13 +2173,11 @@ async fn get_core_401_prints_reauth_message_and_exits_nonzero() {
     server.verify().await;
 }
 
-/// AC2: the same 401 guidance renders in pt_BR under LANG_MUTEX (held across
-/// the `.await`s for the same reason as the sibling English test above).
-#[allow(clippy::await_holding_lock)]
+/// The same 401 guidance renders in pt_BR under the language guard (held
+/// across the `.await`s for the same reason as the sibling English test above).
 #[tokio::test]
 async fn get_core_401_renders_pt_br_reauth_message() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2225,11 +2220,9 @@ async fn get_core_401_renders_pt_br_reauth_message() {
 /// AC4 no-drift guard: a non-401 error on get_core keeps its pre-existing
 /// rendering — the 404 path stays exactly `Error: issue '<key>' not found.`,
 /// never the re-auth message.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn get_core_404_error_rendering_unchanged_by_reauth_mapping() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2275,11 +2268,9 @@ async fn get_core_404_error_rendering_unchanged_by_reauth_mapping() {
 
 /// AC2: mine_core on a 401 prints the exact actionable re-auth message to
 /// stderr and exits non-zero.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn mine_core_401_prints_reauth_message_and_exits_nonzero() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2308,11 +2299,9 @@ async fn mine_core_401_prints_reauth_message_and_exits_nonzero() {
 
 /// AC4 no-drift guard: a non-401 error on mine_core keeps rendering
 /// `Error fetching issues: <detail>`, never the re-auth message.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn mine_core_500_error_rendering_unchanged_by_reauth_mapping() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2375,11 +2364,9 @@ async fn tui_run_search_401_yields_typed_unauthorized_with_instance() {
 /// AC2: search_core on a 401 prints the exact actionable re-auth message to
 /// stderr and exits non-zero (rather than the 'invalid JQL'/'Error running
 /// search' non-401 branches).
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn search_core_401_prints_reauth_message_and_exits_nonzero() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -2432,11 +2419,9 @@ async fn received_body_text(server: &MockServer) -> String {
 
 /// Scenario 1: flag body + explicit key -> add_comment called once with the
 /// key and verbatim body, confirmation on stdout, exit 0.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn comment_core_flag_body_explicit_key_posts_and_confirms() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     mount_comment_endpoint(
@@ -2563,11 +2548,9 @@ async fn comment_core_json_flag_emits_single_minified_success_line() {
 }
 
 /// Scenario 4: CommentBody::None -> exit 2, 'no comment body', add_comment NOT called.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn comment_core_no_body_exits_2_and_makes_zero_requests() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     // No mock mounted for the comment endpoint — any POST would panic.
@@ -2790,11 +2773,9 @@ async fn comment_core_other_error_json_emits_ok_false() {
 
 /// Scenario 7 (401): the same re-auth message the E2 tests assert appears,
 /// non-zero exit, no success line.
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn comment_core_401_prints_reauth_message_and_exits_nonzero() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("en");
+    let _lang = lock_language("en");
 
     let server = MockServer::start().await;
     mount_comment_endpoint(&server, "PROJ-42", ResponseTemplate::new(401)).await;
@@ -2830,11 +2811,9 @@ async fn comment_core_401_prints_reauth_message_and_exits_nonzero() {
 
 /// pt-BR: the confirmation and 'no comment body' usage strings render
 /// translated (existing i18n test discipline, lock held across the `.await`s).
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn comment_core_pt_br_renders_translated_confirmation_and_usage_error() {
-    let _lock = LANG_MUTEX.lock().unwrap();
-    set_language("pt_BR");
+    let _lang = lock_language("pt_BR");
 
     let server = MockServer::start().await;
     mount_comment_endpoint(

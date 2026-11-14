@@ -1,5 +1,34 @@
 use crate::models::{Attachment, Issue, IssueAssignee, IssueComment, ProjectRow};
 
+/// Holds `LANG_MUTEX` with a chosen display language for one test, and puts the
+/// language back to "en" before releasing the lock when it drops. A test whose
+/// assertion depends on the display language takes this guard first, even when
+/// it wants English, so no other test can switch the language underneath it.
+pub(crate) struct LanguageGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for LanguageGuard {
+    fn drop(&mut self) {
+        crate::i18n::set_language("en");
+    }
+}
+
+/// Lock the display language and set it to `lang` for the guard's lifetime.
+///
+/// A poisoned lock (an earlier test panicked while holding it) is recovered:
+/// the language is rewritten right here, so the stale state is harmless.
+/// Held across an `.await` in a `#[tokio::test]`, the guard stays on the test
+/// thread (the runtime is current-thread and the future never moves), so it
+/// cannot deadlock; other tests simply wait on the lock.
+pub(crate) fn lock_language(lang: &str) -> LanguageGuard {
+    let lock = crate::i18n::LANG_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::i18n::set_language(lang);
+    LanguageGuard { _lock: lock }
+}
+
 // --- ADF fixture builders (shared by render.rs and tui.rs ADF/description/comment tests) ---
 //
 // These assemble ADF-JSON via `serde_json::json!` instead of repeating the
