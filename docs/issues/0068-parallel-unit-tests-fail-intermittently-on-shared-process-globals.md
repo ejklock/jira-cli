@@ -2,7 +2,7 @@
 type: Issue
 title: Parallel unit tests fail intermittently on shared process globals
 description: cargo test in parallel fails about 2 runs in 5 on trunk, a different test each time (language, cwd, TTL boundary); the serial run is green.
-status: open
+status: closed
 timestamp: 2026-11-14T16:51:10Z
 ---
 
@@ -34,3 +34,7 @@ Find each shared global the failing tests read, serialize or inject it, and make
 
 - S1: the task-list cache read takes an injectable `now`, and the boundary test uses it | files: src/store/cache.rs, tests/unit/store/cache.rs | after: none
 - S2: every language-dependent test holds `LANG_MUTEX` with its language set, through one shared helper; the parallel suite is green in 10 consecutive runs | files: tests/unit/** (except store/cache.rs), src/i18n.rs (test helper only, if it must live there) | after: S1
+
+### Outcome
+
+Delivered in commit 83cd0f7: the task-list cache decides freshness through `read_at(now)`, and every language-dependent test takes `lock_language` from `tests/unit/support.rs`. Proof: ten consecutive parallel `cargo test` runs green, and six more by review; the serial run passes 1044 tests; a probe that shows `pt_BR` to any test not holding the lock fails 19 unit tests on main and none after. Left as is: about 100 `set_language("en")` calls at test ends that the guard already makes redundant (review nit).
