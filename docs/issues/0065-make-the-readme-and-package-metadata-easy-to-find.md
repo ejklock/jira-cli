@@ -21,6 +21,10 @@ Excluded: the unofficial notice text, which stays as is.
 ### Acceptance
 
 - AC1: the README's first screen says what `jira` is, shows the badges and the feature list, and the quickstart includes the plugin step. (`verify_by: inspection`)
-- AC2: `cargo metadata` shows description, license MIT, repository, homepage, keywords and categories. (`verify_by: command`)
+- AC2: `cargo metadata` shows description, license MIT, repository, readme, keywords and categories; no `homepage`, which cargo reports as redundant with `repository` when both name the repository. (`verify_by: command`)
 - AC3: `gh repo view --json description,repositoryTopics,homepageUrl` shows the approved values. (`verify_by: command`)
 - CC: outward text names no internal tool. (`verify_by: inspection`)
+
+### Decision
+
+- GitHub description "Unofficial Jira Cloud CLI, terminal UI and MCP server: read issues, post comments and download attachments from the terminal or an AI coding agent.", topics jira, jira-cloud, cli, tui, mcp, model-context-protocol, ai-agent, claude-code, codex, opencode, rust, sqlite, and an empty homepage (owner, 2026-11-14). Not taken: description only; no change.

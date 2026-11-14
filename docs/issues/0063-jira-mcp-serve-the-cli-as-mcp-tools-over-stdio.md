@@ -2,7 +2,7 @@
 type: Issue
 title: "jira mcp: serve the CLI as MCP tools over stdio"
 description: Add jira mcp, an rmcp stdio server with jira_read, jira_write and jira_download_attachments as adapters over the command cores, flat schemas, WAL store.
-status: open
+status: closed
 timestamp: 2026-11-14T15:37:08Z
 ---
 
@@ -39,3 +39,7 @@ Excluded: HTTP transport, MCP resources and prompts, `browse`, `setup`, transiti
 - `docker compose run --rm dev cargo clippy --all-targets -- -D warnings`
 - `docker compose run --rm dev cargo fmt --check`
 - `docker compose run --rm dev cargo test --test comment_policy`
+
+### Outcome
+
+Delivered in PR #5 (merge fb9ca85): commits for the MCP server, the expect() removal and the review fixes. Proof: `cargo test -- --test-threads=1` 1039 passed; stdio tests compare every tool result byte for byte with the CLI `--json`; CI green.
