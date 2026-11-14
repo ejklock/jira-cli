@@ -1,12 +1,34 @@
-# jira-cli
+# jira-cli — Jira Cloud CLI, terminal UI and MCP server
 
-**Unofficial** command-line tool and interactive terminal UI (TUI) for reading
-and browsing [Jira Cloud](https://www.atlassian.com/software/jira) issues.
-Supports multi-instance configuration, local-first SQLite cache, and outputs
-human-readable or JSON issue views.
+[![CI](https://github.com/ejklock/jira-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ejklock/jira-cli/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/ejklock/jira-cli)](https://github.com/ejklock/jira-cli/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/ejklock/jira-cli)](LICENSE)
 
-The application ships as a single self-contained binary (`jira`) built with
-Rust. No interpreter or runtime is required on the target.
+**Unofficial** command-line client, interactive terminal UI (TUI) and
+[MCP](https://modelcontextprotocol.io) server for
+[Jira Cloud](https://www.atlassian.com/software/jira) (Jira Server and Data
+Center are not supported). Read and browse your issues, post comments and
+download attachments from the terminal, or let an AI coding agent (Claude Code,
+Codex, OpenCode, Pi) do it for you through the `jira mcp` server and the
+`jira-ticket` skill.
+
+One self-contained Rust binary (`jira`) for Linux (x86\_64 and arm64), macOS and
+Windows. No interpreter or runtime is required.
+
+**Features**
+
+- `jira mine` and `jira search`: your open issues, or any JQL search.
+- `jira get` / `jira current`: an issue by key or URL, or the one for your
+  current git branch, with comments; `--download-attachments` saves its
+  attachments.
+- `jira browse`: a keyboard-driven TUI over your issues.
+- `jira comment`: post a comment to an issue.
+- `--json` on `get`, `current`, `mine` and `search`, for scripts and agents.
+- `jira mcp`: the same commands as MCP tools (`jira_read`, `jira_write`,
+  `jira_download_attachments`), installed in one step by the
+  [Claude Code, Codex, OpenCode and Pi plugins](#plugins).
+- Several Jira instances at once, with a local-first SQLite cache.
+- English and Brazilian Portuguese interface.
 
 > ## Unofficial — not affiliated with Atlassian
 >
@@ -34,6 +56,14 @@ jira setup add --name work --url https://yourorg.atlassian.net --email you@examp
 
 # 3. Fetch an issue
 jira get PROJ-123
+```
+
+To let an AI coding agent use it, add the plugin to your harness (see
+[Plugins](#plugins) for Codex, OpenCode and Pi):
+
+```sh
+claude plugin marketplace add ejklock/jira-cli
+claude plugin install jira-cli@jira-cli
 ```
 
 Then, day to day:
@@ -76,6 +106,7 @@ PATH, and make it executable (`chmod +x jira` on Unix).
 | Platform | Asset |
 |---|---|
 | Linux x86\_64 | `jira-linux-x86_64` |
+| Linux arm64 | `jira-linux-arm64` |
 | macOS x86\_64 (Intel) | `jira-macos-x86_64` |
 | macOS arm64 (Apple Silicon) | `jira-macos-arm64` |
 | Windows x86\_64 | `jira-windows-x86_64.exe` |
@@ -257,6 +288,12 @@ your `PATH`; an older `jira` lists the server but cannot start it. Run
 The plugins and the [skill installer](#install-the-skill-into-your-agent-harness)
 below give the agent the same skill. `install-skill.sh` stays for GitHub Copilot
 and Cursor, which have no plugin, and for anyone who wants only the skill.
+
+| Way | Harnesses | What the agent gets |
+|---|---|---|
+| Plugin (above) | Claude Code, Codex, OpenCode, Pi | The `jira mcp` tools and the skill in one install step (Pi: the skill) |
+| `jira mcp` by hand | Any MCP client | The `jira_read`, `jira_write` and `jira_download_attachments` tools |
+| [`install-skill.sh`](#install-the-skill-into-your-agent-harness) | Claude Code, Codex, OpenCode, Pi, Cursor, GitHub Copilot | The skill, which drives `jira --json` |
 
 The marketplace and the npm package are unofficial and not affiliated with
 Atlassian.

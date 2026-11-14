@@ -2,7 +2,7 @@
 type: Issue
 title: clippy needless_bool in the comment-policy test fails -D warnings on the current dev image
 description: tests/comment_policy.rs:107 trips clippy::needless_bool with the dev image's newer clippy, so clippy --all-targets -D warnings exits 101 on an unchanged file.
-status: open
+status: closed
 timestamp: 2026-11-14T16:31:24Z
 ---
 
@@ -24,3 +24,7 @@ Fix the `needless_bool` expression without changing what the comment-policy test
 ### Decision
 
 - Fixed as an extra commit in PR #5 (issue 0063), whose CI it turned red (owner, 2026-11-14). Not taken: its own PR from main before PR #5; pinning the Rust toolchain with an ADR.
+
+### Outcome
+
+Fixed in PR #5 (commit 26081a8, merge fb9ca85): the expression returns its condition directly. Proof: `cargo clippy --all-targets -- -D warnings` exit 0; CI Clippy green.

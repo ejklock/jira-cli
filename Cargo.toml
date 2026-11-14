@@ -2,6 +2,12 @@
 name = "jira"
 version = "0.1.0"
 edition = "2021"
+description = "Unofficial Jira Cloud CLI, terminal UI and MCP server: read issues, post comments and download attachments from the terminal or an AI coding agent"
+license = "MIT"
+repository = "https://github.com/ejklock/jira-cli"
+readme = "README.md"
+keywords = ["jira", "cli", "tui", "mcp", "jira-cloud"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "jira"
