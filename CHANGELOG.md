@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
+### Upgrade note
+
+The store now opens in WAL mode. A `jira` older than 0.2.0 running at the same
+time as a 0.2.0 `jira mcp` may report "database is locked" when it switches
+the journal mode; it runs normally once it is the only process using the store.
+
 ### Changed
 
 - Renamed the agent skill identifier from `jira` to `jira-ticket`
