@@ -104,12 +104,8 @@ fn is_commented_out_code(body: &str) -> bool {
         }
     }
     let last = trimmed.chars().last().unwrap_or(' ');
-    if matches!(last, ';' | '{' | '}')
+    matches!(last, ';' | '{' | '}')
         && (trimmed.contains('(') || trimmed.contains('=') || trimmed.contains("::"))
-    {
-        return true;
-    }
-    false
 }
 
 fn classify_comment(line: &str) -> Option<ViolationKind> {

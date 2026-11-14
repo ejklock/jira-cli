@@ -20,3 +20,7 @@ Fix the `needless_bool` expression without changing what the comment-policy test
 
 - AC1: `docker compose run --rm dev cargo clippy --all-targets -- -D warnings` exits 0. (`verify_by: command`)
 - AC2: `docker compose run --rm dev cargo test --test comment_policy` passes with the same test count. (`verify_by: test`)
+
+### Decision
+
+- Fixed as an extra commit in PR #5 (issue 0063), whose CI it turned red (owner, 2026-11-14). Not taken: its own PR from main before PR #5; pinning the Rust toolchain with an ADR.
