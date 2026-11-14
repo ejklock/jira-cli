@@ -2,7 +2,7 @@
 type: Issue
 title: Make the README and package metadata easy to find
 description: README opens with what jira is, badges and a feature list, and the quickstart gains the plugin step; Cargo.toml and the GitHub repo carry description, license, keywords and topics.
-status: open
+status: closed
 timestamp: 2026-11-14T15:37:10Z
 ---
 
@@ -28,3 +28,7 @@ Excluded: the unofficial notice text, which stays as is.
 ### Decision
 
 - GitHub description "Unofficial Jira Cloud CLI, terminal UI and MCP server: read issues, post comments and download attachments from the terminal or an AI coding agent.", topics jira, jira-cloud, cli, tui, mcp, model-context-protocol, ai-agent, claude-code, codex, opencode, rust, sqlite, and an empty homepage (owner, 2026-11-14). Not taken: description only; no change.
+
+### Outcome
+
+Delivered in PR #7: README first screen, badges, feature list, quickstart plugin step, agent options table; Cargo.toml metadata without `homepage` (cargo flags it as redundant with `repository`). GitHub description and topics applied with `gh repo edit` on 2026-11-14; `gh repo view` shows them.

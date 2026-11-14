@@ -2,7 +2,7 @@
 type: Issue
 title: Install jira in Claude Code, Codex, OpenCode and Pi as a plugin
 description: A jira-cli git-marketplace plugin for Claude Code and Codex and one jira-cli-agent npm package for OpenCode and Pi, each wiring jira mcp and the shared skill stub.
-status: open
+status: closed
 timestamp: 2026-11-14T15:37:09Z
 ---
 
@@ -42,3 +42,7 @@ Excluded: `npm publish` (owner, 2FA), pushing, the release; bundling the binary;
 - S1: Claude Code and Codex plugin `jira-cli`, both marketplace files, skill stub copy and its byte-equality/name/version check with a planted-drift test | files: plugins/jira-cli/**, .claude-plugin/marketplace.json, .agents/plugins/marketplace.json, scripts/check-skill-stubs.sh, scripts/test-check-skill-stubs.sh | after: issue 0063
 - S2: npm workspace root and the `jira-cli-agent` package (OpenCode config hook, Pi skill via the `pi` key, README, node --test cases) | files: package.json, package-lock.json, packages/jira-cli-agent/** | after: S1
 - S3: proof script installing each plugin in a temporary home with each harness's CLI, CI wiring for the stub check, its test and node --test, README install step per harness | files: scripts/prove-plugins.sh, .github/workflows/ci.yml, README.md | after: S2
+
+### Outcome
+
+Delivered in PR #6 (merge 4ea06ff): plugin, marketplaces and stub check (S1), the `jira-cli-agent` package (S2), the proof script, CI and README (S3). Proof: `PI_BIN=/usr/bin/pi sh scripts/prove-plugins.sh` ok for Claude Code 2.1.322, Codex 0.167.0, OpenCode 1.19.5 and Pi 1.5.2 in temporary homes, with a planted break per harness failing it; `node --test 'packages/jira-cli-agent/*.test.ts'` runs 5 tests on Node 24. Review found `node --test <dir>` ran no tests on Node 24 and it was fixed before merge. Not done here: `npm publish` (owner).

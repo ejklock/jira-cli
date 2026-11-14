@@ -7,8 +7,6 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 
 ## Open
 
-* [0064 — Install jira in Claude Code, Codex, OpenCode and Pi as a plugin](0064-install-jira-in-claude-code-codex-opencode-and-pi-as-a-plugin.md) - open
-* [0065 — Make the README and package metadata easy to find](0065-make-the-readme-and-package-metadata-easy-to-find.md) - open
 * [0066 — Release 0.2.0 with the MCP server and agent plugins](0066-release-0-2-0-with-the-mcp-server-and-agent-plugins.md) - open
 * [0068 — Parallel unit tests fail intermittently on shared process globals](0068-parallel-unit-tests-fail-intermittently-on-shared-process-globals.md) - open
 
@@ -77,4 +75,6 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 * [0061 — D2b — jira get --download-attachments writes every attachment to the config downloads dir](0061-d2b-jira-get-download-attachments-writes-every-attachment-to-the-config-downloads-dir.md) - done
 * [0062 — D1 — browse TUI opens an image attachment in the OS viewer](0062-d1-browse-tui-opens-an-image-attachment-in-the-os-viewer.md) - done
 * [0063 — jira mcp: serve the CLI as MCP tools over stdio](0063-jira-mcp-serve-the-cli-as-mcp-tools-over-stdio.md) - closed
+* [0064 — Install jira in Claude Code, Codex, OpenCode and Pi as a plugin](0064-install-jira-in-claude-code-codex-opencode-and-pi-as-a-plugin.md) - closed
+* [0065 — Make the README and package metadata easy to find](0065-make-the-readme-and-package-metadata-easy-to-find.md) - closed
 * [0067 — clippy needless_bool in the comment-policy test fails -D warnings on the current dev image](0067-clippy-needless-bool-in-the-comment-policy-test-fails-d-warnings-on-the-current-dev-image.md) - closed
