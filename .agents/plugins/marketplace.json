@@ -1,0 +1,11 @@
+{
+  "name": "jira-cli",
+  "plugins": [
+    {
+      "name": "jira-cli",
+      "source": { "source": "local", "path": "./plugins/jira-cli" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

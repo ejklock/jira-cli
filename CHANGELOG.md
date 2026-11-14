@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Agent plugins: the `jira-cli` plugin for Claude Code and Codex (installed
+  from this repository's marketplace) and the `jira-cli-agent` npm package for
+  OpenCode and Pi, each giving the `jira mcp` tools and the `jira-ticket`
+  skill (Pi: the skill). They need `jira` 0.2.0 or later.
+  `scripts/prove-plugins.sh` installs each one in a temporary home to prove it.
 - `jira mcp` serves the CLI as an MCP server over stdio
   ([ADR 0031](docs/adr/0031-jira-mcp-serves-the-cli-as-three-mcp-tools-over-stdio.md)).
   Three tools, each operation an adapter over the existing `--json` command

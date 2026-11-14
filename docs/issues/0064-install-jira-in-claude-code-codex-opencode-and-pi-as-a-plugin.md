@@ -23,6 +23,8 @@ Excluded: `npm publish` (owner, 2FA), pushing, the release; bundling the binary;
 - Names `jira-cli` (plugin, MCP server) and `jira-cli-agent` (npm), owner 2026-11-14. Not taken: `jira-ticket` / `jira-ticket-agent`; `jira` / `jira-agent`.
 - Layout and proof mirror active-collab-cli's `plugins/`, `packages/`, `scripts/check-skill-stubs.sh` and `scripts/prove-plugins.sh`.
 - The proof never touches the owner's real harness configs: temporary `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, OpenCode config and Pi home only.
+- The plugin starts `jira mcp`, which the released 0.1.0 binary lacks (reviewer of S1, 2026-11-14: `claude mcp list` shows "Failed to connect" with `/usr/local/bin/jira` 0.1.0 and "Connected" with the branch build). The marketplace files reach `main` only together with the 0.2.0 release of issue 0066, and the README states that the plugin needs `jira` 0.2.0 or later (session, 2026-11-14).
+- The proof asserts the MCP server is listed, not that it connects: a connection needs the branch's or a released 0.2.0 binary on PATH.
 
 ### Acceptance
 

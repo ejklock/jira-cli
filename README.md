@@ -237,6 +237,32 @@ JIRA_CLI_LANG=pt-BR jira browse
 
 ---
 
+## Plugins
+
+Give an AI coding agent your Jira issues in one install step per harness. The
+plugin adds the `jira mcp` tools and the `jira-ticket` skill (Pi: the skill,
+which drives `jira --json`).
+
+| Harness | Install |
+|---|---|
+| Claude Code | `claude plugin marketplace add ejklock/jira-cli`, then `claude plugin install jira-cli@jira-cli` |
+| Codex | `codex plugin marketplace add ejklock/jira-cli`, then `codex plugin add jira-cli@jira-cli` |
+| OpenCode | add `jira-cli-agent` to `plugin` in `opencode.json`: `{ "plugin": ["jira-cli-agent"] }` |
+| Pi | `pi install npm:jira-cli-agent` |
+
+The plugins need `jira` **0.2.0 or later**, which has the `mcp` subcommand, on
+your `PATH`; an older `jira` lists the server but cannot start it. Run
+`jira setup add` once for your instance.
+
+The plugins and the [skill installer](#install-the-skill-into-your-agent-harness)
+below give the agent the same skill. `install-skill.sh` stays for GitHub Copilot
+and Cursor, which have no plugin, and for anyone who wants only the skill.
+
+The marketplace and the npm package are unofficial and not affiliated with
+Atlassian.
+
+---
+
 ## Agent skill
 
 `jira` ships a self-describing **agent skill** for the `--json` read contract,
