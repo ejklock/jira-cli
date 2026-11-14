@@ -2,7 +2,7 @@
 type: Issue
 title: Release 0.2.0 with the MCP server and agent plugins
 description: Bump Cargo.toml and every plugin and package manifest to 0.2.0, close the Unreleased changelog and tag v0.2.0; fixes the binary reporting 0.1.0 since v0.1.1.
-status: open
+status: closed
 timestamp: 2026-11-14T15:37:11Z
 ---
 
@@ -27,3 +27,7 @@ Excluded: `npm publish` (owner, 2FA).
 - AC1: `jira --version` of the release build prints 0.2.0. (`verify_by: command`)
 - AC2: the stub check passes with every manifest at 0.2.0. (`verify_by: command`)
 - AC3: the release workflow of `v0.2.0` publishes every target's binary. (`verify_by: command`)
+
+### Outcome
+
+Released as v0.2.0 on 2026-11-14: PRs #5 (`jira mcp`), #6 (plugins and `jira-cli-agent`), #7 (README and metadata) and #8 (bump) merged into main, tag `v0.2.0` at be076db pushed by name. The release workflow's six jobs are green and the release carries jira-linux-arm64, jira-linux-x86_64, jira-macos-arm64, jira-macos-x86_64 and jira-windows-x86_64.exe; the downloaded jira-linux-x86_64 prints `jira 0.2.0` and has the `mcp` subcommand. Not done here: `npm publish` of `jira-cli-agent` 0.2.0 (owner, 2FA).
