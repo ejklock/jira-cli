@@ -145,6 +145,39 @@ posting (Jira Cloud stores comment bodies as ADF). The `--json` write result is:
 
 On failure it is `{"ok":false,"error":"..."}` — never a false success.
 
+## Calling the CLI as MCP tools — `jira mcp`
+
+`jira mcp` serves the same commands as MCP tools over stdio, so a harness can
+call them without a shell. Each tool returns exactly what the matching
+`--json` command prints.
+
+| Tool | `operation` | Fields |
+|---|---|---|
+| `jira_read` | `get` | `ref` (required), `no_comments`, `refresh`, `instance` |
+| `jira_read` | `current` | `branch` (default: git branch of the server's working directory), `instance` |
+| `jira_read` | `mine` | `limit`, `instance` |
+| `jira_read` | `search` | `jql` (required), `limit`, `instance` |
+| `jira_write` | `comment` | `body` (required), `ref` (default: issue key in the git branch), `instance` |
+| `jira_download_attachments` | `download` | `ref` (required), `directory`, `instance` |
+
+A field the chosen `operation` does not take is rejected as invalid params. A
+failed command (bad ref, 404, 401) comes back as a tool result with `isError`
+and the CLI's error text; the server keeps running.
+
+Register the server once per harness; it needs the instance already set up with
+`jira setup add`:
+
+```bash
+claude mcp add jira -- jira mcp            # Claude Code
+codex mcp add jira -- jira mcp             # Codex
+```
+
+OpenCode, in `opencode.json`:
+
+```json
+{ "mcp": { "jira": { "type": "local", "command": ["jira", "mcp"] } } }
+```
+
 ## Notes for agents
 
 - Parse the single line as one JSON object; do not assume pretty-printing.

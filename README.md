@@ -182,6 +182,26 @@ current git branch.
 jira skill jira-ticket   # print the full --json read contract
 ```
 
+### mcp — serve the CLI as MCP tools
+
+```bash
+jira mcp
+```
+
+Starts an [MCP](https://modelcontextprotocol.io) server on stdio, meant to be
+spawned by an agent harness. It exposes three tools whose results are the
+`--json` output of the matching command:
+
+| Tool | Operations | Notes |
+|---|---|---|
+| `jira_read` | `get`, `current`, `mine`, `search` | read-only |
+| `jira_write` | `comment` | posts to Jira |
+| `jira_download_attachments` | `download` | writes files on the server's machine; changes nothing in Jira |
+
+Every operation takes an optional `instance`. Register it in Claude Code with
+`claude mcp add jira -- jira mcp`; the `jira-ticket` skill lists the Codex and
+OpenCode forms.
+
 ---
 
 ## Authentication

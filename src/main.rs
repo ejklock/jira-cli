@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod download;
 mod i18n;
+mod mcp;
 mod models;
 mod render;
 mod skill;
@@ -101,6 +102,7 @@ async fn dispatch(command: Command) -> i32 {
         Command::Browse(args) => dispatch_browse(args).await,
         Command::Comment(args) => dispatch_comment(args).await,
         Command::Skill(args) => dispatch_skill(args),
+        Command::Mcp => mcp::serve().await,
     }
 }
 
@@ -147,22 +149,41 @@ fn open_store() -> Option<store::Store> {
     }
 }
 
+fn open_store_to(err: &mut dyn std::io::Write) -> Option<store::Store> {
+    let config = config::load();
+    match store::Store::open(&config) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            writeln!(err, "Error opening database: {e}").ok();
+            None
+        }
+    }
+}
+
 struct ResolvedInstance {
     store: store::Store,
     instance: Instance,
 }
 
 fn resolve_single_instance(instance_filter: Option<&str>) -> Result<ResolvedInstance, i32> {
-    let store = open_store().ok_or(1)?;
+    resolve_single_instance_to(instance_filter, &mut std::io::stderr())
+}
+
+/// `resolve_single_instance` with its diagnostics written to `err`, so a
+/// caller that owns stderr's content (the MCP server) can carry them.
+fn resolve_single_instance_to(
+    instance_filter: Option<&str>,
+    err: &mut dyn std::io::Write,
+) -> Result<ResolvedInstance, i32> {
+    let store = open_store_to(err).ok_or(1)?;
     let instances = {
         let repo = store::instances::InstanceRepository::new(store.conn());
         repo.load_all().map_err(|e| {
-            render::print_error(&format!("Error loading instances: {e}"));
+            writeln!(err, "Error loading instances: {e}").ok();
             1
         })?
     };
-    let mut err_buf = std::io::stderr();
-    let idx = pick_instance(&instances, instance_filter, &mut err_buf)?;
+    let idx = pick_instance(&instances, instance_filter, err)?;
     let instance = instances[idx].clone();
     Ok(ResolvedInstance { store, instance })
 }
@@ -296,15 +317,9 @@ fn stdin_is_tty() -> bool {
 
 async fn dispatch_get(args: cli::GetArgs) -> i32 {
     if args.display.download_attachments {
-        return match parse_issue_ref(&args.ref_) {
-            Some(key) => dispatch_download_attachments(&key, &args.display).await,
-            None => {
-                eprintln!(
-                    "Error: '{}' is not a valid issue key or Jira browse URL.",
-                    args.ref_
-                );
-                2
-            }
+        return match issue_key_or_report(&args.ref_, &mut std::io::stderr()) {
+            Ok(key) => dispatch_download_attachments(&key, &args.display).await,
+            Err(code) => code,
         };
     }
 
@@ -384,52 +399,92 @@ async fn dispatch_download_attachments(key: &str, display: &cli::DisplayArgs) ->
             Ok(r) => r,
             Err(code) => return code,
         };
-    let client = match GouqiJiraClient::new(&instance) {
+    download_core(
+        key,
+        &instance,
+        display.download_dir.as_deref(),
+        display.json,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
+/// Fetch `key`, save every attachment to `dir` (or the per-issue directory
+/// under the config dir) and report the saved paths to `out`, as `--json` or
+/// the human lines. The one implementation behind the CLI flag and the MCP
+/// download tool.
+async fn download_core(
+    key: &str,
+    instance: &Instance,
+    dir: Option<&std::path::Path>,
+    json: bool,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> i32 {
+    let client = match GouqiJiraClient::new(instance) {
         Ok(c) => c,
         Err(e) => {
-            render::print_error(&format!("Error building Jira client: {e}"));
+            writeln!(err, "Error building Jira client: {e}").ok();
             return 1;
         }
     };
     let issue = match client.get_issue(key).await {
         Ok(i) => i,
         Err(ClientError::Unauthorized { instance }) => {
-            eprintln!("{}", reauth_message(&instance));
+            writeln!(err, "{}", reauth_message(&instance)).ok();
             return 1;
         }
         Err(ClientError::Other(e)) => {
-            render::print_error(&format!("Error fetching issue '{key}': {e}"));
+            writeln!(err, "Error fetching issue '{key}': {e}").ok();
             return 1;
         }
     };
 
-    let dir = display
-        .download_dir
-        .clone()
+    let dir = dir
+        .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| download::download_dir_for(&config::jira_config_dir(), &issue.key));
 
     match download::download_all(&client, &issue, &dir).await {
         Ok(saved) => {
-            print_download_result(&issue.key, &saved, display.json);
+            write_download_result(&issue.key, &saved, json, out);
             0
         }
         Err(e) => {
-            render::print_error(&format!("Error downloading attachments: {e}"));
+            writeln!(err, "Error downloading attachments: {e}").ok();
             1
         }
     }
 }
 
-fn print_download_result(issue_key: &str, saved: &[download::SavedAttachment], json: bool) {
+fn write_download_result(
+    issue_key: &str,
+    saved: &[download::SavedAttachment],
+    json: bool,
+    out: &mut dyn std::io::Write,
+) {
     if json {
-        println!("{}", download::saved_to_json(issue_key, saved));
+        writeln!(out, "{}", download::saved_to_json(issue_key, saved)).ok();
         return;
     }
     if saved.is_empty() {
-        println!("{}", download::no_attachments_message(issue_key));
+        writeln!(out, "{}", download::no_attachments_message(issue_key)).ok();
     } else {
-        println!("{}", download::format_saved_human(saved));
+        writeln!(out, "{}", download::format_saved_human(saved)).ok();
     }
+}
+
+/// The issue key of a `get`-style ref, or the usage error written to `err`
+/// with exit code 2.
+fn issue_key_or_report(ref_: &str, err: &mut dyn std::io::Write) -> Result<String, i32> {
+    parse_issue_ref(ref_).ok_or_else(|| {
+        writeln!(
+            err,
+            "Error: '{ref_}' is not a valid issue key or Jira browse URL."
+        )
+        .ok();
+        2
+    })
 }
 
 /// Interactive surface for `current` (ADR 0025, BDR 0016 S9): resolves the
