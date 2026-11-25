@@ -141,7 +141,7 @@ test_root_manifest_version_drift_fails() {
   expect_red root_manifest_version_drift_fails "plugins/jira-cli/plugin.json: .version is '99.0.0'"
 }
 
-test_claude_manifest_version_drift_fails() {
+test_claude_plugin_manifest_version_drift_fails() {
   t="$(fresh_tree)"
   edit "${t}" plugins/jira-cli/.claude-plugin/plugin.json '.version = "99.0.0"'
   run_check "${t}"
@@ -206,7 +206,7 @@ for t in \
   test_missing_plugin_entry_fails \
   test_skill_stub_change_fails \
   test_root_manifest_version_drift_fails \
-  test_claude_manifest_version_drift_fails \
+  test_claude_plugin_manifest_version_drift_fails \
   test_manifest_name_drift_fails \
   test_package_skill_stub_change_fails \
   test_package_version_drift_fails \
