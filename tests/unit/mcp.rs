@@ -117,6 +117,9 @@ fn assert_flat_schema_matches_typed_enum<T: JsonSchema + 'static>(tool: &str) {
         .collect();
     assert_eq!(published, expected_fields, "{tool} published fields");
 
+    if variants.len() == 1 {
+        return;
+    }
     for (name, fields, required) in &variants {
         for field in fields {
             let description = flat["properties"][field]["description"]
@@ -225,4 +228,137 @@ fn mcp_schema_parse_rejects_a_field_the_operation_does_not_take() {
         .err()
         .expect("an extra field is invalid");
     assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+}
+
+fn all_descriptions(schema: &JsonObject) -> Vec<(String, String)> {
+    schema["properties"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter_map(|(field, value)| {
+            value["description"]
+                .as_str()
+                .map(|text| (field.clone(), text.to_owned()))
+        })
+        .collect()
+}
+
+#[test]
+fn mcp_tools_list_stays_under_the_size_budget() {
+    let tools = JiraServer::tool_router().list_all();
+    let size = serde_json::to_string(&tools).unwrap().len();
+    assert!(size < 2600, "tools/list is {size} bytes");
+}
+
+fn assert_read_notes_stay(schema: &JsonObject) {
+    for (field, text) in all_descriptions(schema) {
+        if field != "operation" {
+            assert!(text.contains("Taken by"), "read.{field}: {text}");
+        }
+    }
+    for field in ["jql", "ref"] {
+        let text = schema["properties"][field]["description"].as_str().unwrap();
+        assert!(text.contains("(required)"), "read.{field}: {text}");
+    }
+}
+
+fn assert_single_operation_is_not_repeated(name: &str, schema: &JsonObject) {
+    for (field, text) in all_descriptions(schema) {
+        assert!(!text.contains("Taken by"), "{name}.{field}: {text}");
+    }
+    let operation = schema["properties"]["operation"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(!operation.contains("The command to run."), "{name}");
+}
+
+#[test]
+fn mcp_tools_list_marks_only_the_required_fields_of_a_single_operation_tool() {
+    let description = |tool: &str, field: &str| {
+        tool_named(tool).input_schema["properties"][field]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(description("jira_write", "body").contains("(required)"));
+    assert!(description("jira_download_attachments", "ref").contains("(required)"));
+    for (tool, field) in [
+        ("jira_write", "ref"),
+        ("jira_write", "instance"),
+        ("jira_download_attachments", "directory"),
+        ("jira_download_attachments", "instance"),
+    ] {
+        let text = description(tool, field);
+        assert!(!text.contains("Taken by"), "{tool}.{field}: {text}");
+        assert!(!text.contains("(required)"), "{tool}.{field}: {text}");
+    }
+}
+
+#[test]
+fn mcp_tools_list_drops_repeated_schema_text() {
+    for tool in JiraServer::tool_router().list_all() {
+        let schema = &tool.input_schema;
+        assert!(!schema.contains_key("$schema"), "{} has $schema", tool.name);
+        let mut texts = all_descriptions(schema);
+        texts.push(("tool".into(), tool.description.clone().unwrap().to_string()));
+        for (field, text) in &texts {
+            assert!(!text.contains('\n'), "{}.{field} has a newline", tool.name);
+        }
+        if tool.name == "jira_read" {
+            assert_read_notes_stay(schema);
+        } else {
+            assert_single_operation_is_not_repeated(&tool.name, schema);
+        }
+    }
+}
+
+#[test]
+fn mcp_tools_list_keeps_every_field_type_default_and_enum() {
+    let expected = json!({
+        "jira_read": {
+            "operation": {"type": "string", "enum": ["get", "current", "mine", "search"]},
+            "branch": {"type": ["string", "null"]},
+            "instance": {"type": ["string", "null"]},
+            "jql": {"type": "string"},
+            "limit": {"type": ["integer", "null"], "format": "uint64", "minimum": 0},
+            "no_comments": {"type": "boolean", "default": false},
+            "ref": {"type": "string"},
+            "refresh": {"type": "boolean", "default": false}
+        },
+        "jira_write": {
+            "operation": {"type": "string", "enum": ["comment"]},
+            "body": {"type": "string"},
+            "instance": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]}
+        },
+        "jira_download_attachments": {
+            "operation": {"type": "string", "enum": ["download"]},
+            "directory": {"type": ["string", "null"]},
+            "instance": {"type": ["string", "null"]},
+            "ref": {"type": "string"}
+        }
+    });
+    for (tool, fields) in expected.as_object().unwrap() {
+        let schema = tool_named(tool).input_schema;
+        let published = schema["properties"].as_object().unwrap();
+        let names: BTreeSet<&String> = published.keys().collect();
+        let wanted: BTreeSet<&String> = fields.as_object().unwrap().keys().collect();
+        assert_eq!(names, wanted, "{tool} fields");
+        assert_eq!(schema["required"], json!(["operation"]), "{tool}");
+        for (field, keywords) in fields.as_object().unwrap() {
+            for (keyword, value) in keywords.as_object().unwrap() {
+                assert_eq!(
+                    &published[field][keyword], value,
+                    "{tool}.{field}.{keyword}"
+                );
+            }
+            for keyword in ["default", "minimum", "format"] {
+                assert_eq!(
+                    published[field].get(keyword),
+                    keywords.get(keyword),
+                    "{tool}.{field}.{keyword}"
+                );
+            }
+        }
+    }
 }

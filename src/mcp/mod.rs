@@ -54,8 +54,7 @@ impl ServerHandler for JiraServer {}
 #[tool_router]
 impl JiraServer {
     #[tool(
-        description = "Read Jira data as the `jira ... --json` commands print it. \
-                       Select the command with `operation`.",
+        description = "Read Jira data as the `jira ... --json` commands print it.",
         input_schema = input_schema::<ReadOperation>(),
         annotations(read_only_hint = true)
     )]
@@ -65,7 +64,7 @@ impl JiraServer {
     }
 
     #[tool(
-        description = "Change Jira data (post a comment). Select the command with `operation`.",
+        description = "Change Jira data (post a comment).",
         input_schema = input_schema::<WriteOperation>(),
         annotations(destructive_hint = true)
     )]
@@ -75,10 +74,8 @@ impl JiraServer {
     }
 
     #[tool(
-        description = "Download every attachment of one issue into a local directory and \
-                       return the saved files as `jira get --download-attachments --json` \
-                       prints them. Writes files on the server's machine; it changes nothing \
-                       in Jira.",
+        description = "Download every attachment of one issue into a local directory. Writes \
+                       files on the server's machine; it changes nothing in Jira.",
         input_schema = input_schema::<DownloadOperation>(),
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
@@ -96,15 +93,20 @@ impl JiraServer {
 /// object (see `flatten_operations`).
 fn input_schema<T: JsonSchema + 'static>() -> Arc<JsonObject> {
     let mut schema = schema_for_input::<T>().unwrap_or_else(|_| schema_for_empty_input());
-    flatten_operations(Arc::make_mut(&mut schema));
+    let published = Arc::make_mut(&mut schema);
+    published.remove("$schema");
+    flatten_operations(published);
     schema
 }
 
 /// Rewrite a schema whose root is a `oneOf` of tagged variants into one object:
 /// an `operation` string enum plus the union of every variant's properties,
 /// each described with the operations that take it. A schema without a
-/// `oneOf` is left as it is. Only the published schema changes; the enum's own
-/// parse still rejects a field the chosen operation does not take.
+/// `oneOf` is left as it is. A tool with a single operation repeats nothing:
+/// its fields carry no takers note and `operation` keeps the operation's own
+/// doc. Descriptions are collapsed to one line. Only the published schema
+/// changes; the enum's own parse still rejects a field the chosen operation
+/// does not take.
 fn flatten_operations(schema: &mut JsonObject) {
     let Some(Value::Array(variants)) = schema.remove("oneOf") else {
         return;
@@ -123,24 +125,48 @@ fn flatten_operations(schema: &mut JsonObject) {
             merge_variant(name, variant, &mut properties, &mut takers);
         }
     }
-    for (field, labels) in takers {
-        if let Some(Value::Object(field_schema)) = properties.get_mut(&field) {
-            annotate_takers(field_schema, &labels);
-        }
-    }
+    let single = operations.len() == 1;
+    describe_fields(&mut properties, takers, single);
+    let description = operation_description(&summaries, single);
     let mut flat = serde_json::Map::new();
     flat.insert(
         "operation".into(),
         serde_json::json!({
             "type": "string",
             "enum": operations,
-            "description": format!("The command to run. {}", summaries.join(" "))
+            "description": description
         }),
     );
     flat.extend(properties);
     schema.insert("type".into(), Value::String("object".into()));
     schema.insert("properties".into(), Value::Object(flat));
     schema.insert("required".into(), serde_json::json!(["operation"]));
+}
+
+fn describe_fields(
+    properties: &mut serde_json::Map<String, Value>,
+    takers: Vec<(String, Vec<String>)>,
+    single: bool,
+) {
+    for (field, labels) in takers {
+        if let Some(Value::Object(field_schema)) = properties.get_mut(&field) {
+            if !single {
+                annotate_takers(field_schema, &labels);
+            } else if labels.iter().any(|label| label.ends_with("(required)")) {
+                mark_required(field_schema);
+            }
+            collapse_description(field_schema);
+        }
+    }
+}
+
+fn operation_description(summaries: &[String], single: bool) -> String {
+    match summaries {
+        [only] if single => only
+            .split_once(": ")
+            .map_or(only.clone(), |(_, doc)| doc.to_owned()),
+        _ => format!("The command to run. {}", summaries.join(" ")),
+    }
 }
 
 /// Add one variant's fields (all but the `operation` tag) to the merged
@@ -175,6 +201,20 @@ fn merge_variant(
             Some((_, labels)) => labels.push(label),
             None => takers.push((field.clone(), vec![label])),
         }
+    }
+}
+
+fn mark_required(field_schema: &mut serde_json::Map<String, Value>) {
+    let text = match field_schema.get("description").and_then(Value::as_str) {
+        Some(doc) => format!("{doc} (required)"),
+        None => "(required)".to_owned(),
+    };
+    field_schema.insert("description".into(), Value::String(text));
+}
+
+fn collapse_description(field_schema: &mut serde_json::Map<String, Value>) {
+    if let Some(Value::String(text)) = field_schema.get_mut("description") {
+        *text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     }
 }
 
