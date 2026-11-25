@@ -1,7 +1,10 @@
 //! MCP server over stdio. Three tools, `jira_read`, `jira_write` and
 //! `jira_download_attachments`, select a command core by `operation` and return
 //! the core's `--json` output, so the agent contract stays the one in
-//! `agent_json`. While the server runs, stdout belongs to the protocol: every
+//! `agent_json`. The server also serves the `jira-ticket` skill over the MCP
+//! skills extension, and runs long calls (a download, a search above the default
+//! limit) as tasks for clients that support MCP tasks, with progress and
+//! cancellation. While the server runs, stdout belongs to the protocol: every
 //! core writes to in-memory buffers.
 
 mod skills;
@@ -254,8 +257,10 @@ impl JiraServer {
     }
 
     #[tool(
-        description = "Download every attachment of one issue into a local directory. Writes \
-                       files on the server's machine; it changes nothing in Jira.",
+        description = "Download every attachment of one issue into a local directory and \
+                       return the saved files as `jira get --download-attachments --json` \
+                       prints them. Writes files on the server's machine; it changes \
+                       nothing in Jira.",
         input_schema = input_schema::<DownloadOperation>(),
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
