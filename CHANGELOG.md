@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-25
+
+### Added
+
+- `jira mcp` serves the `jira-ticket` skill over the MCP skills extension as
+  `skill://jira-ticket/SKILL.md`, and its server instructions point at it
+- For a client that supports MCP tasks, `jira mcp` runs an attachment download
+  and a search with `limit` above 50 as a task, with progress and cancellation
+
+### Changed
+
+- The `jira mcp` tool schemas drop repeated text: `tools/list` shrinks from
+  about 3.1 kB to 2.5 kB with the same tools, operations and fields
+
 ## [0.2.2] - 2026-11-25
 
 ### Changed
