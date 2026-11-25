@@ -362,3 +362,40 @@ fn mcp_tools_list_keeps_every_field_type_default_and_enum() {
         }
     }
 }
+
+#[test]
+fn frontmatter_reader_returns_name_and_description_of_the_embedded_skill() {
+    let entry = &crate::skill::REGISTRY[0];
+
+    let parsed = skills::parse_frontmatter(entry.body).expect("the embedded skill parses");
+
+    assert_eq!(parsed.name, "jira-ticket");
+    assert!(
+        parsed.description.starts_with(entry.description),
+        "{}",
+        parsed.description
+    );
+}
+
+#[test]
+fn frontmatter_reader_refuses_text_that_is_not_a_named_described_skill() {
+    for text in [
+        "name: n\ndescription: d\n---\nbody\n",
+        "---\nname: n\ndescription: d\nbody\n",
+        "---\ndescription: d\n---\n",
+        "---\nname: n\n---\n",
+        "---\nname:\ndescription: d\n---\n",
+        "---\nname: n\ndescription:   \n---\n",
+    ] {
+        assert!(skills::parse_frontmatter(text).is_err(), "{text:?}");
+    }
+}
+
+#[test]
+fn frontmatter_reader_keeps_everything_after_the_first_key_separator() {
+    let text = "---\nname: n\ndescription: use it: a: b\n---\nbody\n";
+
+    let parsed = skills::parse_frontmatter(text).expect("the frontmatter parses");
+
+    assert_eq!(parsed.description, "use it: a: b");
+}

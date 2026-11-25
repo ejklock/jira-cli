@@ -4,6 +4,8 @@
 //! `agent_json`. While the server runs, stdout belongs to the protocol: every
 //! core writes to in-memory buffers.
 
+mod skills;
+
 use crate::commands::{
     comment_core, current_core, get_core, mine_core, search_core_limited, CommentBody, GetOpts,
     DEFAULT_SEARCH_LIMIT,
@@ -15,20 +17,38 @@ use crate::{
     resolve_single_instance_to, ResolvedInstance,
 };
 use rmcp::handler::server::common::{schema_for_empty_input, schema_for_input};
-use rmcp::model::{CallToolResult, ContentBlock, JsonObject};
+use rmcp::model::{
+    CacheScope, CallToolResult, ConstString, ContentBlock, CustomRequest, CustomResult, ErrorCode,
+    GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, JsonObject, ListResourcesResult,
+    ListSkillsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler, ServiceExt};
+use rmcp::{
+    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use skills::SkillCatalog;
+use std::borrow::Cow;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
 /// Serve MCP on stdin/stdout until the client closes the connection.
 pub(crate) async fn serve() -> i32 {
-    let running = match JiraServer.serve(stdio()).await {
+    let skills = match SkillCatalog::embedded() {
+        Ok(skills) => Arc::new(skills),
+        Err(e) => {
+            eprintln!("Error starting MCP server: {e}");
+            return 1;
+        }
+    };
+    let server = JiraServer { skills };
+    let running = match server.serve(stdio()).await {
         Ok(running) => running,
         Err(e) => {
             eprintln!("Error starting MCP server: {e}");
@@ -44,12 +64,126 @@ pub(crate) async fn serve() -> i32 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct JiraServer;
+#[derive(Clone)]
+struct JiraServer {
+    skills: Arc<SkillCatalog>,
+}
 
-/// Identifies the server as `jira` at this crate's version in `initialize`.
-#[tool_handler(name = "jira")]
-impl ServerHandler for JiraServer {}
+const INSTRUCTIONS: &str = "Read the resource skill://jira-ticket/SKILL.md for the tool \
+    contract and the JSON schemas of every operation.";
+
+/// Cache hints exist from the 2026-07-28 protocol version on.
+fn supports_cache_hints(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .protocol_version()
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+}
+
+/// Identifies the server as `jira` at this crate's version in `initialize`, declares the
+/// resources and skills extension, and serves the embedded skill through both.
+#[tool_handler]
+impl ServerHandler for JiraServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_skills()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "jira",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Owned(vec![
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2026_07_28,
+        ])
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let mut result = ListResourcesResult::with_all_items(self.skills.resources());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, McpError> {
+        let text = self.skills.read(&request.uri).ok_or_else(|| {
+            McpError::invalid_params(format!("no such resource: {}", request.uri), None)
+        })?;
+        let mut result = ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
+            uri: request.uri,
+            mime_type: Some("text/markdown".to_string()),
+            text: text.to_string(),
+            meta: None,
+        }]);
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result.into())
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, McpError> {
+        let mut result = ListSkillsResult::with_all_items(self.skills.skills());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, McpError> {
+        let skill = self.skills.skill(&request.uri).ok_or_else(|| {
+            McpError::invalid_params(format!("no such skill: {}", request.uri), None)
+        })?;
+        let mut result = GetSkillResult::new(skill.clone());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    /// A `skills/get` whose parameters did not parse (no `uri`, or one that is not text) reaches
+    /// here instead of `get_skill`; it is a malformed request, not an unknown method.
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, McpError> {
+        if request.method == GetSkillRequestMethod::VALUE {
+            return Err(McpError::invalid_params(
+                "skills/get needs a text `uri`",
+                None,
+            ));
+        }
+        Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            request.method,
+            None,
+        ))
+    }
+}
 
 #[tool_router]
 impl JiraServer {

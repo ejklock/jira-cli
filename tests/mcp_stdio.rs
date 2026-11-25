@@ -836,3 +836,103 @@ async fn initialize_reports_server_info_named_jira_at_the_crate_version() {
     );
     client.cancel().await.unwrap();
 }
+
+const SKILL_URI: &str = "skill://jira-ticket/SKILL.md";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initialize_declares_the_skills_extension_and_points_the_instructions_at_the_skill() {
+    let env = Env::new().await;
+    let client = env.connect().await;
+
+    let info = serde_json::to_value(&*client.peer_info().expect("handshake info")).unwrap();
+    assert!(info["capabilities"]["resources"].is_object(), "{info}");
+    assert!(
+        info["capabilities"]["extensions"]
+            .as_object()
+            .is_some_and(|extensions| extensions.keys().any(|key| key.contains("skills"))),
+        "{info}"
+    );
+    assert_eq!(info["serverInfo"]["name"], "jira", "{info}");
+    assert!(
+        info["instructions"]
+            .as_str()
+            .is_some_and(|text| text.contains(SKILL_URI)),
+        "{info}"
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_skill_is_served_as_a_resource_and_as_a_catalog_entry_equal_to_the_cli_text() {
+    let env = Env::new().await;
+    let client = env.connect().await;
+    let printed = env.cli_stdout(&["skill", "jira-ticket"]);
+
+    let resources = client.list_all_resources().await.unwrap();
+    assert_eq!(resources.len(), 1, "{resources:?}");
+    assert_eq!(resources[0].uri, SKILL_URI);
+    assert_eq!(resources[0].mime_type.as_deref(), Some("text/markdown"));
+    assert_eq!(resources[0].name, "jira-ticket");
+
+    let read = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(SKILL_URI))
+        .await
+        .unwrap();
+    let read = serde_json::to_value(&read).unwrap();
+    assert_eq!(read["contents"][0]["text"], printed.as_str(), "{read}");
+    assert_eq!(read["contents"][0]["mimeType"], "text/markdown", "{read}");
+
+    let skills = client.list_all_skills().await.unwrap();
+    assert_eq!(skills.len(), 1, "{skills:?}");
+    let listed = serde_json::to_value(&skills[0]).unwrap();
+    assert_eq!(listed["uri"], SKILL_URI, "{listed}");
+    let description = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("description: "))
+        .expect("the skill text has a description");
+    assert_eq!(listed["frontmatter"]["name"], "jira-ticket", "{listed}");
+    assert_eq!(
+        listed["frontmatter"]["description"], description,
+        "{listed}"
+    );
+
+    let got = client
+        .get_skill(rmcp::model::GetSkillRequestParams::new(SKILL_URI))
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&got.skill).unwrap(), listed);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_resources_and_skills_are_invalid_params_and_the_server_keeps_serving() {
+    let env = Env::new().await;
+    let mut session = RawSession::start(&env);
+
+    for (method, params) in [
+        (
+            "resources/read",
+            json!({"uri": "skill://jira-ticket/other.md"}),
+        ),
+        (
+            "resources/read",
+            json!({"uri": "skill://jira-ticket/../SKILL.md"}),
+        ),
+        ("resources/read", json!({"uri": "file:///etc/passwd"})),
+        ("skills/get", json!({"uri": "skill://jira-ticket/other.md"})),
+        ("skills/get", json!({})),
+    ] {
+        let reply = session.request(method, params.clone());
+        assert_eq!(
+            reply["error"]["code"],
+            json!(ErrorCode::INVALID_PARAMS.0),
+            "{method} {params}: {reply}"
+        );
+    }
+    let still = session.request("resources/read", json!({"uri": SKILL_URI}));
+    assert!(
+        still["result"]["contents"][0]["text"].is_string(),
+        "{still}"
+    );
+    session.finish();
+}
