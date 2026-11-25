@@ -32,5 +32,5 @@ Installing `jira` for an agent takes manual steps per harness: `claude mcp add` 
 ## Consequences
 
 - Every release bumps the plugin, marketplace and npm manifests with `Cargo.toml`.
-- `npm publish` runs with the owner's 2FA, outside this repository's automation.
+- `npm publish` runs with the owner's 2FA, outside this repository's automation. Replaced by [ADR 0033](0033-jira-cli-agent-publishes-to-npm-from-the-release-workflow-with-trusted-publishing.md): the release workflow publishes the package.
 - se-configs installs the skill through `install-skill.sh`; a switch to the plugin there is se-configs' change.

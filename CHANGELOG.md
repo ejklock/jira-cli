@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Each release tag now publishes the `jira-cli-agent` npm package from the
+  release workflow, with provenance, and fails if the package version differs
+  from the tag
+
 ## [0.2.1] - 2026-11-25
 
 ### Changed

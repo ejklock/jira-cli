@@ -38,3 +38,4 @@ never rewrite. Trace up to [PRD 0001](/prd/0001-jira-cloud-read-cli.md) and the
 * [0030 — Rename the agent skill identifier from `jira` to `jira-ticket`](0030-rename-agent-skill-to-jira-ticket.md) - Accepted
 * [0031 — jira mcp serves the CLI as three MCP tools over stdio](0031-jira-mcp-serves-the-cli-as-three-mcp-tools-over-stdio.md) - Proposed
 * [0032 — Agent plugins for four harnesses ship from this repository](0032-agent-plugins-for-four-harnesses-ship-from-this-repository.md) - Proposed
+* [0033 — jira-cli-agent publishes to npm from the release workflow with trusted publishing](0033-jira-cli-agent-publishes-to-npm-from-the-release-workflow-with-trusted-publishing.md) - Accepted
