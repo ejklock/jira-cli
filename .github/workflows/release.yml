@@ -77,3 +77,36 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
+
+  npm-publish:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      # npm trusted publishing exchanges this OIDC token for a short-lived publish token; no NPM_TOKEN secret.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing needs npm 11.5.1 or later, which Node 24 ships.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Package version matches the tag
+        working-directory: packages/jira-cli-agent
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "::error::packages/jira-cli-agent/package.json version ${version} does not match tag ${TAG}"
+            exit 1
+          fi
+
+      - name: Publish jira-cli-agent
+        working-directory: packages/jira-cli-agent
+        run: npm publish --provenance --access public
