@@ -1,6 +1,6 @@
 [package]
 name = "jira"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Unofficial Jira Cloud CLI, terminal UI and MCP server: read issues, post comments and download attachments from the terminal or an AI coding agent"
 license = "MIT"

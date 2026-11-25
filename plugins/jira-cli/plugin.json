@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jira-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Read Jira Cloud issues, your assignments and JQL searches as JSON through the jira CLI: the jira-cli MCP server and the jira-ticket skill. Unofficial; not affiliated with Atlassian.",
   "author": { "name": "Evaldo Klock" },
   "license": "MIT",

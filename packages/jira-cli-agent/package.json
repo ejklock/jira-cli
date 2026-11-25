@@ -1,6 +1,6 @@
 {
   "name": "jira-cli-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Jira Cloud for AI coding agents: gives OpenCode the jira-cli MCP server and the jira-ticket skill, and Pi the jira-ticket skill. Unofficial; not affiliated with Atlassian.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ejklock/jira-cli.git", "directory": "packages/jira-cli-agent" },
