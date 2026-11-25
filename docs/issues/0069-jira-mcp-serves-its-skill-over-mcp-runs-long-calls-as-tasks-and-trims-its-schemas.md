@@ -2,7 +2,7 @@
 type: Issue
 title: jira mcp serves its skill over MCP, runs long calls as tasks and trims its schemas
 description: Serve the jira-ticket skill over the skills extension, run downloads and large searches as MCP tasks, and cut the tools/list context cost (3087 bytes on 0.2.2).
-status: in-progress
+status: closed
 timestamp: 2026-11-25T12:10:43Z
 ---
 
@@ -36,6 +36,6 @@ Included: trimming repeated text from the published tool schemas; serving the `j
 
 ### Outcome
 
-Delivered on branch feat/ek-mcp-skills-tasks (commits 964f625 schema trim, fa1b288 skills extension, d2dc5fe tasks, d4d49dc review fixes), pending merge. Measured by sending JSON-RPC to the built binary: `tools/list` 3087 → 2549 bytes (about 772 → 637 tokens); `initialize` 141 → 369 bytes, now carrying the instructions and the skills and tasks extensions; `resources/list` (879 bytes) and `skills/list` (1014 bytes) are read on demand. A structural comparison of 0.2.2 and the new `tools/list` without descriptions is identical. Proof: `cargo test --test mcp_stdio` 25 passed three times in a row, each new test red under a planted mutation; full suite serial and parallel, clippy, fmt, comment policy and the skill stub check green. A fresh-context review requested changes (one test that could not fail, untested cancellation and direct path, docs); the fixes were approved by a narrow re-review.
+Delivered on branch feat/ek-mcp-skills-tasks (commits 964f625 schema trim, fa1b288 skills extension, d2dc5fe tasks, d4d49dc review fixes, 16eb6b8 skill text), merged in PR #15 as 46bbb06. Measured by sending JSON-RPC to the built binary: `tools/list` 3087 → 2549 bytes (about 772 → 637 tokens); `initialize` 141 → 369 bytes, now carrying the instructions and the skills and tasks extensions; `resources/list` (879 bytes) and `skills/list` (1014 bytes) are read on demand. A structural comparison of 0.2.2 and the new `tools/list` without descriptions is identical. Proof: `cargo test --test mcp_stdio` 25 passed three times in a row, each new test red under a planted mutation; full suite serial and parallel, clippy, fmt, comment policy and the skill stub check green. A fresh-context review requested changes (one test that could not fail, untested cancellation and direct path, docs); the fixes were approved by a narrow re-review.
 
 The MCP section of `.claude/skills/jira-ticket/SKILL.md` now says that a client supporting MCP tasks gets a task for a download and for a search above `limit` 50; `scripts/check-skill-stubs.sh`, the skill tests and `cargo test --test mcp_stdio` stay green. Task TTL stays unbounded (as the reference), accepted.

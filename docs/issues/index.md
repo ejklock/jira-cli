@@ -7,8 +7,6 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 
 ## Open
 
-* [0069 — jira mcp serves its skill over MCP, runs long calls as tasks and trims its schemas](0069-jira-mcp-serves-its-skill-over-mcp-runs-long-calls-as-tasks-and-trims-its-schemas.md) - in-progress
-
 ## Closed
 
 * [0001 — J0 — walking skeleton: fork scaffold + setup + get PROJ-123 end-to-end](0001-j0-skeleton-setup-get.md) - done
@@ -79,3 +77,4 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 * [0066 — Release 0.2.0 with the MCP server and agent plugins](0066-release-0-2-0-with-the-mcp-server-and-agent-plugins.md) - closed
 * [0067 — clippy needless_bool in the comment-policy test fails -D warnings on the current dev image](0067-clippy-needless-bool-in-the-comment-policy-test-fails-d-warnings-on-the-current-dev-image.md) - closed
 * [0068 — Parallel unit tests fail intermittently on shared process globals](0068-parallel-unit-tests-fail-intermittently-on-shared-process-globals.md) - closed
+* [0069 — jira mcp serves its skill over MCP, runs long calls as tasks and trims its schemas](0069-jira-mcp-serves-its-skill-over-mcp-runs-long-calls-as-tasks-and-trims-its-schemas.md) - closed
