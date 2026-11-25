@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `jira skill jira-ticket` now tells the agent to use the `jira` MCP tools when
+  that server is connected, and to run the CLI with `--json` otherwise
+
 ## [0.2.0] - 2026-11-14
 
 ### Upgrade note

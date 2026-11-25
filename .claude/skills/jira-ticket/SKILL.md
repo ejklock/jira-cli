@@ -16,6 +16,24 @@ Authoritative decision: [ADR 0004](../../../docs/adr/0004-agent-json-output-cont
 Observable behavior + test matrix: [BDR 0001](../../../docs/bdr/0001-get-issue-by-key.md),
 [BDR 0005](../../../docs/bdr/0005-mine-and-search-jql.md).
 
+## Prefer the MCP tools
+
+When the `jira` MCP server is connected, use its tools instead of running `jira`
+in the shell:
+
+- `jira_read`, operations: get, current, mine, search
+- `jira_write`, operation: comment
+- `jira_download_attachments`, operation: download
+
+Each tool returns exactly what the matching `--json` command prints, so the
+schemas below apply. See "Calling the CLI as MCP tools — `jira mcp`" below for
+the fields and for registering the server.
+
+## Otherwise use the CLI
+
+When the server is not connected, run the commands below in the shell with
+`--json`, e.g. `jira get PROJ-123 --json`.
+
 ## Commands
 
 | Command | Emits | TUI? |
