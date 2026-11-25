@@ -63,8 +63,9 @@ flowchart TD
     main --> download["download\n--download-attachments orchestration\n(dedupe_filename · download_all · human/json output)"]
     download --> client
     download --> config
-    main --> mcp["mcp (rmcp stdio server)\njira_read · jira_write · jira_download_attachments\nflat schemas · typed operation enums"]
+    main --> mcp["mcp (rmcp stdio server)\njira_read · jira_write · jira_download_attachments\nflat schemas · typed operation enums\nskills extension · tasks extension"]
     mcp --> commands
+    mcp --> skill
     mcp -. "crate-root helpers: download_core · open_store_to ·\nresolve_single_instance_to · ResolvedInstance ·\nissue_key_or_report · current_git_branch" .-> main
     mcp --> store
     cli --> tui_shell
@@ -193,7 +194,13 @@ flowchart TD
   with `deny_unknown_fields`; a unit test keeps the two in step. The MCP layer
   calls cores, never `client` directly, so the write surface stays confined.
   Each agent session spawns its own `jira mcp`, which is why `store` opens the
-  database in WAL mode.
+  database in WAL mode. Per
+  [ADR 0034](/adr/0034-jira-mcp-serves-the-skill-over-the-skills-extension-and-runs-long-calls-as-tasks.md),
+  the server also reads the `skill` registry and serves the `jira-ticket` skill
+  as `skill://jira-ticket/SKILL.md` over the skills extension, named in its
+  instructions, and, for a client that declares the tasks extension, runs a
+  download or a search with `limit` above 50 as a task with a 5 s progress
+  heartbeat and cancellation.
 - **`client` is a clean trait seam** so a Phase-2 Jira Server/DC (REST v2) adapter
   is additive, not a rewrite.
 - **`download` orchestrates `jira get --download-attachments`**
