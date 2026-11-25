@@ -178,6 +178,10 @@ call them without a shell. Each tool returns exactly what the matching
 | `jira_write` | `comment` | `body` (required), `ref` (default: issue key in the git branch), `instance` |
 | `jira_download_attachments` | `download` | `ref` (required), `directory`, `instance` |
 
+A client that supports MCP tasks gets a task back (with progress and
+cancellation) for a download and for a search with `limit` above 50; every
+other call is answered directly.
+
 A field the chosen `operation` does not take is rejected as invalid params. A
 failed command (bad ref, 404, 401) comes back as a tool result with `isError`
 and the CLI's error text; the server keeps running.

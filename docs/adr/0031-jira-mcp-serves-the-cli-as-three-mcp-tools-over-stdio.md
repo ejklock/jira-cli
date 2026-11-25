@@ -21,7 +21,7 @@ The owner runs several agent sessions in parallel (Claude Code, Codex, OpenCode)
   - `jira_write` (`destructiveHint: true`): `comment` (optional ref resolved from the branch, body).
   - `jira_download_attachments` (not read-only, not destructive, idempotent): ref and optional target directory.
 - Every operation takes an optional `instance`.
-- Each tool publishes a flat schema: top-level `type: object`, a required `operation` enum, every operation's field as an optional property whose description names the operations that take it. The server parses into typed operation enums with `deny_unknown_fields`; an unknown operation or a field the operation does not take is `invalid_params`.
+- Each tool publishes a flat schema: top-level `type: object`, a required `operation` enum, every operation's field as an optional property whose description names the operations that take it. The server parses into typed operation enums with `deny_unknown_fields`; an unknown operation or a field the operation does not take is `invalid_params`. [ADR 0034](0034-jira-mcp-serves-the-skill-over-the-skills-extension-and-runs-long-calls-as-tasks.md) drops that note on a tool with one operation, and adds the skill resource and tasks.
 - A non-zero core exit maps to `isError: true` with the core's error text; a 401 keeps the CLI's re-auth message. stdout carries only JSON-RPC frames.
 - The SQLite store opens in WAL mode so parallel `jira mcp` processes share it without lock errors.
 

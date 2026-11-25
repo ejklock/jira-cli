@@ -8,7 +8,7 @@ pub struct SkillEntry {
     pub body: &'static str,
 }
 
-const REGISTRY: &[SkillEntry] = &[SkillEntry {
+pub(crate) const REGISTRY: &[SkillEntry] = &[SkillEntry {
     name: "jira-ticket",
     description: "Read Jira Cloud issue data — an issue, your assignments, or a JQL search — as machine-readable JSON from the `jira` CLI, non-interactively without the TUI.",
     body: include_str!("../.claude/skills/jira-ticket/SKILL.md"),

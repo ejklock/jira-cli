@@ -7,6 +7,8 @@ Jira Cloud instance. J0 is the walking skeleton; the rest stack on it.
 
 ## Open
 
+* [0069 — jira mcp serves its skill over MCP, runs long calls as tasks and trims its schemas](0069-jira-mcp-serves-its-skill-over-mcp-runs-long-calls-as-tasks-and-trims-its-schemas.md) - in-progress
+
 ## Closed
 
 * [0001 — J0 — walking skeleton: fork scaffold + setup + get PROJ-123 end-to-end](0001-j0-skeleton-setup-get.md) - done

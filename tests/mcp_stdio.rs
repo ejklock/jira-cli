@@ -1,16 +1,52 @@
-use rmcp::model::{CallToolRequestParams, CallToolResult, ErrorCode};
-use rmcp::service::{RoleClient, RunningService, ServiceError};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
+    ClientConfig, ClientRequest, ErrorCode, GetTaskParams, Implementation,
+    ProgressNotificationParam, ProgressToken, ServerResult,
+};
+use rmcp::service::{
+    NotificationContext, PeerRequestOptions, RoleClient, RunningService, ServiceError,
+};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
-use rmcp::ServiceExt;
+use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 type Client = RunningService<RoleClient, ()>;
+type TaskClient = RunningService<RoleClient, TaskingClient>;
+type Receiver = tokio::sync::mpsc::UnboundedReceiver<ProgressToken>;
+
+struct TaskingClient {
+    declares_tasks: bool,
+    progress: tokio::sync::mpsc::UnboundedSender<ProgressToken>,
+}
+
+impl ClientHandler for TaskingClient {
+    fn get_info(&self) -> ClientConfig {
+        let capabilities = if self.declares_tasks {
+            ClientCapabilities::builder().enable_tasks().build()
+        } else {
+            ClientCapabilities::default()
+        };
+        ClientConfig::new(
+            capabilities,
+            Implementation::new("progress-test-client", "0"),
+        )
+    }
+
+    async fn on_progress(
+        &self,
+        params: ProgressNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        let _ = self.progress.send(params.progress_token);
+    }
+}
 
 const ONE: &str = concat!("ACME", "-1");
 const TWO: &str = concat!("ACME", "-2");
@@ -241,9 +277,9 @@ impl Env {
         stdout
     }
 
-    async fn connect(&self) -> Client {
+    fn mcp_transport(&self) -> TokioChildProcess {
         let cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_jira"));
-        let transport = TokioChildProcess::new(cmd.configure(|c| {
+        TokioChildProcess::new(cmd.configure(|c| {
             c.arg("mcp")
                 .env("JIRA_DB", &self.db)
                 .env("JIRA_CLI_LANG", "en")
@@ -251,8 +287,62 @@ impl Env {
                 .env("PATH", self.path_with_git_stub())
                 .current_dir(self.dir.path());
         }))
+        .unwrap()
+    }
+
+    async fn connect(&self) -> Client {
+        ().serve(self.mcp_transport()).await.unwrap()
+    }
+
+    /// A client that declares the tasks extension and reports the token of every progress
+    /// notification it receives.
+    async fn connect_declaring_tasks(&self) -> (TaskClient, Receiver) {
+        self.connect_observing_progress(true).await
+    }
+
+    /// A client without the tasks extension that reports the progress it receives.
+    async fn connect_without_tasks(&self) -> (TaskClient, Receiver) {
+        self.connect_observing_progress(false).await
+    }
+
+    async fn connect_observing_progress(&self, declares_tasks: bool) -> (TaskClient, Receiver) {
+        let (progress, received) = tokio::sync::mpsc::unbounded_channel();
+        let client = TaskingClient {
+            declares_tasks,
+            progress,
+        }
+        .serve(self.mcp_transport())
+        .await
         .unwrap();
-        ().serve(transport).await.unwrap()
+        (client, received)
+    }
+
+    /// The issue read answers only after `delay`.
+    async fn delay_issue(&self, delay: Duration) {
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/api/3/issue/{ONE}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(issue_payload(ONE, &self.server.uri()))
+                    .set_delay(delay),
+            )
+            .with_priority(1)
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Every attachment download answers only after `delay`.
+    async fn delay_attachments(&self, delay: Duration) {
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/secure/attachment/\d+/.+$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(ATTACHMENT_BODY)
+                    .set_delay(delay),
+            )
+            .with_priority(1)
+            .mount(&self.server)
+            .await;
     }
 
     async fn post_count(&self) -> usize {
@@ -834,5 +924,437 @@ async fn initialize_reports_server_info_named_jira_at_the_crate_version() {
         env!("CARGO_PKG_VERSION"),
         "{info}"
     );
+    client.cancel().await.unwrap();
+}
+
+const SKILL_URI: &str = "skill://jira-ticket/SKILL.md";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initialize_declares_the_skills_extension_and_points_the_instructions_at_the_skill() {
+    let env = Env::new().await;
+    let client = env.connect().await;
+
+    let info = serde_json::to_value(&*client.peer_info().expect("handshake info")).unwrap();
+    assert!(info["capabilities"]["resources"].is_object(), "{info}");
+    assert!(
+        info["capabilities"]["extensions"]
+            .as_object()
+            .is_some_and(|extensions| extensions.keys().any(|key| key.contains("skills"))),
+        "{info}"
+    );
+    assert_eq!(info["serverInfo"]["name"], "jira", "{info}");
+    assert!(
+        info["instructions"]
+            .as_str()
+            .is_some_and(|text| text.contains(SKILL_URI)),
+        "{info}"
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_skill_is_served_as_a_resource_and_as_a_catalog_entry_equal_to_the_cli_text() {
+    let env = Env::new().await;
+    let client = env.connect().await;
+    let printed = env.cli_stdout(&["skill", "jira-ticket"]);
+
+    let resources = client.list_all_resources().await.unwrap();
+    assert_eq!(resources.len(), 1, "{resources:?}");
+    assert_eq!(resources[0].uri, SKILL_URI);
+    assert_eq!(resources[0].mime_type.as_deref(), Some("text/markdown"));
+    assert_eq!(resources[0].name, "jira-ticket");
+
+    let read = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(SKILL_URI))
+        .await
+        .unwrap();
+    let read = serde_json::to_value(&read).unwrap();
+    assert_eq!(read["contents"][0]["text"], printed.as_str(), "{read}");
+    assert_eq!(read["contents"][0]["mimeType"], "text/markdown", "{read}");
+
+    let skills = client.list_all_skills().await.unwrap();
+    assert_eq!(skills.len(), 1, "{skills:?}");
+    let listed = serde_json::to_value(&skills[0]).unwrap();
+    assert_eq!(listed["uri"], SKILL_URI, "{listed}");
+    let description = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("description: "))
+        .expect("the skill text has a description");
+    assert_eq!(listed["frontmatter"]["name"], "jira-ticket", "{listed}");
+    assert_eq!(
+        listed["frontmatter"]["description"], description,
+        "{listed}"
+    );
+
+    let got = client
+        .get_skill(rmcp::model::GetSkillRequestParams::new(SKILL_URI))
+        .await
+        .unwrap();
+    assert_eq!(serde_json::to_value(&got.skill).unwrap(), listed);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_resources_and_skills_are_invalid_params_and_the_server_keeps_serving() {
+    let env = Env::new().await;
+    let mut session = RawSession::start(&env);
+
+    for (method, params) in [
+        (
+            "resources/read",
+            json!({"uri": "skill://jira-ticket/other.md"}),
+        ),
+        (
+            "resources/read",
+            json!({"uri": "skill://jira-ticket/../SKILL.md"}),
+        ),
+        ("resources/read", json!({"uri": "file:///etc/passwd"})),
+        ("skills/get", json!({"uri": "skill://jira-ticket/other.md"})),
+        ("skills/get", json!({})),
+    ] {
+        let reply = session.request(method, params.clone());
+        assert_eq!(
+            reply["error"]["code"],
+            json!(ErrorCode::INVALID_PARAMS.0),
+            "{method} {params}: {reply}"
+        );
+    }
+    let still = session.request("resources/read", json!({"uri": SKILL_URI}));
+    assert!(
+        still["result"]["contents"][0]["text"].is_string(),
+        "{still}"
+    );
+    session.finish();
+}
+
+async fn call_once(peer: &Peer<RoleClient>, tool: &'static str, args: Value) -> CallToolResponse {
+    let params = CallToolRequestParams::new(tool).with_arguments(object(args));
+    peer.call_tool_once(params).await.unwrap()
+}
+
+async fn task_id_of(peer: &Peer<RoleClient>, tool: &'static str, args: Value) -> String {
+    match call_once(peer, tool, args).await {
+        CallToolResponse::Task(created) => created.task.task_id,
+        other => panic!("{tool} was not answered with a task: {other:?}"),
+    }
+}
+
+async fn complete_text(peer: &Peer<RoleClient>, tool: &'static str, args: Value) -> (bool, String) {
+    match call_once(peer, tool, args).await {
+        CallToolResponse::Complete(result) => (result.is_error == Some(true), text_of(&result)),
+        other => panic!("{tool} was not answered directly: {other:?}"),
+    }
+}
+
+/// The `maxResults` of every search request the mock received.
+async fn search_max_results(env: &Env) -> Vec<String> {
+    env.server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/rest/api/3/search/jql")
+        .filter_map(|request| {
+            request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "maxResults")
+                .map(|(_, value)| value.into_owned())
+        })
+        .collect()
+}
+
+/// Sends a download call and returns the progress token of that very request together
+/// with the task it was answered with.
+async fn download_task_with_token(
+    peer: &Peer<RoleClient>,
+    directory: &Path,
+) -> (ProgressToken, String) {
+    let params = CallToolRequestParams::new("jira_download_attachments").with_arguments(object(
+        json!({"operation": "download", "ref": ONE, "directory": directory.to_str().unwrap()}),
+    ));
+    let handle = peer
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    let token = handle.progress_token.clone();
+    match handle.await_response().await.unwrap() {
+        ServerResult::CreateTaskResult(created) => (token, created.task.task_id),
+        other => panic!("the download was not answered with a task: {other:?}"),
+    }
+}
+
+/// Files saved under `dir`; none when the directory was never created.
+fn saved_files(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn task_state(peer: &Peer<RoleClient>, id: &str) -> Value {
+    let got = peer.get_task(GetTaskParams::new(id)).await.unwrap();
+    serde_json::to_value(&got).unwrap()
+}
+
+/// Polls `tasks/get` until the task leaves `working`, or panics after `within`.
+async fn settled_state(peer: &Peer<RoleClient>, id: &str, within: Duration) -> Value {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let state = task_state(peer, id).await;
+        if state["status"] != "working" {
+            return state;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "task still working after {within:?}: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn result_text(state: &Value) -> String {
+    state["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no result text in {state}"))
+        .to_owned()
+}
+
+const SEARCH_JQL: &str = "project = PROJ";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initialize_declares_the_tasks_extension() {
+    let env = Env::new().await;
+    let client = env.connect().await;
+
+    let info = serde_json::to_value(&*client.peer_info().expect("handshake info")).unwrap();
+    assert!(
+        info["capabilities"]["extensions"]
+            .as_object()
+            .is_some_and(|extensions| extensions.keys().any(|key| key.contains("tasks"))),
+        "{info}"
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_download_task_completes_with_the_synchronous_result() {
+    let env = Env::new().await;
+    let target = env.dir.path().join("saved");
+    let args = json!({"operation": "download", "ref": ONE, "directory": target.to_str().unwrap()});
+    let plain = env.connect().await;
+    let synchronous = ok_text(&plain, "jira_download_attachments", args.clone()).await;
+    plain.cancel().await.unwrap();
+
+    let (client, _progress) = env.connect_declaring_tasks().await;
+    let id = task_id_of(&client, "jira_download_attachments", args).await;
+    let state = settled_state(&client, &id, Duration::from_secs(10)).await;
+
+    assert_eq!(state["status"], "completed", "{state}");
+    assert_eq!(result_text(&state), synchronous);
+    assert_eq!(
+        synchronous,
+        env.cli_stdout(&[
+            "get",
+            ONE,
+            "--download-attachments",
+            "--download-dir",
+            target.to_str().unwrap(),
+            "--json",
+        ])
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_search_above_the_default_limit_is_a_task_and_one_at_it_is_direct() {
+    let env = Env::new().await;
+    let (client, _progress) = env.connect_declaring_tasks().await;
+
+    let id = task_id_of(
+        &client,
+        "jira_read",
+        json!({"operation": "search", "jql": SEARCH_JQL, "limit": 51}),
+    )
+    .await;
+    let state = settled_state(&client, &id, Duration::from_secs(10)).await;
+    assert_eq!(state["status"], "completed", "{state}");
+    assert_eq!(search_max_results(&env).await, ["51"]);
+    assert_eq!(
+        result_text(&state),
+        env.cli_stdout(&["search", SEARCH_JQL, "--json"])
+    );
+
+    let (failed, at_default) = complete_text(
+        &client,
+        "jira_read",
+        json!({"operation": "search", "jql": SEARCH_JQL, "limit": 50}),
+    )
+    .await;
+    assert!(!failed, "{at_default}");
+    assert_eq!(
+        at_default,
+        env.cli_stdout(&["search", SEARCH_JQL, "--json"])
+    );
+    let (failed, issue) = complete_text(
+        &client,
+        "jira_read",
+        json!({"operation": "get", "ref": ONE}),
+    )
+    .await;
+    assert!(!failed, "{issue}");
+    assert_eq!(issue, env.cli_stdout(&["get", ONE, "--json"]));
+    let (failed, posted) = complete_text(
+        &client,
+        "jira_write",
+        json!({"operation": "comment", "ref": ONE, "body": "direct"}),
+    )
+    .await;
+    assert!(!failed, "{posted}");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_download_task_ends_it_cancelled_stops_the_download_and_the_server_keeps_serving(
+) {
+    let env = Env::new().await;
+    env.delay_attachments(Duration::from_secs(2)).await;
+    let (client, _progress) = env.connect_declaring_tasks().await;
+    let target = env.dir.path().join("slow");
+
+    let id = task_id_of(
+        &client,
+        "jira_download_attachments",
+        json!({"operation": "download", "ref": ONE, "directory": target.to_str().unwrap()}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    client
+        .cancel_task(CancelTaskParams::new(&id))
+        .await
+        .unwrap();
+
+    let state = settled_state(&client, &id, Duration::from_secs(5)).await;
+    assert_eq!(state["status"], "cancelled", "{state}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(saved_files(&target), Vec::<String>::new());
+    let (failed, issue) = complete_text(
+        &client,
+        "jira_read",
+        json!({"operation": "get", "ref": ONE}),
+    )
+    .await;
+    assert!(!failed, "{issue}");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_whose_core_fails_completes_with_the_error_text_of_the_cli() {
+    let env = Env::new().await;
+    let (client, _progress) = env.connect_declaring_tasks().await;
+
+    let id = task_id_of(
+        &client,
+        "jira_download_attachments",
+        json!({"operation": "download", "ref": MISSING}),
+    )
+    .await;
+    let state = settled_state(&client, &id, Duration::from_secs(10)).await;
+
+    assert_eq!(state["status"], "completed", "{state}");
+    assert_eq!(state["result"]["isError"], true, "{state}");
+    let (ok, _, stderr) = env.cli(&["get", MISSING, "--download-attachments", "--json"]);
+    assert!(!ok);
+    assert_eq!(result_text(&state), stderr);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_task_call_reports_progress_for_the_token_of_its_own_request() {
+    let env = Env::new().await;
+    env.delay_attachments(Duration::from_secs(6)).await;
+    let (client, mut progress) = env.connect_declaring_tasks().await;
+    let target = env.dir.path().join("beat");
+
+    let (token, id) = download_task_with_token(&client, &target).await;
+    let state = settled_state(&client, &id, Duration::from_secs(20)).await;
+
+    assert_eq!(state["status"], "completed", "{state}");
+    let received = progress.try_recv().expect("no progress while the task ran");
+    assert_eq!(received, token);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_get_slower_than_the_heartbeat_reports_no_progress() {
+    let env = Env::new().await;
+    env.delay_issue(Duration::from_secs(6)).await;
+    let (client, mut progress) = env.connect_declaring_tasks().await;
+
+    let (failed, issue) = complete_text(
+        &client,
+        "jira_read",
+        json!({"operation": "get", "ref": ONE}),
+    )
+    .await;
+
+    assert!(!failed, "{issue}");
+    assert!(progress.try_recv().is_err(), "a get reported progress");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_download_without_the_tasks_extension_reports_progress_and_answers_directly() {
+    let env = Env::new().await;
+    env.delay_attachments(Duration::from_secs(6)).await;
+    let (client, mut progress) = env.connect_without_tasks().await;
+    let target = env.dir.path().join("direct");
+
+    let (failed, text) = complete_text(
+        &client,
+        "jira_download_attachments",
+        json!({"operation": "download", "ref": ONE, "directory": target.to_str().unwrap()}),
+    )
+    .await;
+
+    assert!(!failed, "{text}");
+    assert!(
+        progress.try_recv().is_ok(),
+        "no progress notification while the call ran"
+    );
+    assert_eq!(file_contents(&target, "notes.txt"), ATTACHMENT_BODY);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_direct_download_stops_it_and_the_server_keeps_serving() {
+    let env = Env::new().await;
+    env.delay_attachments(Duration::from_secs(2)).await;
+    let (client, _progress) = env.connect_without_tasks().await;
+    let target = env.dir.path().join("direct-cancelled");
+
+    let call = call_once(
+        &client,
+        "jira_download_attachments",
+        json!({"operation": "download", "ref": ONE, "directory": target.to_str().unwrap()}),
+    );
+    let outcome = tokio::time::timeout(Duration::from_millis(500), call).await;
+    assert!(outcome.is_err(), "the download answered before the cancel");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    assert_eq!(saved_files(&target), Vec::<String>::new());
+    let (failed, issue) = complete_text(
+        &client,
+        "jira_read",
+        json!({"operation": "get", "ref": ONE}),
+    )
+    .await;
+    assert!(!failed, "{issue}");
     client.cancel().await.unwrap();
 }

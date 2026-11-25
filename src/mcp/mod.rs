@@ -1,8 +1,14 @@
 //! MCP server over stdio. Three tools, `jira_read`, `jira_write` and
 //! `jira_download_attachments`, select a command core by `operation` and return
 //! the core's `--json` output, so the agent contract stays the one in
-//! `agent_json`. While the server runs, stdout belongs to the protocol: every
+//! `agent_json`. The server also serves the `jira-ticket` skill over the MCP
+//! skills extension, and runs long calls (a download, a search above the default
+//! limit) as tasks for clients that support MCP tasks, with progress and
+//! cancellation. While the server runs, stdout belongs to the protocol: every
 //! core writes to in-memory buffers.
+
+mod skills;
+mod tasks;
 
 use crate::commands::{
     comment_core, current_core, get_core, mine_core, search_core_limited, CommentBody, GetOpts,
@@ -15,27 +21,54 @@ use crate::{
     resolve_single_instance_to, ResolvedInstance,
 };
 use rmcp::handler::server::common::{schema_for_empty_input, schema_for_input};
-use rmcp::model::{CallToolResult, ContentBlock, JsonObject};
+use rmcp::model::{
+    CacheScope, CallToolResponse, CallToolResult, CancelTaskParams, ConstString, ContentBlock,
+    CustomRequest, CustomResult, ErrorCode, GetSkillRequestMethod, GetSkillRequestParams,
+    GetSkillResult, GetTaskParams, GetTaskResult, JsonObject, ListResourcesResult,
+    ListSkillsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::task_manager::TaskManager;
 use rmcp::transport::stdio;
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler, ServiceExt};
+use rmcp::{
+    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use skills::SkillCatalog;
+use std::borrow::Cow;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use tasks::{is_long_running, run_long, run_plain, runs_as_task, Call};
 
 /// Serve MCP on stdin/stdout until the client closes the connection.
 pub(crate) async fn serve() -> i32 {
-    let running = match JiraServer.serve(stdio()).await {
+    let skills = match SkillCatalog::embedded() {
+        Ok(skills) => Arc::new(skills),
+        Err(e) => {
+            eprintln!("Error starting MCP server: {e}");
+            return 1;
+        }
+    };
+    let tasks = TaskManager::new();
+    let server = JiraServer {
+        skills,
+        tasks: tasks.clone(),
+    };
+    let running = match server.serve(stdio()).await {
         Ok(running) => running,
         Err(e) => {
             eprintln!("Error starting MCP server: {e}");
             return 1;
         }
     };
-    match running.waiting().await {
+    let ended = running.waiting().await;
+    tasks.shutdown();
+    match ended {
         Ok(_) => 0,
         Err(e) => {
             eprintln!("Error serving MCP: {e}");
@@ -44,50 +77,204 @@ pub(crate) async fn serve() -> i32 {
     }
 }
 
-#[derive(Clone, Copy)]
-struct JiraServer;
+#[derive(Clone)]
+struct JiraServer {
+    skills: Arc<SkillCatalog>,
+    tasks: TaskManager,
+}
 
-/// Identifies the server as `jira` at this crate's version in `initialize`.
-#[tool_handler(name = "jira")]
-impl ServerHandler for JiraServer {}
+const INSTRUCTIONS: &str = "Read the resource skill://jira-ticket/SKILL.md for the tool \
+    contract and the JSON schemas of every operation.";
+
+/// Cache hints exist from the 2026-07-28 protocol version on.
+fn supports_cache_hints(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .protocol_version()
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+}
+
+/// Whether the client declared the tasks extension.
+fn declares_tasks(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .client_capabilities()
+        .is_some_and(|capabilities| capabilities.supports_tasks())
+}
+
+/// Identifies the server as `jira` at this crate's version in `initialize`, declares the
+/// resources, skills and tasks extensions, and serves the embedded skill through both.
+#[tool_handler]
+impl ServerHandler for JiraServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_skills()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "jira",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Owned(vec![
+            ProtocolVersion::V_2025_11_25,
+            ProtocolVersion::V_2026_07_28,
+        ])
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let mut result = ListResourcesResult::with_all_items(self.skills.resources());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, McpError> {
+        let text = self.skills.read(&request.uri).ok_or_else(|| {
+            McpError::invalid_params(format!("no such resource: {}", request.uri), None)
+        })?;
+        let mut result = ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
+            uri: request.uri,
+            mime_type: Some("text/markdown".to_string()),
+            text: text.to_string(),
+            meta: None,
+        }]);
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result.into())
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, McpError> {
+        let mut result = ListSkillsResult::with_all_items(self.skills.skills());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, McpError> {
+        let skill = self.skills.skill(&request.uri).ok_or_else(|| {
+            McpError::invalid_params(format!("no such skill: {}", request.uri), None)
+        })?;
+        let mut result = GetSkillResult::new(skill.clone());
+        if supports_cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, McpError> {
+        self.tasks
+            .get_task(&request.task_id)
+            .map(GetTaskResult::new)
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        self.tasks.cancel_task(&request.task_id)
+    }
+
+    /// A `skills/get` whose parameters did not parse (no `uri`, or one that is not text) reaches
+    /// here instead of `get_skill`; it is a malformed request, not an unknown method.
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, McpError> {
+        if request.method == GetSkillRequestMethod::VALUE {
+            return Err(McpError::invalid_params(
+                "skills/get needs a text `uri`",
+                None,
+            ));
+        }
+        Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            request.method,
+            None,
+        ))
+    }
+}
 
 #[tool_router]
 impl JiraServer {
     #[tool(
-        description = "Read Jira data as the `jira ... --json` commands print it. \
-                       Select the command with `operation`.",
+        description = "Read Jira data as the `jira ... --json` commands print it.",
         input_schema = input_schema::<ReadOperation>(),
         annotations(read_only_hint = true)
     )]
-    async fn jira_read(&self, arguments: JsonObject) -> Result<CallToolResult, McpError> {
+    async fn jira_read(
+        &self,
+        arguments: JsonObject,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
         let operation: ReadOperation = parse_operation(arguments)?;
-        run_isolated(move || run_read(operation)).await
+        let call = Call::Read(&operation);
+        if !is_long_running(&call) {
+            return run_plain(move || run_read(operation)).await;
+        }
+        let as_task = runs_as_task(declares_tasks(&context), &call);
+        run_long(&self.tasks, context, as_task, move || run_read(operation)).await
     }
 
     #[tool(
-        description = "Change Jira data (post a comment). Select the command with `operation`.",
+        description = "Change Jira data (post a comment).",
         input_schema = input_schema::<WriteOperation>(),
         annotations(destructive_hint = true)
     )]
-    async fn jira_write(&self, arguments: JsonObject) -> Result<CallToolResult, McpError> {
+    async fn jira_write(&self, arguments: JsonObject) -> Result<CallToolResponse, McpError> {
         let operation: WriteOperation = parse_operation(arguments)?;
-        run_isolated(move || run_write(operation)).await
+        run_plain(move || run_write(operation)).await
     }
 
     #[tool(
         description = "Download every attachment of one issue into a local directory and \
                        return the saved files as `jira get --download-attachments --json` \
-                       prints them. Writes files on the server's machine; it changes nothing \
-                       in Jira.",
+                       prints them. Writes files on the server's machine; it changes \
+                       nothing in Jira.",
         input_schema = input_schema::<DownloadOperation>(),
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn jira_download_attachments(
         &self,
         arguments: JsonObject,
-    ) -> Result<CallToolResult, McpError> {
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
         let operation: DownloadOperation = parse_operation(arguments)?;
-        run_isolated(move || run_download(operation)).await
+        let as_task = runs_as_task(declares_tasks(&context), &Call::Download);
+        run_long(&self.tasks, context, as_task, move || {
+            run_download(operation)
+        })
+        .await
     }
 }
 
@@ -96,15 +283,20 @@ impl JiraServer {
 /// object (see `flatten_operations`).
 fn input_schema<T: JsonSchema + 'static>() -> Arc<JsonObject> {
     let mut schema = schema_for_input::<T>().unwrap_or_else(|_| schema_for_empty_input());
-    flatten_operations(Arc::make_mut(&mut schema));
+    let published = Arc::make_mut(&mut schema);
+    published.remove("$schema");
+    flatten_operations(published);
     schema
 }
 
 /// Rewrite a schema whose root is a `oneOf` of tagged variants into one object:
 /// an `operation` string enum plus the union of every variant's properties,
 /// each described with the operations that take it. A schema without a
-/// `oneOf` is left as it is. Only the published schema changes; the enum's own
-/// parse still rejects a field the chosen operation does not take.
+/// `oneOf` is left as it is. A tool with a single operation repeats nothing:
+/// its fields carry no takers note and `operation` keeps the operation's own
+/// doc. Descriptions are collapsed to one line. Only the published schema
+/// changes; the enum's own parse still rejects a field the chosen operation
+/// does not take.
 fn flatten_operations(schema: &mut JsonObject) {
     let Some(Value::Array(variants)) = schema.remove("oneOf") else {
         return;
@@ -123,24 +315,48 @@ fn flatten_operations(schema: &mut JsonObject) {
             merge_variant(name, variant, &mut properties, &mut takers);
         }
     }
-    for (field, labels) in takers {
-        if let Some(Value::Object(field_schema)) = properties.get_mut(&field) {
-            annotate_takers(field_schema, &labels);
-        }
-    }
+    let single = operations.len() == 1;
+    describe_fields(&mut properties, takers, single);
+    let description = operation_description(&summaries, single);
     let mut flat = serde_json::Map::new();
     flat.insert(
         "operation".into(),
         serde_json::json!({
             "type": "string",
             "enum": operations,
-            "description": format!("The command to run. {}", summaries.join(" "))
+            "description": description
         }),
     );
     flat.extend(properties);
     schema.insert("type".into(), Value::String("object".into()));
     schema.insert("properties".into(), Value::Object(flat));
     schema.insert("required".into(), serde_json::json!(["operation"]));
+}
+
+fn describe_fields(
+    properties: &mut serde_json::Map<String, Value>,
+    takers: Vec<(String, Vec<String>)>,
+    single: bool,
+) {
+    for (field, labels) in takers {
+        if let Some(Value::Object(field_schema)) = properties.get_mut(&field) {
+            if !single {
+                annotate_takers(field_schema, &labels);
+            } else if labels.iter().any(|label| label.ends_with("(required)")) {
+                mark_required(field_schema);
+            }
+            collapse_description(field_schema);
+        }
+    }
+}
+
+fn operation_description(summaries: &[String], single: bool) -> String {
+    match summaries {
+        [only] if single => only
+            .split_once(": ")
+            .map_or(only.clone(), |(_, doc)| doc.to_owned()),
+        _ => format!("The command to run. {}", summaries.join(" ")),
+    }
 }
 
 /// Add one variant's fields (all but the `operation` tag) to the merged
@@ -175,6 +391,20 @@ fn merge_variant(
             Some((_, labels)) => labels.push(label),
             None => takers.push((field.clone(), vec![label])),
         }
+    }
+}
+
+fn mark_required(field_schema: &mut serde_json::Map<String, Value>) {
+    let text = match field_schema.get("description").and_then(Value::as_str) {
+        Some(doc) => format!("{doc} (required)"),
+        None => "(required)".to_owned(),
+    };
+    field_schema.insert("description".into(), Value::String(text));
+}
+
+fn collapse_description(field_schema: &mut serde_json::Map<String, Value>) {
+    if let Some(Value::String(text)) = field_schema.get_mut("description") {
+        *text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     }
 }
 
@@ -300,17 +530,27 @@ fn lossy(bytes: Vec<u8>) -> String {
 
 /// Run a core on a blocking thread. The cores hold a borrowed SQLite
 /// connection across awaits, which is not `Send`, so the future is driven to
-/// completion by `block_on` on that thread instead of being spawned.
-async fn run_isolated<F, Fut>(make: F) -> Result<CallToolResult, McpError>
+/// completion by `block_on` on that thread instead of being spawned. When
+/// `cancel` resolves first the core future is dropped, so it makes no further
+/// request or write, and the result is `None`; a file being written at that
+/// moment may stay partial.
+async fn run_isolated<F, Fut, C>(make: F, cancel: C) -> Result<Option<CoreRun>, McpError>
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = CoreRun>,
+    C: Future<Output = ()> + Send + 'static,
 {
     let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || handle.block_on(make()))
-        .await
-        .map(CoreRun::into_result)
-        .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))
+    tokio::task::spawn_blocking(move || {
+        handle.block_on(async {
+            tokio::select! {
+                run = make() => Some(run),
+                () = cancel => None,
+            }
+        })
+    })
+    .await
+    .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))
 }
 
 fn resolve(instance: Option<&str>, run: &mut CoreRun) -> Option<ResolvedInstance> {
