@@ -399,3 +399,55 @@ fn frontmatter_reader_keeps_everything_after_the_first_key_separator() {
 
     assert_eq!(parsed.description, "use it: a: b");
 }
+
+fn read_op(value: Value) -> ReadOperation {
+    serde_json::from_value(value).unwrap()
+}
+
+fn search_with(limit: Option<u64>) -> ReadOperation {
+    match limit {
+        Some(limit) => {
+            read_op(json!({"operation": "search", "jql": "project = P", "limit": limit}))
+        }
+        None => read_op(json!({"operation": "search", "jql": "project = P"})),
+    }
+}
+
+#[test]
+fn a_download_and_a_search_above_the_default_limit_are_tasks_for_a_declaring_client() {
+    use tasks::{runs_as_task, Call};
+    assert!(runs_as_task(true, &Call::Download));
+    assert!(runs_as_task(true, &Call::Read(&search_with(Some(51)))));
+    assert!(runs_as_task(true, &Call::Read(&search_with(Some(500)))));
+}
+
+#[test]
+fn a_search_at_or_below_the_default_limit_or_without_one_stays_synchronous() {
+    use tasks::{runs_as_task, Call};
+    for limit in [Some(50), Some(0), Some(1), None] {
+        assert!(
+            !runs_as_task(true, &Call::Read(&search_with(limit))),
+            "{limit:?}"
+        );
+    }
+}
+
+#[test]
+fn get_current_and_mine_stay_synchronous_whatever_their_size() {
+    use tasks::{runs_as_task, Call};
+    let reads = [
+        read_op(json!({"operation": "get", "ref": "some-issue"})),
+        read_op(json!({"operation": "current"})),
+        read_op(json!({"operation": "mine", "limit": 500})),
+    ];
+    for read in &reads {
+        assert!(!runs_as_task(true, &Call::Read(read)));
+    }
+}
+
+#[test]
+fn a_client_without_the_extension_never_gets_a_task() {
+    use tasks::{runs_as_task, Call};
+    assert!(!runs_as_task(false, &Call::Download));
+    assert!(!runs_as_task(false, &Call::Read(&search_with(Some(500)))));
+}

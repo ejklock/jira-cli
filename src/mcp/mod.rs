@@ -5,6 +5,7 @@
 //! core writes to in-memory buffers.
 
 mod skills;
+mod tasks;
 
 use crate::commands::{
     comment_core, current_core, get_core, mine_core, search_core_limited, CommentBody, GetOpts,
@@ -18,12 +19,14 @@ use crate::{
 };
 use rmcp::handler::server::common::{schema_for_empty_input, schema_for_input};
 use rmcp::model::{
-    CacheScope, CallToolResult, ConstString, ContentBlock, CustomRequest, CustomResult, ErrorCode,
-    GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, JsonObject, ListResourcesResult,
+    CacheScope, CallToolResponse, CallToolResult, CancelTaskParams, ConstString, ContentBlock,
+    CustomRequest, CustomResult, ErrorCode, GetSkillRequestMethod, GetSkillRequestParams,
+    GetSkillResult, GetTaskParams, GetTaskResult, JsonObject, ListResourcesResult,
     ListSkillsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::RequestContext;
+use rmcp::task_manager::TaskManager;
 use rmcp::transport::stdio;
 use rmcp::{
     tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
@@ -37,6 +40,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use tasks::{is_long_running, run_long, run_plain, runs_as_task, Call};
 
 /// Serve MCP on stdin/stdout until the client closes the connection.
 pub(crate) async fn serve() -> i32 {
@@ -47,7 +51,11 @@ pub(crate) async fn serve() -> i32 {
             return 1;
         }
     };
-    let server = JiraServer { skills };
+    let tasks = TaskManager::new();
+    let server = JiraServer {
+        skills,
+        tasks: tasks.clone(),
+    };
     let running = match server.serve(stdio()).await {
         Ok(running) => running,
         Err(e) => {
@@ -55,7 +63,9 @@ pub(crate) async fn serve() -> i32 {
             return 1;
         }
     };
-    match running.waiting().await {
+    let ended = running.waiting().await;
+    tasks.shutdown();
+    match ended {
         Ok(_) => 0,
         Err(e) => {
             eprintln!("Error serving MCP: {e}");
@@ -67,6 +77,7 @@ pub(crate) async fn serve() -> i32 {
 #[derive(Clone)]
 struct JiraServer {
     skills: Arc<SkillCatalog>,
+    tasks: TaskManager,
 }
 
 const INSTRUCTIONS: &str = "Read the resource skill://jira-ticket/SKILL.md for the tool \
@@ -79,8 +90,15 @@ fn supports_cache_hints(context: &RequestContext<RoleServer>) -> bool {
         .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
 }
 
+/// Whether the client declared the tasks extension.
+fn declares_tasks(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .client_capabilities()
+        .is_some_and(|capabilities| capabilities.supports_tasks())
+}
+
 /// Identifies the server as `jira` at this crate's version in `initialize`, declares the
-/// resources and skills extension, and serves the embedded skill through both.
+/// resources, skills and tasks extensions, and serves the embedded skill through both.
 #[tool_handler]
 impl ServerHandler for JiraServer {
     fn get_info(&self) -> ServerConfig {
@@ -89,6 +107,7 @@ impl ServerHandler for JiraServer {
                 .enable_tools()
                 .enable_resources()
                 .enable_skills()
+                .enable_tasks()
                 .build(),
         )
         .with_server_info(rmcp::model::Implementation::new(
@@ -164,6 +183,24 @@ impl ServerHandler for JiraServer {
         Ok(result)
     }
 
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, McpError> {
+        self.tasks
+            .get_task(&request.task_id)
+            .map(GetTaskResult::new)
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        self.tasks.cancel_task(&request.task_id)
+    }
+
     /// A `skills/get` whose parameters did not parse (no `uri`, or one that is not text) reaches
     /// here instead of `get_skill`; it is a malformed request, not an unknown method.
     async fn on_custom_request(
@@ -192,9 +229,18 @@ impl JiraServer {
         input_schema = input_schema::<ReadOperation>(),
         annotations(read_only_hint = true)
     )]
-    async fn jira_read(&self, arguments: JsonObject) -> Result<CallToolResult, McpError> {
+    async fn jira_read(
+        &self,
+        arguments: JsonObject,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
         let operation: ReadOperation = parse_operation(arguments)?;
-        run_isolated(move || run_read(operation)).await
+        let call = Call::Read(&operation);
+        if !is_long_running(&call) {
+            return run_plain(move || run_read(operation)).await;
+        }
+        let as_task = runs_as_task(declares_tasks(&context), &call);
+        run_long(&self.tasks, context, as_task, move || run_read(operation)).await
     }
 
     #[tool(
@@ -202,9 +248,9 @@ impl JiraServer {
         input_schema = input_schema::<WriteOperation>(),
         annotations(destructive_hint = true)
     )]
-    async fn jira_write(&self, arguments: JsonObject) -> Result<CallToolResult, McpError> {
+    async fn jira_write(&self, arguments: JsonObject) -> Result<CallToolResponse, McpError> {
         let operation: WriteOperation = parse_operation(arguments)?;
-        run_isolated(move || run_write(operation)).await
+        run_plain(move || run_write(operation)).await
     }
 
     #[tool(
@@ -216,9 +262,14 @@ impl JiraServer {
     async fn jira_download_attachments(
         &self,
         arguments: JsonObject,
-    ) -> Result<CallToolResult, McpError> {
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
         let operation: DownloadOperation = parse_operation(arguments)?;
-        run_isolated(move || run_download(operation)).await
+        let as_task = runs_as_task(declares_tasks(&context), &Call::Download);
+        run_long(&self.tasks, context, as_task, move || {
+            run_download(operation)
+        })
+        .await
     }
 }
 
@@ -474,17 +525,27 @@ fn lossy(bytes: Vec<u8>) -> String {
 
 /// Run a core on a blocking thread. The cores hold a borrowed SQLite
 /// connection across awaits, which is not `Send`, so the future is driven to
-/// completion by `block_on` on that thread instead of being spawned.
-async fn run_isolated<F, Fut>(make: F) -> Result<CallToolResult, McpError>
+/// completion by `block_on` on that thread instead of being spawned. When
+/// `cancel` resolves first the core future is dropped, so it makes no further
+/// request or write, and the result is `None`; a file being written at that
+/// moment may stay partial.
+async fn run_isolated<F, Fut, C>(make: F, cancel: C) -> Result<Option<CoreRun>, McpError>
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = CoreRun>,
+    C: Future<Output = ()> + Send + 'static,
 {
     let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || handle.block_on(make()))
-        .await
-        .map(CoreRun::into_result)
-        .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))
+    tokio::task::spawn_blocking(move || {
+        handle.block_on(async {
+            tokio::select! {
+                run = make() => Some(run),
+                () = cancel => None,
+            }
+        })
+    })
+    .await
+    .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))
 }
 
 fn resolve(instance: Option<&str>, run: &mut CoreRun) -> Option<ResolvedInstance> {
